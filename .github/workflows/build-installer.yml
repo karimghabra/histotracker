@@ -17,6 +17,11 @@ name: Build Windows Installer
 on:
   workflow_dispatch: {}
   push:
+    branches:
+      # Build on every push to an installer working branch, so a fresh
+      # installer artifact is available even before this is merged to the
+      # default branch (where the manual "Run workflow" button lives).
+      - "claude/**"
     tags:
       - "v*"
 
