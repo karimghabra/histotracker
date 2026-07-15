@@ -125,6 +125,7 @@ export type SlidePurpose = "unassigned" | "stain" | "extra" | "control" | "excep
 export interface Slide {
   id: number;
   section_request_id: number;
+  sample_id?: number;
   slide_ordinal: number;
   depth_duplicate_ordinal: number | null;
   slide_code: string;

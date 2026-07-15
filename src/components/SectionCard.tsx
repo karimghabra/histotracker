@@ -7,13 +7,17 @@ import { cn } from "../lib/utils";
 
 export function SectionCard({
   section,
+  groupedSections,
   selected = false,
   onSelect,
+  onSelectGroup,
   overlay = false,
 }: {
   section: SectionRequest;
+  groupedSections?: SectionRequest[];
   selected?: boolean;
   onSelect?: (id: number, event: MouseEvent<HTMLDivElement>) => void;
+  onSelectGroup?: (ids: number[], event: MouseEvent<HTMLDivElement>) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -24,17 +28,24 @@ export function SectionCard({
   const isDownstream = !["needs_sectioning", "sectioned", "assignment_required"].includes(
     section.current_stage,
   );
+  const grouped = groupedSections ?? [section];
+  const isGrouped = grouped.length > 1;
   const visibleSlideCount = isDownstream
-    ? (section.assay_slide_count ?? 0)
+    ? grouped.reduce((count, item) => count + (item.assay_slide_count ?? 0), 0)
     : (section.slide_count ?? 0);
-  const visibleSummary = isDownstream ? section.assay_slide_summary : section.slide_summary;
+  const visibleSummary = isDownstream
+    ? [...new Set(grouped.flatMap((item) => (item.assay_slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
+    : section.slide_summary;
 
   return (
     <div
       ref={overlay ? undefined : setNodeRef}
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
-      onClick={(event) => onSelect?.(section.id, event)}
+      onClick={(event) => {
+        if (isGrouped) onSelectGroup?.(grouped.map((item) => item.id), event);
+        else onSelect?.(section.id, event);
+      }}
       aria-selected={selected}
       className={cn(
         "group touch-none select-none rounded-md border bg-white px-2 py-1.5 transition",
@@ -54,7 +65,7 @@ export function SectionCard({
         <span className="text-xs font-semibold text-ink">{section.parent_code}</span>
         {section.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}
         <span className="ml-auto text-[11px] font-medium text-ink-soft">
-          {section.depth_um}µm ×{section.duplicates}
+          {isGrouped ? `${visibleSlideCount} assay slides` : `${section.depth_um}µm ×${section.duplicates}`}
         </span>
       </div>
       {visibleSummary ? (

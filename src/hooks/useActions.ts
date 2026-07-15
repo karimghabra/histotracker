@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import {
   addSample,
   createSectionRequests,
+  completeSectionImaging as completeSectionImagingDb,
   deleteSample,
   deleteProcessingBatch,
   deleteSectionRequest,
@@ -23,6 +24,7 @@ import {
   setPickedUp,
   setSamplePriority,
   setSectionTimestamp,
+  setSlidePicturesTaken as setSlidePicturesTakenDb,
   setStageTimestamp,
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
@@ -431,6 +433,37 @@ export function useActions() {
     [invalidate, record],
   );
 
+  const setSlidePicturesTaken = useCallback(
+    async (slideId: number, complete: boolean) => {
+      const before = await getSlide(slideId);
+      if (!before) return;
+      await setSlidePicturesTakenDb(slideId, complete);
+      invalidate();
+      const after = await getSlide(slideId);
+      if (!after) return;
+      record({
+        label: `${complete ? "Image" : "Reopen imaging for"} ${before.slide_code}`,
+        undo: async () => {
+          await setSlidePicturesTakenDb(before.id, Boolean(before.stage_pictures_taken_at));
+          invalidate();
+        },
+        redo: async () => {
+          await setSlidePicturesTakenDb(after.id, Boolean(after.stage_pictures_taken_at));
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const completeSectionImaging = useCallback(
+    async (sectionIds: number[]) => {
+      await Promise.all(sectionIds.map((id) => completeSectionImagingDb(id)));
+      invalidate();
+    },
+    [invalidate],
+  );
+
   const removeSection = useCallback(
     async (sectionId: number) => {
       const before = await getSectionRequest(sectionId);
@@ -544,6 +577,8 @@ export function useActions() {
     sendSectionsToCutting,
     moveSection,
     assignSlide,
+    setSlidePicturesTaken,
+    completeSectionImaging,
     editSectionTimestamp,
     removeSection,
     markSectionAnalyzed: (sectionId: number) => moveSection(sectionId, "analyzed"),

@@ -1025,7 +1025,7 @@ export async function listSlidesForSectionRequest(id: number): Promise<Slide[]> 
 export async function listExtraSlides(): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(
-    `SELECT sl.*, sr.depth_um, sr.depth_index, s.sample_code AS parent_code,
+    `SELECT sl.*, sr.depth_um, sr.depth_index, s.id AS sample_id, s.sample_code AS parent_code,
             s.sample_description, s.is_priority, p.code AS project_code, p.name AS project_name
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
@@ -1126,6 +1126,68 @@ export async function updateSlideAssignment(
       stage,
       id,
     ],
+  );
+}
+
+/** Record imaging for one assay slide and derive the parent section's image status. */
+export async function setSlidePicturesTaken(slideId: number, complete: boolean): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ section_request_id: number; purpose: SlidePurpose }>>(
+    `SELECT section_request_id, purpose FROM slides WHERE id = ?`,
+    [slideId],
+  );
+  const slide = rows[0];
+  if (!slide || slide.purpose !== "stain") {
+    throw new Error("Only stain or IHC slides can be marked as imaged.");
+  }
+  const timestamp = nowTimestamp();
+  await db.execute(
+    `UPDATE slides
+        SET current_stage = ?, stage_pictures_taken_at = ?
+      WHERE id = ?`,
+    [complete ? "pictures_taken" : "ready_for_imaging", complete ? timestamp : null, slideId],
+  );
+
+  const progress = await db.select<Array<{ total: number; complete: number }>>(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN stage_pictures_taken_at IS NOT NULL THEN 1 ELSE 0 END) AS complete
+       FROM slides
+      WHERE section_request_id = ? AND purpose = 'stain'`,
+    [slide.section_request_id],
+  );
+  const total = progress[0]?.total ?? 0;
+  const completed = progress[0]?.complete ?? 0;
+  const allImaged = total > 0 && completed === total;
+  await db.execute(
+    `UPDATE section_requests
+        SET current_stage = ?, stage_pictures_taken_at = ?
+      WHERE id = ?`,
+    [allImaged ? "pictures_taken" : "ready_for_imaging", allImaged ? timestamp : null, slide.section_request_id],
+  );
+}
+
+/** Mark every assay slide in a section as imaged for bulk imaging completion. */
+export async function completeSectionImaging(sectionId: number): Promise<void> {
+  const db = await getDb();
+  const timestamp = nowTimestamp();
+  const rows = await db.select<Array<{ total: number }>>(
+    `SELECT COUNT(*) AS total FROM slides WHERE section_request_id = ? AND purpose = 'stain'`,
+    [sectionId],
+  );
+  if ((rows[0]?.total ?? 0) === 0) return;
+  await db.execute(
+    `UPDATE slides
+        SET current_stage = 'pictures_taken',
+            stage_pictures_taken_at = COALESCE(stage_pictures_taken_at, ?)
+      WHERE section_request_id = ? AND purpose = 'stain'`,
+    [timestamp, sectionId],
+  );
+  await db.execute(
+    `UPDATE section_requests
+        SET current_stage = 'pictures_taken',
+            stage_pictures_taken_at = COALESCE(stage_pictures_taken_at, ?)
+      WHERE id = ?`,
+    [timestamp, sectionId],
   );
 }
 

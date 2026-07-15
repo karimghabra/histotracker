@@ -19,11 +19,13 @@ export function ProcessingBatchDetailsDrawer({
   batch,
   samples,
   onMove,
+  width = 320,
   onClose,
 }: {
   batch: ProcessingBatch;
   samples: Sample[];
   onMove: (batchId: number, stageKey: string) => void;
+  width?: number;
   onClose: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -33,7 +35,7 @@ export function ProcessingBatchDetailsDrawer({
   }, []);
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l border-line bg-panel">
+    <aside className="flex h-full shrink-0 flex-col border-l border-line bg-panel" style={{ width }}>
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <div className="flex items-center gap-2">

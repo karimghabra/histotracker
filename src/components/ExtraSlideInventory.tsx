@@ -1,21 +1,55 @@
 import { useMemo, useState } from "react";
 import { Archive, Search, Star } from "lucide-react";
 import type { Slide } from "../lib/types";
-import { useAssayCatalog, useExtraSlideMutations } from "../hooks/useData";
 
-export function ExtraSlideInventory({ slides }: { slides: Slide[] }) {
-  const { data: catalog = [] } = useAssayCatalog();
-  const { assign } = useExtraSlideMutations();
+export interface ExtraSlideGroup {
+  sampleId: number;
+  parentCode: string;
+  sampleDescription: string;
+  projectCode: string;
+  isPriority: boolean;
+  slides: Slide[];
+}
+
+export function groupExtraSlides(slides: Slide[]): ExtraSlideGroup[] {
+  const groups = new Map<number, ExtraSlideGroup>();
+  for (const slide of slides) {
+    if (slide.sample_id == null) continue;
+    const existing = groups.get(slide.sample_id);
+    if (existing) {
+      existing.slides.push(slide);
+      continue;
+    }
+    groups.set(slide.sample_id, {
+      sampleId: slide.sample_id,
+      parentCode: slide.parent_code ?? slide.slide_code,
+      sampleDescription: slide.sample_description ?? "",
+      projectCode: slide.project_code ?? "",
+      isPriority: slide.is_priority === 1,
+      slides: [slide],
+    });
+  }
+  return [...groups.values()];
+}
+
+export function ExtraSlideInventory({
+  slides,
+  onSelectSample,
+}: {
+  slides: Slide[];
+  onSelectSample: (sampleId: number) => void;
+}) {
   const [search, setSearch] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const groups = useMemo(() => groupExtraSlides(slides), [slides]);
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return slides;
-    return slides.filter((slide) =>
-      [slide.slide_code, slide.parent_code, slide.sample_description, slide.project_code]
-        .some((value) => value?.toLowerCase().includes(query)),
+    if (!query) return groups;
+    return groups.filter((group) =>
+      [group.parentCode, group.sampleDescription, group.projectCode]
+        .some((value) => value.toLowerCase().includes(query)) ||
+      group.slides.some((slide) => slide.slide_code.toLowerCase().includes(query)),
     );
-  }, [search, slides]);
+  }, [groups, search]);
 
   return (
     <>
@@ -24,54 +58,42 @@ export function ExtraSlideInventory({ slides }: { slides: Slide[] }) {
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Find extra slide…"
+          placeholder="Find sample or extra slide..."
           className="min-w-0 flex-1 bg-transparent text-[11px] text-ink outline-none placeholder:text-ink-faint"
         />
       </label>
-      {error && <p className="mb-1 rounded bg-red-50 px-2 py-1 text-[10px] text-red-700">{error}</p>}
-      {visible.map((slide) => (
-        <div key={slide.id} className="rounded-md border border-line bg-white px-2 py-1.5">
-          <div className="flex items-center gap-1">
-            <Archive size={11} className="shrink-0 text-ink-faint" />
-            <span className="truncate text-[11px] font-semibold text-ink">{slide.slide_code}</span>
-            {slide.is_priority === 1 && <Star size={9} className="fill-amber-400 text-amber-500" />}
-            <span className="ml-auto shrink-0 text-[10px] text-ink-faint">{slide.depth_um}µm</span>
-          </div>
-          <p className="mt-0.5 truncate text-[10px] text-ink-soft">
-            {slide.project_code} · {slide.parent_code}{slide.sample_description ? ` · ${slide.sample_description}` : ""}
-          </p>
-          <select
-            value=""
-            disabled={assign.isPending}
-            onChange={(event) => {
-              const [assayType, ...parts] = event.target.value.split(":");
-              if (!assayType) return;
-              setError(null);
-              assign.mutate(
-                { slideId: slide.id, assayType: assayType as "stain" | "ihc", assayName: parts.join(":") },
-                { onError: (cause) => setError(String(cause)) },
-              );
-            }}
-            className="mt-1 w-full rounded border border-line bg-panel px-1.5 py-1 text-[10px] text-ink outline-none focus:border-brand"
-            aria-label={`Assign assay to ${slide.slide_code}`}
+      {visible.map((group) => {
+        const depths = [...new Set(group.slides.map((slide) => slide.depth_um).filter((depth) => depth != null))];
+        return (
+          <button
+            type="button"
+            key={group.sampleId}
+            onClick={() => onSelectSample(group.sampleId)}
+            className="group flex w-full items-center gap-2 rounded-md border border-line bg-white px-2 py-1.5 text-left transition hover:border-brand/40"
           >
-            <option value="">Assign stain or IHC…</option>
-            <optgroup label="Stains">
-              {catalog.filter((entry) => entry.assay_type === "stain").map((entry) => (
-                <option key={`stain-${entry.id}`} value={`stain:${entry.name}`}>{entry.name}</option>
-              ))}
-            </optgroup>
-            <optgroup label="IHC">
-              {catalog.filter((entry) => entry.assay_type === "ihc").map((entry) => (
-                <option key={`ihc-${entry.id}`} value={`ihc:${entry.name}`}>{entry.name}</option>
-              ))}
-            </optgroup>
-          </select>
-        </div>
-      ))}
-      {visible.length === 0 && slides.length > 0 && (
+            <Archive size={13} className="shrink-0 text-ink-faint" />
+            <span className="shrink-0 text-xs font-semibold text-ink">{group.parentCode}</span>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
+              {group.sampleDescription || group.projectCode}
+            </span>
+            {depths.length > 0 && (
+              <span className="shrink-0 text-[10px] text-ink-faint">
+                {depths.length === 1 ? `${depths[0]} um` : `${depths.length} depths`}
+              </span>
+            )}
+            <span
+              className="shrink-0 rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand"
+              title={`${group.slides.length} extra slide${group.slides.length === 1 ? "" : "s"}`}
+            >
+              {group.slides.length}
+            </span>
+            {group.isPriority && <Star size={11} className="shrink-0 fill-amber-400 text-amber-500" />}
+          </button>
+        );
+      })}
+      {visible.length === 0 && (
         <p className="px-1 py-3 text-center text-[11px] text-ink-faint">
-          {slides.length ? "No matching extra slides" : "No extra slides in inventory"}
+          {slides.length ? "No matching samples" : "No extra slides in inventory"}
         </p>
       )}
     </>

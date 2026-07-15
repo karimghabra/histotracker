@@ -19,6 +19,18 @@ function processingRemaining(sample: Sample): string | null {
   return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
 }
 
+function sectioningPlanSummary(raw: string): string | null {
+  try {
+    const plan = JSON.parse(raw) as Array<{ depth_um?: number; duplicates?: number }>;
+    const entries = plan
+      .filter((entry) => Number.isFinite(entry.depth_um) && Number(entry.duplicates) > 0)
+      .map((entry) => `${entry.depth_um}um x${entry.duplicates}`);
+    return entries.length > 0 ? entries.join(", ") : null;
+  } catch {
+    return null;
+  }
+}
+
 const PREPROCESSING_STAGES = new Set([
   "received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol",
 ]);
@@ -75,6 +87,7 @@ export function SampleCard({
   });
 
   const remaining = processingRemaining(sample);
+  const planSummary = sectioningPlanSummary(sample.sectioning_plan);
 
   const base = cn(
     "group touch-none rounded-md border bg-white transition select-none",
@@ -106,12 +119,12 @@ export function SampleCard({
         <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
           {sample.sample_description || "—"}
         </span>
-        {(sample.sectioned_depths || sample.max_cut_depth_um != null) && (
+        {(planSummary || sample.sectioned_depths || sample.max_cut_depth_um != null) && (
           <span
             className="shrink-0 text-[10px] text-ink-faint"
-            title={sample.sectioned_depths ? `Sectioned depths: ${sample.sectioned_depths}` : "Deepest requested depth"}
+            title={planSummary ? `Sectioning plan: ${planSummary}` : sample.sectioned_depths ? `Sectioned depths: ${sample.sectioned_depths}` : "Deepest requested depth"}
           >
-            {sample.sectioned_depths || `${sample.max_cut_depth_um}µm requested`}
+            {planSummary || sample.sectioned_depths || `${sample.max_cut_depth_um}um requested`}
           </span>
         )}
         <button

@@ -9,6 +9,7 @@ import { SampleDetailsDrawer } from "./components/SampleDetailsDrawer";
 import { SectionDetailsDrawer } from "./components/SectionDetailsDrawer";
 import { BatchStartDialog } from "./components/BatchStartDialog";
 import { ProcessingBatchDetailsDrawer } from "./components/ProcessingBatchDetailsDrawer";
+import { ExtraSlideDetailsDrawer } from "./components/ExtraSlideDetailsDrawer";
 import { UserManagerDialog } from "./components/UserManagerDialog";
 import { Button } from "./components/ui";
 import { useActiveUser, useExtraSlides, useOpenSamples, useOpenSections, useProcessingBatches, useProjects, useUserMutations, useUsers } from "./hooks/useData";
@@ -35,7 +36,9 @@ export default function App() {
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
   const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
+  const [selectedSectionIds, setSelectedSectionIds] = useState<number[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
+  const [selectedExtraSampleId, setSelectedExtraSampleId] = useState<number | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewSample, setShowNewSample] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
@@ -43,6 +46,9 @@ export default function App() {
   const [pendingBatchSampleIds, setPendingBatchSampleIds] = useState<number[] | null>(null);
   const [theme, setTheme] = useState(
     () => window.localStorage.getItem("histometer-theme") ?? "system",
+  );
+  const [drawerWidth, setDrawerWidth] = useState(
+    () => Number(window.localStorage.getItem("histometer-drawer-width") ?? "416"),
   );
   const [status, setStatus] = useState<string | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
@@ -56,6 +62,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("histometer-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("histometer-drawer-width", String(drawerWidth));
+  }, [drawerWidth]);
 
   useEffect(() => {
     if (activeUser) window.localStorage.setItem("histometer-active-operator", activeUser.name);
@@ -127,6 +137,10 @@ export default function App() {
     () => batches.find((batch) => batch.id === selectedBatchId) ?? null,
     [batches, selectedBatchId],
   );
+  const selectedExtraSlides = useMemo(
+    () => extraSlides.filter((slide) => slide.sample_id === selectedExtraSampleId),
+    [extraSlides, selectedExtraSampleId],
+  );
   const pendingBatchSamples = useMemo(
     () =>
       pendingBatchSampleIds
@@ -138,12 +152,21 @@ export default function App() {
   const selectSample = (id: number) => {
     setSelectedSectionId(null);
     setSelectedBatchId(null);
+    setSelectedExtraSampleId(null);
     setSelectedSampleId(id);
   };
   const selectSection = (id: number) => {
     setSelectedSampleId(null);
     setSelectedBatchId(null);
+    setSelectedExtraSampleId(null);
     setSelectedSectionId(id);
+  };
+
+  const selectExtraSlideSample = (sampleId: number) => {
+    setSelectedSampleId(null);
+    setSelectedSectionId(null);
+    setSelectedBatchId(null);
+    setSelectedExtraSampleId(sampleId);
   };
 
   function moveBatchWithConfirmation(batchId: number, stageKey: string) {
@@ -170,6 +193,50 @@ export default function App() {
       flash(`Export failed: ${e}`);
     }
   }
+
+  function startDrawerResize() {
+    const onMove = (event: globalThis.MouseEvent) => {
+      const next = window.innerWidth - event.clientX;
+      setDrawerWidth(Math.min(720, Math.max(320, next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  const activeDrawer = selectedSample ? (
+    <SampleDetailsDrawer
+      sample={selectedSample}
+      selectedSamples={samples.filter((sample) => selectedSampleIds.includes(sample.id))}
+      onRequestProcessing={setPendingBatchSampleIds}
+      width={drawerWidth}
+      onClose={() => setSelectedSampleId(null)}
+    />
+  ) : selectedSection ? (
+    <SectionDetailsDrawer
+      section={selectedSection}
+      selectedSections={sections.filter((section) => selectedSectionIds.includes(section.id))}
+      width={drawerWidth}
+      onClose={() => setSelectedSectionId(null)}
+    />
+  ) : selectedBatch ? (
+    <ProcessingBatchDetailsDrawer
+      batch={selectedBatch}
+      samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
+      onMove={moveBatchWithConfirmation}
+      width={drawerWidth}
+      onClose={() => setSelectedBatchId(null)}
+    />
+  ) : selectedExtraSlides.length > 0 ? (
+    <ExtraSlideDetailsDrawer
+      slides={selectedExtraSlides}
+      width={drawerWidth}
+      onClose={() => setSelectedExtraSampleId(null)}
+    />
+  ) : null;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
@@ -332,6 +399,8 @@ export default function App() {
               onSelectSample={selectSample}
               onSampleSelectionChange={setSelectedSampleIds}
               onSelectSection={selectSection}
+              onSectionSelectionChange={setSelectedSectionIds}
+              onSelectExtraSlideSample={selectExtraSlideSample}
               onMoveSamples={(sampleIds, stageKey) => {
                 void moveSamples(sampleIds, stageKey).catch((error) => flash(String(error)));
               }}
@@ -347,6 +416,7 @@ export default function App() {
               onSelectProcessingBatch={(batchId) => {
                 setSelectedSampleId(null);
                 setSelectedSectionId(null);
+                setSelectedExtraSampleId(null);
                 setSelectedBatchId(batchId);
               }}
               onToggleSamplePriority={(sampleId) => {
@@ -354,27 +424,19 @@ export default function App() {
               }}
             />
           </div>
-          {selectedSample && (
-            <SampleDetailsDrawer
-              sample={selectedSample}
-              selectedSamples={samples.filter((sample) => selectedSampleIds.includes(sample.id))}
-              onRequestProcessing={setPendingBatchSampleIds}
-              onClose={() => setSelectedSampleId(null)}
-            />
-          )}
-          {selectedSection && (
-            <SectionDetailsDrawer
-              section={selectedSection}
-              onClose={() => setSelectedSectionId(null)}
-            />
-          )}
-          {selectedBatch && (
-            <ProcessingBatchDetailsDrawer
-              batch={selectedBatch}
-              samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
-              onMove={moveBatchWithConfirmation}
-              onClose={() => setSelectedBatchId(null)}
-            />
+          {activeDrawer && (
+            <>
+              <div
+                className="group flex w-3 shrink-0 cursor-col-resize items-center justify-center bg-panel/30"
+                role="separator"
+                aria-orientation="vertical"
+                title="Drag to resize details panel"
+                onMouseDown={startDrawerResize}
+              >
+                <div className="h-16 w-1 rounded-full bg-line transition group-hover:bg-brand/60" />
+              </div>
+              {activeDrawer}
+            </>
           )}
         </div>
       </main>

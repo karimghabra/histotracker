@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { ProcessingBatch, Sample, SectionRequest, Slide } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
@@ -23,9 +23,10 @@ import { ProcessingBatchRow } from "./ProcessingBatchRow";
 import { QueueColumn } from "./QueueColumn";
 import { SampleCard } from "./SampleCard";
 import { SectionCard } from "./SectionCard";
-import { ExtraSlideInventory } from "./ExtraSlideInventory";
+import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
 type EmbeddedSort = "embedded_date" | "name" | "sample_id";
+type ExtraSlidesSort = "sample_id" | "name";
 type ActiveDrag =
   | { type: "block"; sample: Sample; count?: number }
   | { type: "section"; section: SectionRequest; count?: number }
@@ -54,12 +55,43 @@ function sortEmbedded(samples: Sample[], key: EmbeddedSort): Sample[] {
   return copy;
 }
 
+function sortExtraSlides(slides: Slide[], key: ExtraSlidesSort): Slide[] {
+  const copy = [...slides];
+  copy.sort((a, b) => {
+    if ((a.is_priority ?? 0) !== (b.is_priority ?? 0)) return (b.is_priority ?? 0) - (a.is_priority ?? 0);
+    switch (key) {
+      case "name":
+        return (a.sample_description || a.parent_code || a.slide_code).localeCompare(
+          b.sample_description || b.parent_code || b.slide_code,
+        );
+      case "sample_id":
+      default:
+        return (
+          (a.project_code ?? "").localeCompare(b.project_code ?? "") ||
+          (a.parent_code ?? "").localeCompare(b.parent_code ?? "") ||
+          a.slide_code.localeCompare(b.slide_code)
+        );
+    }
+  });
+  return copy;
+}
+
 function rangeSelection(order: number[], anchor: number | null, target: number): number[] {
   if (anchor === null) return [target];
   const start = order.indexOf(anchor);
   const end = order.indexOf(target);
   if (start < 0 || end < 0) return [target];
   return order.slice(Math.min(start, end), Math.max(start, end) + 1);
+}
+
+function groupDownstreamSections(sections: SectionRequest[]): SectionRequest[][] {
+  const groups = new Map<number, SectionRequest[]>();
+  for (const section of sections) {
+    const existing = groups.get(section.sample_id) ?? [];
+    existing.push(section);
+    groups.set(section.sample_id, existing);
+  }
+  return [...groups.values()];
 }
 
 export function Board({
@@ -70,6 +102,8 @@ export function Board({
   onSelectSample,
   onSampleSelectionChange,
   onSelectSection,
+  onSectionSelectionChange,
+  onSelectExtraSlideSample,
   onMoveSamples,
   onMoveSections,
   onRequestProcessingBatch,
@@ -86,6 +120,8 @@ export function Board({
   onSelectSample: (id: number) => void;
   onSampleSelectionChange: (ids: number[]) => void;
   onSelectSection: (id: number) => void;
+  onSectionSelectionChange: (ids: number[]) => void;
+  onSelectExtraSlideSample: (sampleId: number) => void;
   onMoveSamples: (sampleIds: number[], stageKey: string) => void;
   onMoveSections: (sectionIds: number[], stageKey: string) => void;
   onRequestProcessingBatch: (sampleIds: number[]) => void;
@@ -101,6 +137,12 @@ export function Board({
   const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
   const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
   const [assignmentView, setAssignmentView] = useState<"fresh" | "inventory">("fresh");
+  const [extraSlidesFilter, setExtraSlidesFilter] = useState<string>("all");
+  const [extraSlidesSort, setExtraSlidesSort] = useState<ExtraSlidesSort>("sample_id");
+  const [topLaneHeight, setTopLaneHeight] = useState(
+    () => Number(window.localStorage.getItem("histometer-board-top-height") ?? "50"),
+  );
+  const boardRef = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   useEffect(() => {
@@ -116,6 +158,14 @@ export function Board({
   useEffect(() => {
     onSampleSelectionChange([...selectedBlocks]);
   }, [onSampleSelectionChange, selectedBlocks]);
+
+  useEffect(() => {
+    onSectionSelectionChange([...selectedSections]);
+  }, [onSectionSelectionChange, selectedSections]);
+
+  useEffect(() => {
+    window.localStorage.setItem("histometer-board-top-height", String(topLaneHeight));
+  }, [topLaneHeight]);
 
   const batchMemberIds = useMemo(
     () => new Set(batches.flatMap((batch) => batch.member_ids)),
@@ -170,6 +220,37 @@ export function Board({
     }
     return sortEmbedded(items, embeddedSort);
   }, [blocksByQueue, embeddedFilter, embeddedSort]);
+
+  const projectsInExtraSlides = useMemo(() => {
+    return [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
+  }, [extraSlides]);
+
+  const displayedExtraSlides = useMemo(() => {
+    let items = extraSlides;
+    if (extraSlidesFilter !== "all") {
+      items = items.filter((slide) => slide.project_code === extraSlidesFilter);
+    }
+    return sortExtraSlides(items, extraSlidesSort);
+  }, [extraSlides, extraSlidesFilter, extraSlidesSort]);
+  const displayedExtraSlideGroups = useMemo(
+    () => groupExtraSlides(displayedExtraSlides),
+    [displayedExtraSlides],
+  );
+
+  function startBoardResize() {
+    const onMove = (event: globalThis.MouseEvent) => {
+      if (!boardRef.current) return;
+      const rect = boardRef.current.getBoundingClientRect();
+      const next = ((event.clientY - rect.top) / rect.height) * 100;
+      setTopLaneHeight(Math.min(78, Math.max(22, next)));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   function selectBlock(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedSections(new Set());
@@ -236,6 +317,25 @@ export function Board({
     onSelectSection(id);
   }
 
+  function selectSectionGroup(ids: number[], event: MouseEvent<HTMLDivElement>) {
+    setSelectedBlocks(new Set());
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedSections((current) => {
+        const next = new Set(current);
+        const allSelected = ids.every((id) => next.has(id));
+        for (const id of ids) {
+          if (allSelected) next.delete(id);
+          else next.add(id);
+        }
+        return next;
+      });
+    } else {
+      setSelectedSections(new Set(ids));
+    }
+    sectionAnchor.current = ids[0] ?? null;
+    if (ids[0] != null) onSelectSection(ids[0]);
+  }
+
   function handleStart(event: DragStartEvent) {
     const data = event.active.data.current as ActiveDrag;
     if (!data) return;
@@ -293,12 +393,12 @@ export function Board({
 
   return (
     <DndContext sensors={sensors} onDragStart={handleStart} onDragEnd={handleEnd}>
-      <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div ref={boardRef} className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
         {BOARD_LANES.map((lane, laneIndex) => (
+          <Fragment key={lane.title}>
           <div
-            key={lane.title}
             className="flex min-h-0 shrink-0 flex-col overflow-hidden"
-            style={{ height: "calc(50% - 0.375rem)" }}
+            style={laneIndex === 0 ? { height: `calc(${topLaneHeight}% - 0.375rem)` } : { flex: 1 }}
           >
             <div className="mb-1.5 flex items-center gap-2">
               <span
@@ -330,19 +430,22 @@ export function Board({
                     const items = sectionsByQueue[queueKey] ?? [];
                     const isAssignment = queueKey === "slide_assignment";
                     const showingInventory = isAssignment && assignmentView === "inventory";
-                    const selectedCount = items.filter((item) => selectedSections.has(item.id)).length;
+                    const groups = queueKey === "staining" || queueKey === "analysis_pending"
+                      ? groupDownstreamSections(items)
+                      : items.map((item) => [item]);
+                    const selectedCount = groups.filter((group) => group.every((item) => selectedSections.has(item.id))).length;
                     return (
                       <QueueColumn
                         key={queueKey}
                         queue={queue}
-                        count={showingInventory ? extraSlides.length : items.length}
+                        count={showingInventory ? displayedExtraSlideGroups.length : groups.length}
                         selectedCount={selectedCount}
                         onToggleAll={
                           !showingInventory && items.length > 0
                             ? () => {
                                 setSelectedBlocks(new Set());
                                 setSelectedSections(
-                                  selectedCount === items.length
+                                  selectedCount === groups.length
                                     ? new Set()
                                     : new Set(items.map((item) => item.id)),
                                 );
@@ -350,28 +453,59 @@ export function Board({
                             : undefined
                         }
                         headerExtra={isAssignment ? (
-                          <div className="grid grid-cols-2 rounded-md border border-line bg-panel p-0.5 text-[10px]">
-                            <button
-                              onClick={() => setAssignmentView("fresh")}
-                              className={`rounded px-1 py-1 ${assignmentView === "fresh" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
-                            >
-                              Fresh ({items.length})
-                            </button>
-                            <button
-                              onClick={() => setAssignmentView("inventory")}
-                              className={`rounded px-1 py-1 ${assignmentView === "inventory" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
-                            >
-                              Extras ({extraSlides.length})
-                            </button>
+                          <div className="space-y-1">
+                            <div className="grid grid-cols-2 rounded-md border border-line bg-panel p-0.5 text-[10px]">
+                              <button
+                                onClick={() => setAssignmentView("fresh")}
+                                className={`rounded px-1 py-1 ${assignmentView === "fresh" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+                              >
+                                Fresh ({items.length})
+                              </button>
+                              <button
+                                onClick={() => setAssignmentView("inventory")}
+                                className={`rounded px-1 py-1 ${assignmentView === "inventory" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+                              >
+                                Extras ({extraSlides.length})
+                              </button>
+                            </div>
+                            {showingInventory && (
+                              <div className="flex gap-1">
+                                <select
+                                  className={selectClass}
+                                  value={extraSlidesFilter}
+                                  onChange={(event) => setExtraSlidesFilter(event.target.value)}
+                                >
+                                  <option value="all">All Projects</option>
+                                  {projectsInExtraSlides.map((code) => (
+                                    <option key={code} value={code}>{code}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className={selectClass}
+                                  value={extraSlidesSort}
+                                  onChange={(event) => setExtraSlidesSort(event.target.value as ExtraSlidesSort)}
+                                >
+                                  <option value="sample_id">Sample ID</option>
+                                  <option value="name">Name</option>
+                                </select>
+                              </div>
+                            )}
                           </div>
                         ) : undefined}
                       >
-                        {showingInventory ? <ExtraSlideInventory slides={extraSlides} /> : items.map((section) => (
+                        {showingInventory ? (
+                          <ExtraSlideInventory
+                            slides={displayedExtraSlides}
+                            onSelectSample={onSelectExtraSlideSample}
+                          />
+                        ) : groups.map((group) => (
                           <SectionCard
-                            key={section.id}
-                            section={section}
-                            selected={selectedSections.has(section.id)}
+                            key={group.map((section) => section.id).join("-")}
+                            section={group[0]}
+                            groupedSections={group.length > 1 ? group : undefined}
+                            selected={group.every((section) => selectedSections.has(section.id))}
                             onSelect={selectSection}
+                            onSelectGroup={selectSectionGroup}
                           />
                         ))}
                       </QueueColumn>
@@ -457,6 +591,20 @@ export function Board({
               </div>
             </div>
           </div>
+          {laneIndex === 0 && (
+            <div
+              key="board-resizer"
+              data-board-resizer="true"
+              className="group flex h-3 shrink-0 cursor-row-resize items-center justify-center"
+              role="separator"
+              aria-orientation="horizontal"
+              title="Drag to resize top and bottom rows"
+              onMouseDown={startBoardResize}
+            >
+              <div className="h-1 w-16 rounded-full bg-line transition group-hover:bg-brand/60" />
+            </div>
+          )}
+          </Fragment>
         ))}
       </div>
 

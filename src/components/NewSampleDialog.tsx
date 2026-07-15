@@ -86,7 +86,7 @@ export function NewSampleDialog({
           checked={needsDecalc}
           onChange={(e) => setNeedsDecalc(e.target.checked)}
         />
-        Decalcification needed before fixation
+        Decalcification needed after fixation
       </label>
       <Field label="Requested Stains / IHC">
         <TextInput value={stains} onChange={(e) => setStains(e.target.value)} />

@@ -8,9 +8,9 @@ export interface StageDef {
 
 export const STAGES: StageDef[] = [
   { key: "received", label: "Logged", column: "stage_received_at" },
-  { key: "decalcified", label: "Decalcification Complete", column: "decalc_completed_at" },
   { key: "in_fixative", label: "Placed in Fixative", column: "fixative_placed_at" },
   { key: "fixative_removed", label: "Removed from Fixative", column: "fixative_removed_at" },
+  { key: "decalcified", label: "Decalcification Complete", column: "decalc_completed_at" },
   { key: "in_ethanol", label: "Placed in Ethanol", column: "ethanol_placed_at" },
   { key: "processing_started", label: "Processing Started", column: "processing_started_at" },
   { key: "processed", label: "Processed", column: "stage_processed_at" },
@@ -42,9 +42,9 @@ export const STAGE_ORDER: Record<string, number> = Object.fromEntries(
 // downstream slide stages (those belong to section/slide cards).
 const BLOCK_TIMELINE_KEYS = [
   "received",
-  "decalcified",
   "in_fixative",
   "fixative_removed",
+  "decalcified",
   "in_ethanol",
   "processing_started",
   "picked_up",
@@ -66,7 +66,7 @@ export interface QueueDef {
 }
 
 export const BOARD_QUEUES: QueueDef[] = [
-  { key: "preprocessing", title: "Pre-processing", stages: ["received", "decalcified", "in_fixative", "fixative_removed", "in_ethanol"], entryStage: "in_fixative", lane: 0 },
+  { key: "preprocessing", title: "Pre-processing", stages: ["received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol"], entryStage: "in_fixative", lane: 0 },
   { key: "processing", title: "Processing", stages: ["processing_started"], entryStage: "processing_started", lane: 0 },
   { key: "processor_pickup", title: "Processor Pickup", stages: ["processed"], entryStage: "processed", lane: 0 },
   { key: "needs_embedding", title: "Needs Embedding", stages: ["needs_embedding"], entryStage: "needs_embedding", lane: 0 },

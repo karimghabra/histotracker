@@ -40,8 +40,11 @@ export function PreprocessingChecklist({
           const incomplete = relevant.filter((sample) => !sample[step.column]);
           const blocked = incomplete.filter((sample) => {
             if (index === 0) return false;
-            const previous = steps[index - 1];
-            return !sample[previous.column];
+            const previous = steps
+              .slice(0, index)
+              .reverse()
+              .find((candidate) => !candidate.decalcOnly || sample.needs_decalcification === 1);
+            return previous ? !sample[previous.column] : false;
           });
           const completedCount = relevant.length - incomplete.length;
           const done = relevant.length > 0 && incomplete.length === 0;

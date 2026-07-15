@@ -10,6 +10,7 @@ export function ProtocolChecklist({
   stageKey,
   protocolName,
   labels,
+  batchScopeIds = [],
   onStepChange,
 }: {
   scopeType: string;
@@ -17,7 +18,8 @@ export function ProtocolChecklist({
   stageKey: string;
   protocolName: string;
   labels: string[];
-  onStepChange?: (sortOrder: number, complete: boolean) => Promise<void>;
+  batchScopeIds?: number[];
+  onStepChange?: (sortOrder: number, complete: boolean, scopeIds: number[]) => Promise<void>;
 }) {
   const qc = useQueryClient();
   const queryKey = ["protocol-checklist", scopeType, scopeId, stageKey];
@@ -40,8 +42,24 @@ export function ProtocolChecklist({
     window.localStorage.setItem("histometer-active-operator", operator.trim());
     await setChecklistItemComplete(itemId, value, operator.trim());
     const item = items.find((candidate) => candidate.id === itemId);
-    if (item && onStepChange) await onStepChange(item.sort_order, value);
+    const scopeIds = [...new Set([scopeId, ...batchScopeIds])];
+    if (item) {
+      for (const targetScopeId of scopeIds) {
+        if (targetScopeId === scopeId) continue;
+        const targetItems = await ensureChecklist({
+          scopeType,
+          scopeId: targetScopeId,
+          stageKey,
+          protocolName,
+          labels,
+        });
+        const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
+        if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+      }
+      if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
+    }
     await qc.invalidateQueries({ queryKey });
+    await Promise.all(scopeIds.map((id) => qc.invalidateQueries({ queryKey: ["protocol-checklist", scopeType, id, stageKey] })));
     await qc.invalidateQueries({ queryKey: ["open-sections"] });
     await qc.invalidateQueries({ queryKey: ["section-slides"] });
   }

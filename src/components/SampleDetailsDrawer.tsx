@@ -26,11 +26,13 @@ export function SampleDetailsDrawer({
   sample,
   selectedSamples = [sample],
   onRequestProcessing,
+  width = 320,
   onClose,
 }: {
   sample: Sample;
   selectedSamples?: Sample[];
   onRequestProcessing: (sampleIds: number[]) => void;
+  width?: number;
   onClose: () => void;
 }) {
   const {
@@ -82,7 +84,7 @@ export function SampleDetailsDrawer({
   }
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-l border-line bg-panel">
+    <div className="flex h-full shrink-0 flex-col border-l border-line bg-panel" style={{ width }}>
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <h2 className="text-base font-semibold text-ink">{sample.sample_code}</h2>
