@@ -22,7 +22,44 @@ The SQLite database lives in the OS app-data directory (`sqlite:histometer.db`) 
 operational source of truth. Schema is created via Rust migrations in
 [`src-tauri/migrations/`](src-tauri/migrations/).
 
-## Prerequisites
+## Install (no compilers needed)
+
+You do **not** need Node.js, Rust or any build tools to *install and run*
+Histometer — those are only needed to *build* the installer, and that build now
+happens automatically in the cloud via GitHub Actions. The result is an ordinary
+Windows installer you double-click.
+
+There are two ways to get an installer:
+
+1. **From a release (easiest).** Open the repository's **Releases** page and
+   download the latest `Histometer_<version>_x64-setup.exe`. Run it and launch
+   Histometer from the Start menu.
+
+2. **On demand.** In the **Actions** tab, open the **Build Windows Installer**
+   workflow, click **Run workflow**, wait ~5–10 minutes, then download the
+   `histometer-windows-installer` artifact from the finished run and unzip it —
+   it contains the `.exe` and `.msi`.
+
+To publish a release yourself, push a version tag and the workflow builds and
+attaches the installers automatically:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The installer runs **per-user, without administrator rights**, and pulls in the
+Microsoft WebView2 runtime automatically if the machine doesn't already have it
+(virtually every Windows 10/11 machine does). The target machine needs nothing
+pre-installed.
+
+> **Unsigned installer note:** the installer is not code-signed, so Windows
+> SmartScreen may show a "Windows protected your PC" prompt on first run. Click
+> **More info → Run anyway**. Signing requires a paid code-signing certificate;
+> see [Tauri's signing guide](https://tauri.app/distribute/sign/windows/) if you
+> want to remove that prompt.
+
+## Prerequisites (for local development only)
 
 - Node.js 18+ and npm
 - Rust (stable) with the MSVC toolchain
@@ -46,6 +83,13 @@ npm run tauri build
 Installers are written under `src-tauri/target/release/bundle/` (normally MSI and
 NSIS `.exe` packages on Windows). Copy one of those installers to another machine;
 the target machine does not need Node.js or Rust.
+
+If you don't have (or don't want to set up) the toolchain locally, use the cloud
+build described in [Install (no compilers needed)](#install-no-compilers-needed)
+instead — it produces the same installers via GitHub Actions.
+
+The CI build is configured in
+[`.github/workflows/build-installer.yml`](.github/workflows/build-installer.yml).
 
 ## Project layout
 
