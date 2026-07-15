@@ -2,17 +2,16 @@ name: Build Windows Installer
 
 # Builds the Histometer Windows installer (.exe + .msi) in the cloud on a
 # GitHub-hosted Windows runner that already has Rust, the MSVC toolchain and
-# Node.js installed. Nobody needs any compilers on their own machine: you run
-# this workflow, wait a few minutes, and download a ready-to-run installer.
+# Node.js installed. Nobody needs any compilers on their own machine.
 #
-# Two ways to trigger it:
+# Every build publishes a GitHub Release, so the installer is always available
+# as a one-click download from the repo's Releases page:
 #
-#   1. Actions tab -> "Build Windows Installer" -> "Run workflow"
-#      The installers are attached to that run as downloadable artifacts.
+#     https://github.com/karimghabra/histotracker/releases
 #
-#   2. Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`)
-#      A GitHub Release is created with the installers attached, giving you a
-#      permanent public download page you can share.
+# The tool creates the release (and its tag) through the GitHub API using the
+# built-in GITHUB_TOKEN, so no manual tagging or `git push --tags` is needed.
+# The same installers are also attached to each run as workflow artifacts.
 
 on:
   workflow_dispatch: {}
@@ -59,23 +58,24 @@ jobs:
         run: npm ci
 
       # tauri-action runs `npm run tauri build`, which compiles the Rust shell
-      # and bundles the NSIS `.exe` and `.msi` installers. When `tagName` is
-      # non-empty (i.e. this run was triggered by a version tag) it also
-      # publishes a GitHub Release with the installers attached.
-      - name: Build the app and (on a tag) publish a Release
+      # and bundles the NSIS `.exe` and `.msi` installers, then publishes them
+      # to a GitHub Release. `__VERSION__` is replaced with the app version from
+      # tauri.conf.json (0.1.0 -> tag `app-v0.1.0`); re-running updates the same
+      # release in place.
+      - name: Build the app and publish a Release
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: "Histometer ${{ github.ref_name }}"
+          tagName: app-v__VERSION__
+          releaseName: "Histometer v__VERSION__"
           releaseBody: |
             Windows installer for Histometer.
 
-            Download `Histometer_*_x64-setup.exe` (recommended) or the `.msi`,
-            run it, and launch Histometer from the Start menu. No Node.js, Rust
-            or build tools are required on the target machine.
+            Download the `..._x64-setup.exe` asset below (recommended) or the
+            `.msi`, run it, and launch Histometer from the Start menu. No
+            Node.js, Rust or build tools are required on the target machine.
           releaseDraft: false
           prerelease: false
 

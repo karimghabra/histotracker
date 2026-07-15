@@ -29,24 +29,17 @@ Histometer — those are only needed to *build* the installer, and that build no
 happens automatically in the cloud via GitHub Actions. The result is an ordinary
 Windows installer you double-click.
 
-There are two ways to get an installer:
+**Just go to the [Releases](../../releases) page and download the latest
+`Histometer_<version>_x64-setup.exe`.** Run it and launch Histometer from the
+Start menu.
 
-1. **From a release (easiest).** Open the repository's **Releases** page and
-   download the latest `Histometer_<version>_x64-setup.exe`. Run it and launch
-   Histometer from the Start menu.
+Every successful build automatically publishes/updates that release, so the
+latest installer is always one click away — no manual tagging required. (The
+same `.exe` and `.msi` are also attached to each Actions run as a
+`histometer-windows-installer` artifact if you prefer.)
 
-2. **On demand.** In the **Actions** tab, open the **Build Windows Installer**
-   workflow, click **Run workflow**, wait ~5–10 minutes, then download the
-   `histometer-windows-installer` artifact from the finished run and unzip it —
-   it contains the `.exe` and `.msi`.
-
-To publish a release yourself, push a version tag and the workflow builds and
-attaches the installers automatically:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+To produce a fresh installer on demand, open the **Actions** tab, select the
+**Build Windows Installer** workflow, and click **Run workflow**.
 
 The installer runs **per-user, without administrator rights**, and pulls in the
 Microsoft WebView2 runtime automatically if the machine doesn't already have it
