@@ -1,10 +1,21 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod sync;
+
 /// Write raw bytes to an absolute path chosen by the user via the save dialog.
 /// Used for CSV / XLSX export; keeps file I/O out of the scoped fs plugin.
 #[tauri::command]
 fn save_file(path: String, contents: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, &contents).map_err(|e| e.to_string())
+}
+
+/// Read raw bytes from an absolute path. Used by the workstation to read the
+/// live SQLite file for publishing, and by the viewer when swapping in a
+/// downloaded snapshot. The path is discovered at runtime via
+/// `PRAGMA database_list`, so we never hardcode the plugin's storage dir.
+#[tauri::command]
+fn read_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -88,6 +99,12 @@ pub fn run() {
             sql: include_str!("../migrations/0013_depth_duplicate_ordinals.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 14,
+            description: "stain_requests",
+            sql: include_str!("../migrations/0014_stain_requests.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -98,7 +115,20 @@ pub fn run() {
                 .add_migrations("sqlite:histometer.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![save_file])
+        .invoke_handler(tauri::generate_handler![
+            save_file,
+            read_file,
+            sync::sync_config_get,
+            sync::sync_config_set,
+            sync::sync_set_last_version,
+            sync::github_get_file,
+            sync::github_put_file,
+            sync::github_delete_file,
+            sync::github_list_dir,
+            sync::github_upload_release_asset,
+            sync::github_download_release_asset,
+            sync::github_validate,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
