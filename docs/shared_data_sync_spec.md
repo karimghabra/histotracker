@@ -1,25 +1,37 @@
 # Histometer — Shared Data Sync (spec + implementation status)
 
-This is the design + status for the "shared data layer over git" feature
-(viewer/workstation sync). It lives on branch `claude/shared-data-sync`
-(off `master` / v0.1.1).
+This is the original design + handoff spec for the "shared data layer over git"
+feature (viewer/workstation sync).
+
+> **Status: implemented.** The frontend (steps 1–8 below) is built and both
+> `cargo check` and `pnpm build` pass. For the maintainer-facing reference —
+> architecture, the schema/compatibility contract for big updates, the file
+> map, and the operational runbook — see
+> [`shared_data_sync.md`](./shared_data_sync.md). This file is kept as the
+> historical spec and record of the decisions settled with the user.
 
 ---
 
 ## Implementation status & handoff
 
-### Done (committed on this branch)
+### Done
 Rust backend — commit "Add GitHub REST sync backend + stain_requests migration":
-- `src-tauri/src/sync.rs` — all sync backend commands (see reference below).
+- `src-tauri/src/sync.rs` — all sync backend commands (see reference below),
+  plus a per-install `install_id` for the single-writer claim.
 - `src-tauri/src/lib.rs` — `mod sync;`, migration 14 registered, `read_file`
   command added, all `sync::*` commands registered in the invoke handler.
 - `src-tauri/migrations/0014_stain_requests.sql` — durable request table.
-- `src-tauri/Cargo.toml` — `reqwest = "0.13"` (rustls-tls, json) + `base64 = "0.22"`
-  (both already transitive deps in `Cargo.lock`).
+- `src-tauri/Cargo.toml` — `reqwest = "0.13"` (**feature `rustls`**, json) +
+  `base64 = "0.22"`.
 
-NOT yet compiled: the sandbox this was written in blocked `crates.io` + `npm`
-egress, so nothing here has been built. **First action in a network-enabled
-session:** `cd src-tauri && cargo check`, and `pnpm install` at repo root.
+Frontend — implemented across `src/lib/{syncConfig,githubSync,export,db,types}.ts`,
+`src/hooks/{useSync,useData}.ts`, and
+`src/components/{SetupScreen,RequestStainDialog,RequestsInbox}.tsx` + `App.tsx`.
+Also added: the single-writer workstation claim (§5 of the reference doc).
+
+Build fix applied during verification: the backend originally declared the
+reqwest feature as `rustls-tls`, which does not exist in reqwest 0.13 — corrected
+to `rustls`. Linux builds need the GTK/WebKit system libs (see the reference doc).
 
 ### Rust command reference (already implemented, call from TS via `invoke`)
 Config (token kept in a local `sync-config.json`, NEVER in the snapshot DB):
@@ -44,7 +56,8 @@ Get the exact path at runtime from SQLite itself:
 `SELECT file FROM pragma_database_list WHERE name='main'` → pass that path to
 `read_file` / `save_file`. Do not hardcode app_config/app_data dirs.
 
-### Remaining work (frontend — do WITH the compiler running)
+### Remaining work (frontend — do WITH the compiler running) — ✅ DONE
+All steps below are implemented; kept here as the record of what was built.
 Build order (phased), reusing existing patterns:
 1. `src/lib/syncConfig.ts` — typed `invoke` wrappers for the config commands.
 2. `src/lib/githubSync.ts` — `invoke` wrappers for the github commands + high-level
