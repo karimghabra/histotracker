@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import {
+  acknowledgeRequestsForSlide,
   addSample,
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
@@ -56,6 +57,7 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["section-slides"] });
     qc.invalidateQueries({ queryKey: ["sample-timeline"] });
     qc.invalidateQueries({ queryKey: ["extra-slides"] });
+    qc.invalidateQueries({ queryKey: ["stain-requests"] });
   }, [qc]);
 
   function validateForwardSampleMove(sample: Sample, stageKey: string) {
@@ -410,6 +412,8 @@ export function useActions() {
       const before = await getSlide(slideId);
       if (!before) return;
       await updateSlideAssignment(slideId, purpose, assayType, assayName);
+      // Fulfilling a requested stain auto-acknowledges the matching request.
+      if (purpose === "stain") await acknowledgeRequestsForSlide(slideId);
       invalidate();
       const after = await getSlide(slideId);
       if (!after) return;

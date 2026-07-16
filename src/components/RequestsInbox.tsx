@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Check, RotateCcw, X } from "lucide-react";
 import type { StainRequest, StainRequestStatus } from "../lib/types";
 import { Button, Modal } from "./ui";
@@ -20,23 +21,50 @@ export function RequestsInbox({
   title,
   requests,
   onSetStatus,
+  mineFilterName,
   onClose,
 }: {
   title: string;
   requests: StainRequest[];
   /** Provided for the workstation inbox; omit for the viewer's read-only list. */
   onSetStatus?: (id: number, status: StainRequestStatus) => void;
+  /** When set (viewer), shows a Mine/All toggle filtering by requester name. */
+  mineFilterName?: string;
   onClose: () => void;
 }) {
   const readOnly = !onSetStatus;
+  const [scope, setScope] = useState<"mine" | "all">("mine");
+
+  const displayed = useMemo(() => {
+    if (!mineFilterName || scope === "all") return requests;
+    return requests.filter(
+      (r) => r.requester_name.toLowerCase() === mineFilterName.toLowerCase(),
+    );
+  }, [requests, mineFilterName, scope]);
 
   return (
     <Modal title={title} onClose={onClose} width="max-w-2xl">
-      {requests.length === 0 && (
+      {mineFilterName && (
+        <div className="mb-3 grid w-40 grid-cols-2 rounded-md border border-line bg-panel p-0.5 text-xs">
+          <button
+            onClick={() => setScope("mine")}
+            className={`rounded px-2 py-1 ${scope === "mine" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+          >
+            Mine
+          </button>
+          <button
+            onClick={() => setScope("all")}
+            className={`rounded px-2 py-1 ${scope === "all" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+          >
+            All
+          </button>
+        </div>
+      )}
+      {displayed.length === 0 && (
         <p className="py-8 text-center text-sm text-ink-faint">No requests.</p>
       )}
       <div className="space-y-2">
-        {requests.map((request) => {
+        {displayed.map((request) => {
           const status = request.status as StainRequestStatus;
           return (
             <div key={request.id} className="rounded-xl border border-line bg-panel px-4 py-3">

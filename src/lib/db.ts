@@ -1556,6 +1556,42 @@ export async function listStainRequests(opts?: {
   );
 }
 
+/**
+ * Auto-acknowledge open requests fulfilled by assigning a stain slide: when the
+ * workstation assigns/creates a `stain` slide, any still-`requested` request for
+ * the same sample + assay (and matching slide, if the request named one) flips
+ * to `acknowledged` so the requester sees it's in progress. Closure to `done`
+ * stays a deliberate workstation action. Matching is by name, case-insensitive.
+ * Returns how many requests were acknowledged.
+ */
+export async function acknowledgeRequestsForSlide(slideId: number): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<
+    Array<{ purpose: string; slide_code: string; assay: string; sample_code: string }>
+  >(
+    `SELECT sl.purpose, sl.slide_code,
+            COALESCE(NULLIF(sl.assay_name, ''), sl.stain_name) AS assay,
+            s.sample_code AS sample_code
+       FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+       JOIN samples s ON s.id = sr.sample_id
+      WHERE sl.id = ?`,
+    [slideId],
+  );
+  const info = rows[0];
+  if (!info || info.purpose !== "stain" || !info.assay.trim() || !info.sample_code) return 0;
+  const res = await db.execute(
+    `UPDATE stain_requests
+        SET status = 'acknowledged'
+      WHERE status = 'requested'
+        AND sample_code = ? COLLATE NOCASE
+        AND requested_assay = ? COLLATE NOCASE
+        AND (slide_code = '' OR slide_code = ? COLLATE NOCASE)`,
+    [info.sample_code, info.assay.trim(), info.slide_code],
+  );
+  return res.rowsAffected ?? 0;
+}
+
 /** Move a request through requested -> acknowledged -> done / rejected. */
 export async function setStainRequestStatus(
   id: number,

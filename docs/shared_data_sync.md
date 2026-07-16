@@ -53,7 +53,7 @@ which "deploy everywhere together" eliminates.
 | Role | What it does | Writes to repo? | Writes to local DB? |
 |------|--------------|-----------------|---------------------|
 | **Workstation** | Authoritative bench app. Publishes the snapshot, drains the request inbox. Exactly one per lab (enforced — see §5). | Yes | Yes |
-| **Viewer** | Read-only mirror. Pulls snapshots, submits append-only stain requests. | Only request files | No (blocked at the data layer) |
+| **Viewer** | Read-only mirror. Pulls snapshots, submits append-only stain requests, sees request status (own by default, All via toggle). | Only request files | No (blocked at the data layer) |
 
 Role is chosen at setup (`SetupScreen.tsx`), defaults to **Viewer**, and is
 stored in the local `sync-config.json`.
@@ -219,7 +219,17 @@ cycle.
 **Request lifecycle** — viewer submits → file in `requests/` → workstation drains
 it into `stain_requests` (status `requested`) → workstation resolves
 (`acknowledged` → `done`/`rejected`) → status rides back down in the next snapshot
-so the requester sees it.
+so the requester sees it. Viewers see their own requests by default, with a
+**Mine / All** toggle to view everyone's (avoids duplicate requests).
+
+**Auto-acknowledge** — when the workstation assigns/creates a `stain` slide, any
+still-`requested` request matching the same sample + assay (and slide, if the
+request named one) is flipped to `acknowledged` automatically
+(`acknowledgeRequestsForSlide` in `db.ts`, called from the two assignment flows
+in `useActions.assignSlide` and `useData.useExtraSlideMutations`). Matching is by
+name, case-insensitive; closure to `done` remains a deliberate workstation action
+to guard against a wrong match. To make it auto-close instead, change that helper
+to set `done` + `resolved_by`.
 
 ---
 

@@ -48,15 +48,6 @@ export default function App() {
     () => stainRequests.filter((r) => r.status === "requested").length,
     [stainRequests],
   );
-  const myRequests = useMemo(
-    () =>
-      isViewer && syncConfig
-        ? stainRequests.filter(
-            (r) => r.requester_name.toLowerCase() === syncConfig.operator_name.toLowerCase(),
-          )
-        : stainRequests,
-    [isViewer, stainRequests, syncConfig],
-  );
 
   // Data-layer backstop: block writes on viewer installs.
   useEffect(() => {
@@ -556,8 +547,9 @@ export default function App() {
       )}
       {showRequests && (
         <RequestsInbox
-          title={isViewer ? "My requests" : "Stain requests"}
-          requests={isViewer ? myRequests : stainRequests}
+          title={isViewer ? "Requests" : "Stain requests"}
+          requests={stainRequests}
+          mineFilterName={isViewer ? syncConfig.operator_name : undefined}
           onSetStatus={
             isViewer
               ? undefined
