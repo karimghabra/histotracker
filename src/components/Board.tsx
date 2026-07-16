@@ -110,6 +110,7 @@ export function Board({
   onMoveProcessingBatch,
   onSelectProcessingBatch,
   onToggleSamplePriority,
+  readOnly = false,
 }: {
   samples: Sample[];
   sections: SectionRequest[];
@@ -128,6 +129,8 @@ export function Board({
   onMoveProcessingBatch: (batchId: number, stageKey: string) => void;
   onSelectProcessingBatch: (batchId: number) => void;
   onToggleSamplePriority: (sampleId: number) => void;
+  /** Viewer role: disable drag-to-move and the priority toggle. */
+  readOnly?: boolean;
 }) {
   const [active, setActive] = useState<ActiveDrag>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<number>>(new Set());
@@ -356,6 +359,7 @@ export function Board({
 
   function handleEnd(event: DragEndEvent) {
     setActive(null);
+    if (readOnly) return;
     const overId = event.over?.id as string | undefined;
     const data = event.active.data.current as ActiveDrag;
     if (!overId || !data) return;
@@ -392,7 +396,7 @@ export function Board({
     "w-full rounded-md border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none";
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleStart} onDragEnd={handleEnd}>
+    <DndContext sensors={readOnly ? [] : sensors} onDragStart={handleStart} onDragEnd={handleEnd}>
       <div ref={boardRef} className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
         {BOARD_LANES.map((lane, laneIndex) => (
           <Fragment key={lane.title}>
@@ -582,7 +586,7 @@ export function Board({
                           selected={selectedBlocks.has(sample.id)}
                           onSelect={selectBlock}
                           onToggle={toggleBlock}
-                          onTogglePriority={onToggleSamplePriority}
+                          onTogglePriority={readOnly ? undefined : onToggleSamplePriority}
                         />
                       ))}
                     </QueueColumn>

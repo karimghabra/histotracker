@@ -15,7 +15,7 @@ import { duplicateLabel, todayIso } from "./utils";
 type Accessor<T> = (row: T) => string;
 
 // Ordered column definitions shared by the CSV and XLSX sample exports.
-const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
+export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
   ["Project", (s) => s.project_code ?? ""],
   ["Sample ID", (s) => s.sample_code],
   ["Description", (s) => s.sample_description],
@@ -68,7 +68,7 @@ const SECTION_COLUMNS: Array<[string, Accessor<SectionRequest>]> = [
   ["Notes", (row) => row.notes],
 ];
 
-const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
+export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Project", (row) => row.project_code ?? ""],
   ["Sample ID", (row) => row.parent_code ?? ""],
   ["Slide ID", (row) => row.slide_code],
@@ -190,4 +190,41 @@ export async function exportWorkbookXlsx(): Promise<string | null> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   await writeBytes(path, bytes);
   return path;
+}
+
+// ---- Shared-sync status workbook (published alongside the DB snapshot) -------
+
+// Bold, tinted, frozen header row so the SharePoint/at-a-glance workbook reads
+// cleanly without any filtering applied.
+const STATUS_HEADER_STYLE = {
+  fontWeight: "bold" as const,
+  backgroundColor: "#EEF2F7",
+  align: "left" as const,
+};
+
+function statusSheetRows<T>(rows: T[], columns: Array<[string, Accessor<T>]>): unknown[] {
+  const header = columns.map(([label]) => ({ value: label, ...STATUS_HEADER_STYLE }));
+  const body = rows.map((row) => columns.map(([, fn]) => fn(row)));
+  return [header, ...body];
+}
+
+/**
+ * Build the human-facing 2-sheet status workbook ("Sample Status", "Slide
+ * Status") as raw bytes, so the sync layer can upload it as a release asset
+ * without going through the save dialog. Reuses the CSV/XLSX column sets.
+ */
+export async function buildStatusWorkbookBytes(): Promise<Uint8Array> {
+  const [samples, slides] = await Promise.all([listAllSamples(), listAllSlides()]);
+
+  const sheets = [
+    { data: statusSheetRows(samples, SAMPLE_COLUMNS), sheet: "Sample Status", stickyRowsCount: 1 },
+    { data: statusSheetRows(slides, SLIDE_COLUMNS), sheet: "Slide Status", stickyRowsCount: 1 },
+  ];
+
+  // The multi-sheet browser overload takes an array of { data, sheet, ... } and
+  // returns a Blob; its types don't model this overload cleanly, so we call
+  // through a narrow signature (same approach as exportWorkbookXlsx above).
+  const write = writeXlsxFile as unknown as (sheets: unknown[]) => Promise<Blob>;
+  const blob = await write(sheets);
+  return new Uint8Array(await blob.arrayBuffer());
 }

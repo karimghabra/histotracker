@@ -20,7 +20,7 @@ import {
   SECTION_STAGE_ORDER,
   processingDurationHours,
 } from "./stages";
-import type { SectionRequest } from "./types";
+import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import { duplicateLabel, nowTimestamp, parseTimestamp, todayIso } from "./utils";
 
 const STAGE_COLUMN_SET = new Set(Object.values(STAGE_COLUMNS));
@@ -29,11 +29,65 @@ const DB_URL = "sqlite:histometer.db";
 
 let dbPromise: Promise<Database> | null = null;
 
+// When true, every write (db.execute) is rejected. Viewer instances are
+// read-only mirrors of the workstation's published snapshot; this is the
+// data-layer backstop behind the UI-level read-only gating. Checked at call
+// time so the flag can be flipped after the connection is already open.
+let viewerReadOnly = false;
+
+export function setViewerReadOnly(readOnly: boolean): void {
+  viewerReadOnly = readOnly;
+}
+
+function guardWrites(db: Database): Database {
+  const original = db.execute.bind(db);
+  db.execute = ((query: string, bindValues?: unknown[]) => {
+    if (viewerReadOnly) {
+      return Promise.reject(
+        new Error("This is a read-only viewer — changes are made on the workstation."),
+      );
+    }
+    return original(query, bindValues);
+  }) as typeof db.execute;
+  return db;
+}
+
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
-    dbPromise = Database.load(DB_URL);
+    dbPromise = Database.load(DB_URL).then(guardWrites);
   }
   return dbPromise;
+}
+
+/**
+ * Absolute path of the live SQLite file, asked of SQLite itself so we never
+ * hardcode the tauri-plugin-sql storage dir. The workstation reads this path
+ * to publish a snapshot; the viewer overwrites it when swapping one in.
+ */
+export async function getDbFilePath(): Promise<string> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ file: string }>>(
+    `SELECT file FROM pragma_database_list WHERE name = 'main'`,
+  );
+  const file = rows[0]?.file;
+  if (!file) throw new Error("Could not resolve the database file path.");
+  return file;
+}
+
+/**
+ * Close the pooled connection and drop the memoized promise so the next
+ * getDb() reopens the file. The viewer calls this before overwriting the
+ * SQLite file with a downloaded snapshot, then re-opens against the new bytes.
+ */
+export async function resetDb(): Promise<void> {
+  if (!dbPromise) return;
+  try {
+    const db = await dbPromise;
+    await db.close();
+  } catch {
+    // Best-effort: even if close fails, drop the handle so we reopen fresh.
+  }
+  dbPromise = null;
 }
 
 // ---- Projects ---------------------------------------------------------------
@@ -1435,4 +1489,87 @@ export async function autoAdvanceProcessingRuns(): Promise<number> {
     );
   }
   return moved;
+}
+
+// ---- Stain requests (viewer -> workstation, via the shared repo inbox) -------
+
+/**
+ * Insert a request ingested from the repo inbox into the permanent record.
+ * Idempotent on `uuid` (the request-file id), so re-draining the same inbox
+ * file — or importing a snapshot that already carries it — is a no-op.
+ * Returns true when a new row was actually inserted.
+ */
+export async function insertStainRequest(input: {
+  uuid: string;
+  sample_code: string;
+  slide_code: string;
+  requested_assay: string;
+  requester_name: string;
+  note: string;
+  created_at: string;
+}): Promise<boolean> {
+  const db = await getDb();
+  const res = await db.execute(
+    `INSERT INTO stain_requests
+       (uuid, sample_code, slide_code, requested_assay, requester_name, note, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'requested', ?)
+     ON CONFLICT(uuid) DO NOTHING`,
+    [
+      input.uuid,
+      input.sample_code.trim(),
+      input.slide_code.trim(),
+      input.requested_assay.trim(),
+      input.requester_name.trim(),
+      input.note.trim(),
+      input.created_at,
+    ],
+  );
+  return (res.rowsAffected ?? 0) > 0;
+}
+
+/**
+ * List stain requests. With no filter, returns the whole inbox (newest first)
+ * for the workstation. Pass `requesterName` to show a viewer only its own
+ * requests, or `status` to filter (e.g. only open ones).
+ */
+export async function listStainRequests(opts?: {
+  status?: StainRequestStatus;
+  requesterName?: string;
+}): Promise<StainRequest[]> {
+  const db = await getDb();
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.status) {
+    clauses.push("status = ?");
+    params.push(opts.status);
+  }
+  if (opts?.requesterName) {
+    clauses.push("requester_name = ? COLLATE NOCASE");
+    params.push(opts.requesterName);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return db.select<StainRequest[]>(
+    `SELECT * FROM stain_requests ${where}
+      ORDER BY CASE status WHEN 'requested' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
+               created_at DESC, id DESC`,
+    params,
+  );
+}
+
+/** Move a request through requested -> acknowledged -> done / rejected. */
+export async function setStainRequestStatus(
+  id: number,
+  status: StainRequestStatus,
+  resolvedBy: string,
+): Promise<void> {
+  const db = await getDb();
+  const resolved = status === "done" || status === "rejected";
+  await db.execute(
+    `UPDATE stain_requests
+        SET status = ?,
+            resolved_by = CASE WHEN ? THEN ? ELSE '' END,
+            resolved_at = CASE WHEN ? THEN ? ELSE NULL END
+      WHERE id = ?`,
+    [status, resolved, resolvedBy.trim(), resolved, nowTimestamp(), id],
+  );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Download, FileSpreadsheet, FileText, LogOut, Palette, Plus, RefreshCw, Redo2, Undo2, Users } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Palette, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { Board } from "./components/Board";
 import { NewProjectDialog } from "./components/NewProjectDialog";
@@ -11,11 +11,16 @@ import { BatchStartDialog } from "./components/BatchStartDialog";
 import { ProcessingBatchDetailsDrawer } from "./components/ProcessingBatchDetailsDrawer";
 import { ExtraSlideDetailsDrawer } from "./components/ExtraSlideDetailsDrawer";
 import { UserManagerDialog } from "./components/UserManagerDialog";
+import { SetupScreen } from "./components/SetupScreen";
+import { RequestStainDialog } from "./components/RequestStainDialog";
+import { RequestsInbox } from "./components/RequestsInbox";
 import { Button } from "./components/ui";
-import { useActiveUser, useExtraSlides, useOpenSamples, useOpenSections, useProcessingBatches, useProjects, useUserMutations, useUsers } from "./hooks/useData";
+import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
 import { useActions } from "./hooks/useActions";
+import { useSync } from "./hooks/useSync";
 import { useUndoStore } from "./lib/undo";
-import { autoAdvanceProcessingRuns } from "./lib/db";
+import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
+import { getSyncConfig, type SyncConfigPublic } from "./lib/syncConfig";
 import { exportSamplesCsv, exportWorkbookXlsx } from "./lib/export";
 
 export default function App() {
@@ -27,10 +32,36 @@ export default function App() {
   const { data: extraSlides = [] } = useExtraSlides();
   const { data: users = [] } = useUsers();
   const { data: activeUser = null } = useActiveUser();
+  const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
   const { moveSamples, moveSection, startProcessingBatch, moveProcessingBatch, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
+
+  // ---- Shared-data sync -----------------------------------------------------
+  const { data: syncConfig } = useQuery({ queryKey: ["sync-config"], queryFn: getSyncConfig });
+  const isViewer = syncConfig?.role === "viewer";
+  const sync = useSync(syncConfig ?? null);
+  const { data: stainRequests = [] } = useStainRequests();
+  const { setStatus: setRequestStatus } = useStainRequestMutations();
+  const openRequestCount = useMemo(
+    () => stainRequests.filter((r) => r.status === "requested").length,
+    [stainRequests],
+  );
+  const myRequests = useMemo(
+    () =>
+      isViewer && syncConfig
+        ? stainRequests.filter(
+            (r) => r.requester_name.toLowerCase() === syncConfig.operator_name.toLowerCase(),
+          )
+        : stainRequests,
+    [isViewer, stainRequests, syncConfig],
+  );
+
+  // Data-layer backstop: block writes on viewer installs.
+  useEffect(() => {
+    if (syncConfig) setViewerReadOnly(syncConfig.role === "viewer");
+  }, [syncConfig]);
 
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
@@ -42,6 +73,9 @@ export default function App() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewSample, setShowNewSample] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [showRequests, setShowRequests] = useState(false);
+  const [showRequestStain, setShowRequestStain] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [pendingBatchSampleIds, setPendingBatchSampleIds] = useState<number[] | null>(null);
   const [theme, setTheme] = useState(
@@ -148,6 +182,18 @@ export default function App() {
         : [],
     [pendingBatchSampleIds, samples],
   );
+  const requestSampleCodes = useMemo(() => {
+    const codes = new Set<string>();
+    for (const sample of samples) codes.add(sample.sample_code);
+    for (const section of sections) if (section.parent_code) codes.add(section.parent_code);
+    return [...codes].sort();
+  }, [samples, sections]);
+  const requestAssayNames = useMemo(() => assayCatalog.map((entry) => entry.name), [assayCatalog]);
+
+  // Surface background sync failures without stealing focus.
+  useEffect(() => {
+    if (sync.error) flash(`Sync error: ${sync.error}`);
+  }, [sync.error]);
 
   const selectSample = (id: number) => {
     setSelectedSectionId(null);
@@ -238,6 +284,23 @@ export default function App() {
     />
   ) : null;
 
+  const applyConfig = (config: SyncConfigPublic) => {
+    qc.setQueryData(["sync-config"], config);
+    setShowSetup(false);
+  };
+
+  // Gate the app on sync configuration: unconfigured installs run onboarding.
+  if (syncConfig === undefined) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-surface text-ink-faint">
+        <Loader2 className="animate-spin" size={20} />
+      </div>
+    );
+  }
+  if (!syncConfig.configured) {
+    return <SetupScreen initial={syncConfig} onConfigured={applyConfig} />;
+  }
+
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
@@ -261,31 +324,60 @@ export default function App() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <label
-              className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${activeUser ? "border-line bg-panel text-ink-soft" : "border-amber-300 bg-amber-50 text-amber-800"}`}
-              title={activeUser ? "Changes are attributed to this user" : "Changes will be recorded as unsigned"}
-            >
-              <Users size={14} />
-              <select
-                aria-label="Signed-in user"
-                value={activeUser?.id ?? ""}
-                onChange={(event) => selectUser.mutate(event.target.value ? Number(event.target.value) : null)}
-                className="max-w-36 bg-transparent text-xs text-inherit outline-none"
-              >
-                <option value="">Not signed in</option>
-                {users.filter((user) => user.is_active).map((user) => (
-                  <option key={user.id} value={user.id}>{user.name}</option>
-                ))}
-              </select>
-            </label>
-            {activeUser && (
-              <Button variant="ghost" className="px-2" title="Sign out" onClick={() => selectUser.mutate(null)}>
-                <LogOut size={15} />
-              </Button>
+            <SyncStatusPill
+              role={syncConfig.role}
+              syncing={sync.syncing}
+              error={sync.error}
+              lastSyncedAt={sync.lastSyncedAt}
+              onSyncNow={() => void sync.syncNow()}
+              onOpenSettings={() => setShowSetup(true)}
+            />
+            {isViewer ? (
+              <>
+                <Button variant="subtle" className="px-2" title="Requests you've submitted" onClick={() => setShowRequests(true)}>
+                  <Inbox size={15} /> My requests
+                </Button>
+                <Button variant="primary" onClick={() => setShowRequestStain(true)}>
+                  <Send size={16} /> Request stain
+                </Button>
+              </>
+            ) : (
+              <>
+                <label
+                  className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${activeUser ? "border-line bg-panel text-ink-soft" : "border-amber-300 bg-amber-50 text-amber-800"}`}
+                  title={activeUser ? "Changes are attributed to this user" : "Changes will be recorded as unsigned"}
+                >
+                  <Users size={14} />
+                  <select
+                    aria-label="Signed-in user"
+                    value={activeUser?.id ?? ""}
+                    onChange={(event) => selectUser.mutate(event.target.value ? Number(event.target.value) : null)}
+                    className="max-w-36 bg-transparent text-xs text-inherit outline-none"
+                  >
+                    <option value="">Not signed in</option>
+                    {users.filter((user) => user.is_active).map((user) => (
+                      <option key={user.id} value={user.id}>{user.name}</option>
+                    ))}
+                  </select>
+                </label>
+                {activeUser && (
+                  <Button variant="ghost" className="px-2" title="Sign out" onClick={() => selectUser.mutate(null)}>
+                    <LogOut size={15} />
+                  </Button>
+                )}
+                <Button variant="subtle" className="px-2" title="Manage lab users" onClick={() => setShowUsers(true)}>
+                  <Users size={15} /> Users
+                </Button>
+                <Button variant="subtle" className="relative px-2" title="Incoming stain requests" onClick={() => setShowRequests(true)}>
+                  <Inbox size={15} /> Requests
+                  {openRequestCount > 0 && (
+                    <span className="ml-1 rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                      {openRequestCount}
+                    </span>
+                  )}
+                </Button>
+              </>
             )}
-            <Button variant="subtle" className="px-2" title="Manage lab users" onClick={() => setShowUsers(true)}>
-              <Users size={15} /> Users
-            </Button>
             <label className="flex items-center gap-1 rounded-lg border border-line bg-panel px-2 py-1 text-xs text-ink-soft">
               <Palette size={14} />
               <select
@@ -321,26 +413,28 @@ export default function App() {
                 <option value="terminal">☾ Retro Terminal</option>
               </select>
             </label>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="subtle"
-                className="px-2"
-                title="Undo (Ctrl+Z)"
-                disabled={undoDepth === 0}
-                onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
-              >
-                <Undo2 size={15} />
-              </Button>
-              <Button
-                variant="subtle"
-                className="px-2"
-                title="Redo (Ctrl+Y)"
-                disabled={redoDepth === 0}
-                onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
-              >
-                <Redo2 size={15} />
-              </Button>
-            </div>
+            {!isViewer && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="subtle"
+                  className="px-2"
+                  title="Undo (Ctrl+Z)"
+                  disabled={undoDepth === 0}
+                  onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
+                >
+                  <Undo2 size={15} />
+                </Button>
+                <Button
+                  variant="subtle"
+                  className="px-2"
+                  title="Redo (Ctrl+Y)"
+                  disabled={redoDepth === 0}
+                  onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
+                >
+                  <Redo2 size={15} />
+                </Button>
+              </div>
+            )}
 
             <div className="relative" ref={exportRef}>
               <Button variant="subtle" onClick={() => setShowExportMenu((v) => !v)}>
@@ -364,13 +458,15 @@ export default function App() {
               )}
             </div>
 
-            <Button
-              variant="primary"
-              disabled={!selectedProject}
-              onClick={() => setShowNewSample(true)}
-            >
-              <Plus size={16} /> New Sample
-            </Button>
+            {!isViewer && (
+              <Button
+                variant="primary"
+                disabled={!selectedProject}
+                onClick={() => setShowNewSample(true)}
+              >
+                <Plus size={16} /> New Sample
+              </Button>
+            )}
             <Button
               variant="subtle"
               className="px-2"
@@ -422,6 +518,7 @@ export default function App() {
               onToggleSamplePriority={(sampleId) => {
                 void togglePriority(sampleId).catch((error) => flash(String(error)));
               }}
+              readOnly={isViewer}
             />
           </div>
           {activeDrawer && (
@@ -457,6 +554,89 @@ export default function App() {
           onClose={() => setPendingBatchSampleIds(null)}
         />
       )}
+      {showRequests && (
+        <RequestsInbox
+          title={isViewer ? "My requests" : "Stain requests"}
+          requests={isViewer ? myRequests : stainRequests}
+          onSetStatus={
+            isViewer
+              ? undefined
+              : (id, status) =>
+                  setRequestStatus.mutate({
+                    id,
+                    status,
+                    resolvedBy: syncConfig.operator_name,
+                  })
+          }
+          onClose={() => setShowRequests(false)}
+        />
+      )}
+      {showRequestStain && (
+        <RequestStainDialog
+          operatorName={syncConfig.operator_name}
+          sampleCodes={requestSampleCodes}
+          assayNames={requestAssayNames}
+          onSubmitted={(message) => flash(message)}
+          onClose={() => setShowRequestStain(false)}
+        />
+      )}
+      {showSetup && (
+        <SetupScreen
+          initial={syncConfig}
+          onConfigured={applyConfig}
+          onCancel={() => setShowSetup(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Compact sync indicator + manual "Sync now" + settings entry.
+function SyncStatusPill({
+  role,
+  syncing,
+  error,
+  lastSyncedAt,
+  onSyncNow,
+  onOpenSettings,
+}: {
+  role: string;
+  syncing: boolean;
+  error: string | null;
+  lastSyncedAt: Date | null;
+  onSyncNow: () => void;
+  onOpenSettings: () => void;
+}) {
+  const label = syncing
+    ? "Syncing…"
+    : error
+      ? "Sync error"
+      : lastSyncedAt
+        ? `Synced ${lastSyncedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : "Not synced yet";
+  const tone = error
+    ? "border-red-300 bg-red-50 text-red-700"
+    : "border-line bg-panel text-ink-soft";
+  return (
+    <div className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${tone}`}>
+      <span className="font-medium capitalize">{role}</span>
+      <span className="text-ink-faint">·</span>
+      <span title={error ?? undefined}>{label}</span>
+      <button
+        onClick={onSyncNow}
+        disabled={syncing}
+        title="Sync now"
+        className="ml-0.5 rounded p-0.5 text-ink-faint hover:bg-black/5 hover:text-ink disabled:opacity-50"
+      >
+        {syncing ? <Loader2 size={13} className="animate-spin" /> : error ? <CloudOff size={13} /> : <RefreshCcwDot size={13} />}
+      </button>
+      <button
+        onClick={onOpenSettings}
+        title="Sync settings"
+        className="rounded p-0.5 text-ink-faint hover:bg-black/5 hover:text-ink"
+      >
+        <Settings size={13} />
+      </button>
     </div>
   );
 }

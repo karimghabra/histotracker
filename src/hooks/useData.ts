@@ -14,15 +14,17 @@ import {
   assignExtraSlideToAssay,
   listAssayCatalog,
   listProjects,
+  listStainRequests,
   listUsers,
   getActiveUser,
   setActiveUser,
+  setStainRequestStatus,
   setUserActive,
   setProjectActive,
   updateSampleDetails,
   updateSampleStage,
 } from "../lib/db";
-import type { NewSampleInput } from "../lib/types";
+import type { NewSampleInput, StainRequestStatus } from "../lib/types";
 
 const KEYS = {
   projects: ["projects"] as const,
@@ -109,6 +111,23 @@ export function useOpenSections() {
     queryKey: KEYS.openSections,
     queryFn: listOpenSectionRequests,
   });
+}
+
+export function useStainRequests(opts?: { status?: StainRequestStatus; requesterName?: string }) {
+  return useQuery({
+    queryKey: ["stain-requests", opts?.status ?? null, opts?.requesterName ?? null],
+    queryFn: () => listStainRequests(opts),
+  });
+}
+
+export function useStainRequestMutations() {
+  const qc = useQueryClient();
+  const setStatus = useMutation({
+    mutationFn: ({ id, status, resolvedBy }: { id: number; status: StainRequestStatus; resolvedBy: string }) =>
+      setStainRequestStatus(id, status, resolvedBy),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["stain-requests"] }),
+  });
+  return { setStatus };
 }
 
 export function useProjects(activeOnly = false) {

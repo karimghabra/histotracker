@@ -199,6 +199,23 @@ export interface AssayCatalogEntry {
   created_at: string;
 }
 
+export type StainRequestStatus = "requested" | "acknowledged" | "done" | "rejected";
+
+export interface StainRequest {
+  id: number;
+  uuid: string;
+  sample_code: string;
+  slide_code: string;
+  requested_assay: string;
+  requester_name: string;
+  note: string;
+  status: StainRequestStatus;
+  created_at: string;
+  ingested_at: string;
+  resolved_by: string;
+  resolved_at: string | null;
+}
+
 export interface NewSampleInput {
   project_id: number;
   sample_description: string;
