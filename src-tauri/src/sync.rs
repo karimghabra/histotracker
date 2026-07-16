@@ -40,6 +40,11 @@ struct SyncConfig {
     operator_initials: String,
     #[serde(default)]
     last_synced_version: String,
+    /// Stable random identifier for THIS install, generated once. Used to claim
+    /// the single authoritative "workstation" slot in the shared repo so a
+    /// second install cannot accidentally publish over the first.
+    #[serde(default)]
+    install_id: String,
 }
 
 /// Redacted view returned to the frontend — never carries the token.
@@ -51,6 +56,7 @@ pub struct SyncConfigPublic {
     operator_name: String,
     operator_initials: String,
     last_synced_version: String,
+    install_id: String,
     configured: bool,
     has_token: bool,
 }
@@ -87,9 +93,33 @@ fn write_config(app: &tauri::AppHandle, cfg: &SyncConfig) -> Result<(), String> 
     std::fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
+/// A stable-enough unique id for this install, derived from the first-run
+/// timestamp mixed with the process id. Persisted immediately, so it never
+/// regenerates; it only needs to differ between installs, not be a real UUID.
+fn generate_install_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let mix = nanos ^ (pid << 80) ^ pid.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    format!("ws-{mix:032x}")
+}
+
+/// Read the config, generating + persisting the install id on first access.
+fn read_config_with_id(app: &tauri::AppHandle) -> SyncConfig {
+    let mut c = read_config(app);
+    if c.install_id.is_empty() {
+        c.install_id = generate_install_id();
+        let _ = write_config(app, &c); // best-effort; retried on next read
+    }
+    c
+}
+
 #[tauri::command]
 pub fn sync_config_get(app: tauri::AppHandle) -> SyncConfigPublic {
-    let c = read_config(&app);
+    let c = read_config_with_id(&app);
     SyncConfigPublic {
         configured: !c.role.is_empty() && !c.repo_owner.is_empty() && !c.repo_name.is_empty(),
         has_token: !c.token.is_empty(),
@@ -99,12 +129,13 @@ pub fn sync_config_get(app: tauri::AppHandle) -> SyncConfigPublic {
         operator_name: c.operator_name,
         operator_initials: c.operator_initials,
         last_synced_version: c.last_synced_version,
+        install_id: c.install_id,
     }
 }
 
 #[tauri::command]
 pub fn sync_config_set(app: tauri::AppHandle, input: SyncConfigInput) -> Result<(), String> {
-    let mut cfg = read_config(&app);
+    let mut cfg = read_config_with_id(&app);
     cfg.role = input.role;
     cfg.repo_owner = input.repo_owner.trim().to_string();
     cfg.repo_name = input.repo_name.trim().to_string();

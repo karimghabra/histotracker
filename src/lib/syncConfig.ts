@@ -10,6 +10,8 @@ export interface SyncConfigPublic {
   operator_name: string;
   operator_initials: string;
   last_synced_version: string;
+  /** Stable per-install id used to claim the single workstation slot. */
+  install_id: string;
   configured: boolean;
   has_token: boolean;
 }

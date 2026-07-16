@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { CheckCircle2, Loader2, Monitor, ShieldCheck, Eye } from "lucide-react";
 import { Button, Field, Select, TextInput } from "./ui";
-import { githubValidate } from "../lib/githubSync";
+import { ensureWorkstationClaim, githubValidate, WorkstationTakenError } from "../lib/githubSync";
 import { getSyncConfig, setSyncConfig, type SyncConfigPublic, type SyncRole } from "../lib/syncConfig";
 
 // Sensible defaults for this lab's private data repo.
@@ -17,12 +17,15 @@ export function SetupScreen({
   onConfigured: (config: SyncConfigPublic) => void;
   onCancel?: () => void;
 }) {
-  const [role, setRole] = useState<SyncRole>((initial?.role as SyncRole) || "workstation");
+  // Default to the safe, common role so a lab user can't drift into being an
+  // authoritative workstation without deliberately choosing it.
+  const [role, setRole] = useState<SyncRole>((initial?.role as SyncRole) || "viewer");
   const [repoOwner, setRepoOwner] = useState(initial?.repo_owner || DEFAULT_OWNER);
   const [repoName, setRepoName] = useState(initial?.repo_name || DEFAULT_REPO);
   const [token, setToken] = useState("");
   const [operatorName, setOperatorName] = useState(initial?.operator_name || "");
   const [operatorInitials, setOperatorInitials] = useState(initial?.operator_initials || "");
+  const [forceTakeover, setForceTakeover] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,7 +65,25 @@ export function SetupScreen({
       });
       // Confirm the repo + token actually reach a real repository.
       await githubValidate();
-      onConfigured(await getSyncConfig());
+      const saved = await getSyncConfig();
+
+      // A workstation must claim the single authoritative slot; another install
+      // already holding it blocks this one unless the user is deliberately
+      // replacing the bench machine.
+      if (role === "workstation") {
+        try {
+          await ensureWorkstationClaim(saved.install_id, operator, forceTakeover);
+        } catch (claimError) {
+          if (claimError instanceof WorkstationTakenError) {
+            setError(
+              `${claimError.message} Set this app up as a Viewer, or tick “Replace the current workstation” below only if you are intentionally moving the bench machine.`,
+            );
+            return;
+          }
+          throw claimError;
+        }
+      }
+      onConfigured(saved);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -97,7 +118,8 @@ export function SetupScreen({
                   <Monitor size={15} /> Workstation
                 </span>
                 <span className="text-[11px] text-ink-faint">
-                  The authoritative bench app. Publishes snapshots and resolves requests.
+                  The authoritative bench app. Only one machine in the lab should be the
+                  workstation — it publishes snapshots and resolves requests.
                 </span>
               </button>
               <button
@@ -118,6 +140,22 @@ export function SetupScreen({
               </button>
             </div>
           </Field>
+
+          {role === "workstation" && (
+            <label className="mb-3.5 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <input
+                type="checkbox"
+                checked={forceTakeover}
+                onChange={(e) => setForceTakeover(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">Replace the current workstation.</span> Only tick this
+                if you are intentionally moving the authoritative bench machine to this computer. The
+                previous workstation will stop publishing.
+              </span>
+            </label>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Data repo owner">

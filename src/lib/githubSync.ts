@@ -14,6 +14,7 @@ export const DB_ASSET = "histometer.db";
 export const WORKBOOK_ASSET = "histometer-status.xlsx";
 export const MANIFEST_PATH = "manifest.json";
 export const REQUESTS_DIR = "requests";
+export const WORKSTATION_CLAIM_PATH = "workstation.json";
 
 const DB_CONTENT_TYPE = "application/octet-stream";
 const XLSX_CONTENT_TYPE =
@@ -124,13 +125,93 @@ export function isNewer(remote: string, local: string): boolean {
   return remote > local;
 }
 
+// ---- Single-writer claim ----------------------------------------------------
+
+/**
+ * The one authoritative workstation for a lab records its identity here so a
+ * second install can't accidentally publish over it. `install_id` is the stable
+ * per-install id from the local config.
+ */
+export interface WorkstationClaim {
+  install_id: string;
+  operator_name: string;
+  claimed_at: string;
+}
+
+export async function readWorkstationClaim(): Promise<WorkstationClaim | null> {
+  const file = await githubGetFile(WORKSTATION_CLAIM_PATH);
+  if (!file) return null;
+  try {
+    return JSON.parse(file.content) as WorkstationClaim;
+  } catch {
+    return null;
+  }
+}
+
+async function writeWorkstationClaim(installId: string, operatorName: string): Promise<void> {
+  const existing = await githubGetFile(WORKSTATION_CLAIM_PATH);
+  const payload: WorkstationClaim = {
+    install_id: installId,
+    operator_name: operatorName,
+    claimed_at: nowTimestamp(),
+  };
+  await githubPutFile(
+    WORKSTATION_CLAIM_PATH,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    existing?.sha,
+    `Workstation claimed by ${operatorName || "workstation"}`,
+  );
+}
+
+export class WorkstationTakenError extends Error {
+  constructor(public claim: WorkstationClaim) {
+    super(
+      `A workstation is already set up for this lab — claimed by ${
+        claim.operator_name || "another machine"
+      }${claim.claimed_at ? ` on ${claim.claimed_at}` : ""}.`,
+    );
+    this.name = "WorkstationTakenError";
+  }
+}
+
+/**
+ * Claim (or re-assert) the authoritative workstation slot for `installId`.
+ * Throws WorkstationTakenError when another install already holds it, unless
+ * `force` is set (a deliberate "replace the current workstation" action).
+ */
+export async function ensureWorkstationClaim(
+  installId: string,
+  operatorName: string,
+  force = false,
+): Promise<void> {
+  const claim = await readWorkstationClaim();
+  if (claim && claim.install_id !== installId && !force) {
+    throw new WorkstationTakenError(claim);
+  }
+  await writeWorkstationClaim(installId, operatorName);
+}
+
 // ---- Workstation: publish ---------------------------------------------------
 
 /**
  * Publish the live DB + status workbook as overwriting release assets and bump
  * the committed manifest. Returns the new version string.
+ *
+ * Refuses to publish if another install has taken over the workstation slot, so
+ * a demoted machine can never clobber the authoritative snapshot.
  */
 export async function publishSnapshot(): Promise<string> {
+  const config = await getSyncConfig();
+  const claim = await readWorkstationClaim();
+  if (claim && config.install_id && claim.install_id !== config.install_id) {
+    throw new WorkstationTakenError(claim);
+  }
+  if (!claim && config.install_id) {
+    // We hold the role but the claim file is absent (first publish or it was
+    // removed) — assert ownership before writing anything.
+    await writeWorkstationClaim(config.install_id, config.operator_name);
+  }
+
   const dbPath = await getDbFilePath();
   const dbBytes = Uint8Array.from(await invoke<number[]>("read_file", { path: dbPath }));
   const workbookBytes = await buildStatusWorkbookBytes();
