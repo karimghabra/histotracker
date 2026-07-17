@@ -181,6 +181,39 @@ async function cmdRequest(sample, assay, note = "") {
   console.log("submitted request", uuid);
 }
 
+async function cmdWipe(confirmed) {
+  if (!confirmed) console.log("DRY RUN — pass --yes to actually delete. Would remove:");
+  // 1) snapshot release + its assets (histometer.db, histometer-status.xlsx, etc.)
+  const rel = await req("GET", `${API}/repos/${OWNER}/${REPO}/releases/tags/${TAG}`);
+  if (rel.ok) {
+    const j = JSON.parse(rel.text);
+    for (const a of j.assets || []) {
+      console.log(`  release asset: ${a.name} (${a.size}B)`);
+      if (confirmed) await req("DELETE", `${API}/repos/${OWNER}/${REPO}/releases/assets/${a.id}`);
+    }
+    console.log(`  release: ${TAG} (id ${j.id})`);
+    if (confirmed) {
+      await req("DELETE", `${API}/repos/${OWNER}/${REPO}/releases/${j.id}`);
+      await req("DELETE", `${API}/repos/${OWNER}/${REPO}/git/refs/tags/${TAG}`);
+    }
+  } else {
+    console.log(`  release ${TAG}: (absent)`);
+  }
+  // 2) manifest.json, 3) workstation.json, 4) every requests/* file
+  for (const path of ["manifest.json", "workstation.json"]) {
+    const f = await ghGetFile(path);
+    if (f) { console.log(`  ${path}`); if (confirmed) await ghDeleteFile(path, f.sha, `wipe ${path}`); }
+  }
+  for (const e of await ghListDir("requests")) {
+    const f = await ghGetFile(e.path);
+    console.log(`  ${e.path}`);
+    if (confirmed && f) await ghDeleteFile(e.path, f.sha, `wipe ${e.name}`);
+  }
+  console.log(confirmed
+    ? "\nWIPED remote snapshot state. NOTE: request files that were committed then deleted still live in git history — delete the repo to purge history."
+    : "\n(dry run — nothing deleted)");
+}
+
 async function cmdDrain(apply) {
   const entries = await ghListDir("requests");
   console.log(`inbox: ${entries.length} file(s)`);
@@ -200,10 +233,11 @@ const run = {
   selftest: () => cmdSelftest(),
   request: () => cmdRequest(args[0], args[1], args.slice(2).join(" ")),
   drain: () => cmdDrain(args.includes("--apply")),
+  wipe: () => cmdWipe(args.includes("--yes")),
 }[cmd];
 
 if (!run) {
-  console.error("commands: validate | status | selftest | request <sample> <assay> [note] | drain [--apply]");
+  console.error("commands: validate | status | selftest | request <sample> <assay> [note] | drain [--apply] | wipe [--yes]");
   process.exit(2);
 }
 run().catch((e) => { console.error("FAILED:", e.message); process.exit(1); });
