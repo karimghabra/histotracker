@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-07-17
 
 - Default the New Sample fixative to Z-Fix, the most frequently used agent (#2).
 - Removed the mandatory processor-load checklist from the batch-start dialog,
