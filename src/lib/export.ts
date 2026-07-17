@@ -176,17 +176,18 @@ export async function exportWorkbookXlsx(): Promise<string | null> {
     value: (row: ProcessingBatch) => fn(row),
   }));
 
-  // write-excel-file's multi-sheet browser overload returns a Blob; its types
-  // don't model that overload cleanly, so we call through a narrow signature.
+  // write-excel-file's multi-sheet browser overload returns a { toBlob, toFile }
+  // handle (NOT a Blob directly); its types don't model that overload cleanly,
+  // so we call through a narrow signature and take the blob via toBlob().
   const write = writeXlsxFile as unknown as (
     data: unknown[],
     opts: { schema: unknown[]; sheets: string[] },
-  ) => Promise<Blob>;
+  ) => { toBlob: () => Promise<Blob> };
 
   const blob = await write([projects, samples, sections, slides, batches], {
     schema: [projectSchema, sampleSchema, sectionSchema, slideSchema, batchSchema],
     sheets: ["Projects", "Samples", "Cut Orders", "Slides", "Processing Batches"],
-  });
+  }).toBlob();
   const bytes = new Uint8Array(await blob.arrayBuffer());
   await writeBytes(path, bytes);
   return path;
@@ -222,9 +223,12 @@ export async function buildStatusWorkbookBytes(): Promise<Uint8Array> {
   ];
 
   // The multi-sheet browser overload takes an array of { data, sheet, ... } and
-  // returns a Blob; its types don't model this overload cleanly, so we call
-  // through a narrow signature (same approach as exportWorkbookXlsx above).
-  const write = writeXlsxFile as unknown as (sheets: unknown[]) => Promise<Blob>;
-  const blob = await write(sheets);
+  // returns a { toBlob, toFile } handle (NOT a Blob directly); its types don't
+  // model this overload cleanly, so we call through a narrow signature and take
+  // the blob via toBlob() (same approach as exportWorkbookXlsx above).
+  const write = writeXlsxFile as unknown as (
+    sheets: unknown[],
+  ) => { toBlob: () => Promise<Blob> };
+  const blob = await write(sheets).toBlob();
   return new Uint8Array(await blob.arrayBuffer());
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-07-17
+
+- Fixed a sync failure on the workstation ("TypeError: c.arrayBuffer is not a function") caused by calling the wrong write-excel-file API when building the status workbook. The same fix corrects the manual Excel workbook export.
+
 ## 0.2.0 - 2026-07-17
 
 - Added shared data sync: a workstation publishes a database snapshot + status workbook to a private GitHub repo, and viewer installs pull it read-only.
