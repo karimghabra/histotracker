@@ -3,12 +3,6 @@ import type { ProcessingType, Sample } from "../lib/types";
 import { nowTimestamp } from "../lib/utils";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 
-const START_CHECKLIST = [
-  "Sample labels and cassette identities verified",
-  "Processor program verified",
-  "Processor load confirmed",
-] as const;
-
 export function BatchStartDialog({
   samples,
   activeOperator,
@@ -31,19 +25,13 @@ export function BatchStartDialog({
   const incompatible = samples.some((sample) => sample.processing_type !== processingType);
   const [startedAt, setStartedAt] = useState(nowTimestamp().replace(" ", "T"));
   const [notes, setNotes] = useState("");
-  const [checked, setChecked] = useState<boolean[]>(START_CHECKLIST.map(() => false));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const allChecked = checked.every(Boolean);
   const memberSummary = useMemo(() => samples.map((sample) => sample.sample_code).join(", "), [samples]);
 
   async function start() {
     if (!activeOperator) {
       setError("Sign in before starting a processing batch.");
-      return;
-    }
-    if (!allChecked) {
-      setError("Complete the batch-start checklist.");
       return;
     }
     setBusy(true);
@@ -54,7 +42,9 @@ export function BatchStartDialog({
         processingType,
         operatorName: activeOperator,
         startedAt: startedAt.replace("T", " ").slice(0, 16),
-        checklistLabels: [...START_CHECKLIST],
+        // The technician loads the processor away from the app, so no
+        // load-time checklist is recorded here (see issue #3).
+        checklistLabels: [],
         notes: notes.trim(),
       });
       onClose();
@@ -95,44 +85,16 @@ export function BatchStartDialog({
         </Field>
       </div>
 
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-faint">
-        Batch-start checklist
-      </h3>
-      <div className="mb-3 space-y-1.5">
-        {START_CHECKLIST.map((label, index) => (
-          <label
-            key={label}
-            className="flex items-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink"
-          >
-            <input
-              type="checkbox"
-              checked={checked[index]}
-              onChange={(event) =>
-                setChecked((items) =>
-                  items.map((item, itemIndex) =>
-                    itemIndex === index ? event.target.checked : item,
-                  ),
-                )
-              }
-              className="accent-[var(--color-brand)]"
-            />
-            {label}
-          </label>
-        ))}
-      </div>
-
       <Field label="Batch Notes (optional)">
         <TextArea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} />
       </Field>
 
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-      {(!allChecked || !activeOperator || incompatible) && (
+      {(!activeOperator || incompatible) && (
         <p className="mb-2 text-right text-xs text-amber-700">
           {incompatible
             ? "Separate Short and Long samples into different batches."
-            : !activeOperator
-              ? "Sign in from the header before starting the batch."
-              : "Check every batch-start item before starting processing."}
+            : "Sign in from the header before starting the batch."}
         </p>
       )}
       <div className="flex justify-end gap-2">
@@ -140,8 +102,7 @@ export function BatchStartDialog({
         <Button
           variant="primary"
           onClick={start}
-          disabled={busy || incompatible || !allChecked || !activeOperator}
-          title={!allChecked ? "Complete every batch-start checklist item first." : undefined}
+          disabled={busy || incompatible || !activeOperator}
         >
           Start Batch
         </Button>

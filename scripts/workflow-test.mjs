@@ -216,6 +216,14 @@ function makeApi(db) {
   // Port of createSectionRequests() — src/lib/db.ts (slide codes + depth indexing).
   function createSectionRequests(sampleId, groups) {
     if (!groups.length) return [];
+    // A block can only be cut once embedded (issue #7). Mirrors db.ts.
+    const STAGE_ORDER = { received: 0, in_fixative: 1, fixative_removed: 2, decalcified: 3,
+      in_ethanol: 4, processing_started: 5, processed: 6, picked_up: 7, needs_embedding: 8,
+      embedded: 9, needs_sectioning: 10 };
+    const stage = get(`SELECT current_stage FROM samples WHERE id = ?`, [sampleId]).current_stage;
+    if ((STAGE_ORDER[stage] ?? -1) < STAGE_ORDER.embedded) {
+      throw new Error("This block must be embedded before it can be sent to sectioning.");
+    }
     const ts = now();
     const ids = [];
     const existingDepths = all(
@@ -442,17 +450,15 @@ issue(1, "identical descriptions get distinct codes and all persist", () => {
   eq(api.get(`SELECT COUNT(*) AS c FROM samples WHERE sample_description = '3 week Stretch PLA'`).c, 5, "all five stored");
 });
 
-// #2 — Z-Fix should be the default fixative. Data default is still 'PFA'; the
-// fix is UI (dialog default) — but we assert the intended default here so the
-// change is captured. knownOpen until the default flips.
-issue(2, "new samples default to the Z-Fix fixative", () => {
-  const api = makeApi(freshDb());
-  const p = api.seedProject();
-  // Simulates the dialog's default selection feeding addSample().
-  const DEFAULT_FIXATIVE = "PFA"; // TODO(fix #2): change dialog default to "Z-Fix"
-  const { id } = api.addSample(p, "EE", "fixative", { fixative: DEFAULT_FIXATIVE });
-  eq(api.get(`SELECT fixative_agent FROM samples WHERE id = ?`, [id]).fixative_agent, "Z-Fix", "default fixative");
-}, { knownOpen: true });
+// #2 — Z-Fix should be the default fixative. The dialog defaults to
+// FIXATIVE_OPTIONS[0], so we gate on the real source order in stages.ts.
+issue(2, "Z-Fix leads FIXATIVE_OPTIONS (the New Sample dialog default)", () => {
+  const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
+  const match = src.match(/FIXATIVE_OPTIONS\s*=\s*\[([^\]]*)\]/);
+  assert(match, "could not find FIXATIVE_OPTIONS in stages.ts");
+  const first = match[1].split(",")[0].trim().replace(/^["']|["']$/g, "");
+  eq(first, "Z-Fix", "first fixative option / dialog default");
+});
 
 // #5 — Short and Long runs cannot coincide. A second batch must be refused
 // while one is already processing. The current startProcessingBatch has no such
@@ -485,7 +491,7 @@ issue(7, "sending to sectioning is refused until the block is embedded", () => {
   } catch { /* desired: the fixed code path throws here */ }
   eq(api.get(`SELECT COUNT(*) AS c FROM section_requests WHERE sample_id = ?`, [id]).c, 0,
      "no section should be created for a non-embedded block");
-}, { knownOpen: true });
+});
 
 // #9 — Extra slides getting stained do not merge cleanly. Assigning an extra
 // slide to an assay for a sample that ALREADY has an open assay section should

@@ -317,6 +317,41 @@ export function useActions() {
     [invalidate, record],
   );
 
+  // Create N samples that share the same details (issue #1). Codes are issued
+  // sequentially so each gets its own project number; the whole batch is a
+  // single undo entry.
+  const createSamples = useCallback(
+    async (input: NewSampleInput, projectCode: string, quantity: number) => {
+      const count = Math.max(1, Math.floor(quantity));
+      const ids: number[] = [];
+      for (let i = 0; i < count; i += 1) {
+        ids.push(await addSample(input, projectCode));
+      }
+      invalidate();
+      const created = (await Promise.all(ids.map(getSample))).filter(
+        (s): s is Sample => s !== null,
+      );
+      record({
+        label:
+          created.length === 1
+            ? created[0]
+              ? `Create ${created[0].sample_code}`
+              : "Create sample"
+            : `Create ${created.length} samples`,
+        undo: async () => {
+          for (const id of ids) await deleteSample(id);
+          invalidate();
+        },
+        redo: async () => {
+          for (const snapshot of created) await reinsertSample(snapshot);
+          invalidate();
+        },
+      });
+      return ids;
+    },
+    [invalidate, record],
+  );
+
   const removeSamples = useCallback(
     async (sampleIds: number[]) => {
       for (const sampleId of sampleIds) await removeSample(sampleId);
@@ -577,6 +612,7 @@ export function useActions() {
     removeSample,
     removeSamples,
     createSample,
+    createSamples,
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
     sendSectionsToCutting,
     moveSection,

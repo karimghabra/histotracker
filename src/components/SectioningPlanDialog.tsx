@@ -45,6 +45,9 @@ export function SectioningPlanDialog({
 
   const selected = rows.filter((r) => r.cut);
   const totalSlides = rows.reduce((sum, r) => sum + Math.max(1, r.duplicates), 0);
+  // Cutting is only allowed once the block is embedded (issue #7). Planning
+  // ahead (Save Plan) stays available at any stage.
+  const canSend = sample.current_stage === "embedded";
 
   function update(index: number, patch: Partial<Row>) {
     setRows((rs) => rs.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -154,6 +157,12 @@ export function SectioningPlanDialog({
         )}
       </p>
 
+      {!canSend && (
+        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+          Cutting unlocks once this block reaches Embedded Inventory. You can still save the plan now.
+        </p>
+      )}
+
       <div className="mt-4 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -161,7 +170,12 @@ export function SectioningPlanDialog({
         <Button variant="subtle" onClick={savePlan} disabled={busy}>
           Save Plan
         </Button>
-        <Button variant="primary" onClick={sendSelected} disabled={busy || selected.length === 0}>
+        <Button
+          variant="primary"
+          onClick={sendSelected}
+          disabled={busy || selected.length === 0 || !canSend}
+          title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
+        >
           <Scissors size={14} /> Send {selected.length || ""} to Sectioning
         </Button>
       </div>

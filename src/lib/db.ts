@@ -906,6 +906,15 @@ export async function createSectionRequests(
 ): Promise<number[]> {
   if (groups.length === 0) return [];
   const db = await getDb();
+  // A block can only be cut once it has reached Embedded Inventory (issue #7).
+  const sampleRows = await db.select<Array<{ current_stage: string }>>(
+    `SELECT current_stage FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const stage = sampleRows[0]?.current_stage;
+  if (!stage || (STAGE_ORDER[stage] ?? -1) < STAGE_ORDER.embedded) {
+    throw new Error("This block must be embedded before it can be sent to sectioning.");
+  }
   const timestamp = nowTimestamp();
   const ids: number[] = [];
   const existingDepths = await db.select<Array<{ depth_um: number; depth_index: number }>>(

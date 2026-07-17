@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Default the New Sample fixative to Z-Fix, the most frequently used agent (#2).
+- Removed the mandatory processor-load checklist from the batch-start dialog,
+  which the technician can't act on while at the processor (#3).
+- Added a Quantity field to New Sample so multiple samples with identical
+  details can be created at once, each with its own ID, as a single undo (#1).
+- Blocked sending a block to sectioning until it reaches Embedded Inventory,
+  both in the sectioning dialog and at the data layer (#7).
+
 ## 0.2.1 - 2026-07-17
 
 - Fixed a sync failure on the workstation ("TypeError: c.arrayBuffer is not a function") caused by calling the wrong write-excel-file API when building the status workbook. The same fix corrects the manual Excel workbook export.

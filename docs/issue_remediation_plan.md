@@ -28,7 +28,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 
 ## Phase 1 — Quick wins
 
-### #2 — Default fixative should be Z-Fix · **S**
+### #2 — Default fixative should be Z-Fix · **S** · ✅ fixed (pending QA)
 - **Root cause:** `NewSampleDialog.tsx:19` initialises `fixative` to
   `FIXATIVE_OPTIONS[0]`, and `stages.ts:57` orders that list `["PFA", "Z-Fix",
   "Other"]`, so PFA is the default. Schema default is also `'PFA'`
@@ -41,7 +41,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Risk:** None. **Test:** harness `issue #2` (flip `DEFAULT_FIXATIVE` →
   `"Z-Fix"` there once the dialog default changes, then clear `knownOpen`).
 
-### #3 — "Move to Processor" checklist is unnecessary · **S**
+### #3 — "Move to Processor" checklist is unnecessary · **S** · ✅ fixed (pending QA)
 - **Root cause:** `BatchStartDialog.tsx:6-10` defines a 3-item required
   `START_CHECKLIST` ("…labels verified", "Processor program verified",
   "Processor load confirmed") and gates **Start Batch** on all being ticked
@@ -56,7 +56,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Risk:** Low; `checklist_runs`/`checklist_items` rows for the batch just
   become empty. **Test:** manual + existing pipeline invariant still passes.
 
-### #1 — Add multiple samples with the same description · **M**
+### #1 — Add multiple samples with the same description · **M** · ✅ fixed (pending QA)
 - **Root cause:** Not a DB constraint — `idx_samples_project_code` is unique on
   `(project_id, sample_code)`, and codes are auto-issued
   (`db.ts:186-199`), so identical *descriptions* are already allowed. The
@@ -93,7 +93,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 
 ## Phase 2 — Sectioning & processing integrity
 
-### #7 — Sections cuttable before embedding · **S–M**
+### #7 — Sections cuttable before embedding · **S–M** · ✅ fixed (pending QA)
 - **Root cause:** `createSectionRequests` (`db.ts:903`) never checks the block's
   stage, and `SampleDetailsDrawer` exposes the sectioning dialog for any sample
   (`:137`). `SectioningPlanDialog`'s **Send to Sectioning**
