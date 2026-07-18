@@ -61,7 +61,9 @@ export function ProtocolChecklist({
     await qc.invalidateQueries({ queryKey });
     await Promise.all(scopeIds.map((id) => qc.invalidateQueries({ queryKey: ["protocol-checklist", scopeType, id, stageKey] })));
     await qc.invalidateQueries({ queryKey: ["open-sections"] });
+    await qc.invalidateQueries({ queryKey: ["open-slide-stacks"] });
     await qc.invalidateQueries({ queryKey: ["section-slides"] });
+    await qc.invalidateQueries({ queryKey: ["stack-slides"] });
   }
 
   return (

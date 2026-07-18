@@ -7,6 +7,7 @@ import { NewProjectDialog } from "./components/NewProjectDialog";
 import { NewSampleDialog } from "./components/NewSampleDialog";
 import { SampleDetailsDrawer } from "./components/SampleDetailsDrawer";
 import { SectionDetailsDrawer } from "./components/SectionDetailsDrawer";
+import { StackDetailsDrawer } from "./components/StackDetailsDrawer";
 import { BatchStartDialog } from "./components/BatchStartDialog";
 import { ProcessingBatchDetailsDrawer } from "./components/ProcessingBatchDetailsDrawer";
 import { ExtraSlideDetailsDrawer } from "./components/ExtraSlideDetailsDrawer";
@@ -15,7 +16,7 @@ import { SetupScreen } from "./components/SetupScreen";
 import { RequestStainDialog } from "./components/RequestStainDialog";
 import { RequestsInbox } from "./components/RequestsInbox";
 import { Button } from "./components/ui";
-import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
+import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
 import { useActions } from "./hooks/useActions";
 import { useSync } from "./hooks/useSync";
 import { useUndoStore } from "./lib/undo";
@@ -28,13 +29,14 @@ export default function App() {
   const { data: projects = [] } = useProjects(true);
   const { data: samples = [] } = useOpenSamples();
   const { data: sections = [] } = useOpenSections();
+  const { data: stacks = [] } = useOpenSlideStacks();
   const { data: batches = [] } = useProcessingBatches();
   const { data: extraSlides = [] } = useExtraSlides();
   const { data: users = [] } = useUsers();
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSections, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -59,6 +61,8 @@ export default function App() {
   const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [selectedSectionIds, setSelectedSectionIds] = useState<number[]>([]);
+  const [selectedStackId, setSelectedStackId] = useState<number | null>(null);
+  const [selectedStackIds, setSelectedStackIds] = useState<number[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [selectedExtraSampleId, setSelectedExtraSampleId] = useState<number | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -158,6 +162,14 @@ export default function App() {
     () => sections.find((s) => s.id === selectedSectionId) ?? null,
     [sections, selectedSectionId],
   );
+  const selectedStack = useMemo(
+    () => stacks.find((stack) => stack.id === selectedStackId) ?? null,
+    [selectedStackId, stacks],
+  );
+  const selectedStacks = useMemo(
+    () => stacks.filter((stack) => selectedStackIds.includes(stack.id) || stack.id === selectedStackId),
+    [selectedStackId, selectedStackIds, stacks],
+  );
   const selectedBatch = useMemo(
     () => batches.find((batch) => batch.id === selectedBatchId) ?? null,
     [batches, selectedBatchId],
@@ -188,20 +200,30 @@ export default function App() {
 
   const selectSample = (id: number) => {
     setSelectedSectionId(null);
+    setSelectedStackId(null);
     setSelectedBatchId(null);
     setSelectedExtraSampleId(null);
     setSelectedSampleId(id);
   };
   const selectSection = (id: number) => {
     setSelectedSampleId(null);
+    setSelectedStackId(null);
     setSelectedBatchId(null);
     setSelectedExtraSampleId(null);
     setSelectedSectionId(id);
+  };
+  const selectStack = (id: number) => {
+    setSelectedSampleId(null);
+    setSelectedSectionId(null);
+    setSelectedBatchId(null);
+    setSelectedExtraSampleId(null);
+    setSelectedStackId(id);
   };
 
   const selectExtraSlideSample = (sampleId: number) => {
     setSelectedSampleId(null);
     setSelectedSectionId(null);
+    setSelectedStackId(null);
     setSelectedBatchId(null);
     setSelectedExtraSampleId(sampleId);
   };
@@ -251,6 +273,13 @@ export default function App() {
       onRequestProcessing={setPendingBatchSampleIds}
       width={drawerWidth}
       onClose={() => setSelectedSampleId(null)}
+    />
+  ) : selectedStack ? (
+    <StackDetailsDrawer
+      stack={selectedStack}
+      selectedStacks={selectedStacks}
+      width={drawerWidth}
+      onClose={() => setSelectedStackId(null)}
     />
   ) : selectedSection ? (
     <SectionDetailsDrawer
@@ -469,6 +498,7 @@ export default function App() {
                 qc.invalidateQueries({ queryKey: ["projects"] });
                 qc.invalidateQueries({ queryKey: ["open-samples"] });
                 qc.invalidateQueries({ queryKey: ["open-sections"] });
+                qc.invalidateQueries({ queryKey: ["open-slide-stacks"] });
                 qc.invalidateQueries({ queryKey: ["processing-batches"] });
               }}
             >
@@ -482,20 +512,27 @@ export default function App() {
             <Board
               samples={samples}
               sections={sections}
+              stacks={stacks}
               batches={batches}
               extraSlides={extraSlides}
               selectedSampleId={selectedSampleId}
               selectedSectionId={selectedSectionId}
+              selectedStackId={selectedStackId}
               onSelectSample={selectSample}
               onSampleSelectionChange={setSelectedSampleIds}
               onSelectSection={selectSection}
               onSectionSelectionChange={setSelectedSectionIds}
+              onSelectStack={selectStack}
+              onStackSelectionChange={setSelectedStackIds}
               onSelectExtraSlideSample={selectExtraSlideSample}
               onMoveSamples={(sampleIds, stageKey) => {
                 void moveSamples(sampleIds, stageKey).catch((error) => flash(String(error)));
               }}
               onMoveSections={(sectionIds, stageKey) => {
                 void moveSections(sectionIds, stageKey).catch((error) => flash(String(error)));
+              }}
+              onMoveStacks={(stackIds, stageKey) => {
+                void moveSlideStacks(stackIds, stageKey).catch((error) => flash(String(error)));
               }}
               onRequestProcessingBatch={setPendingBatchSampleIds}
               onMoveProcessingBatch={(batchId, stageKey) => {
@@ -504,6 +541,7 @@ export default function App() {
               onSelectProcessingBatch={(batchId) => {
                 setSelectedSampleId(null);
                 setSelectedSectionId(null);
+                setSelectedStackId(null);
                 setSelectedExtraSampleId(null);
                 setSelectedBatchId(batchId);
               }}

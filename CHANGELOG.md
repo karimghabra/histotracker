@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 - 2026-07-18
+
+- Added durable slide stacks as the owner of downstream staining, imaging, and
+  analysis state. Slides retain their cut-group provenance and copied depth.
+- Replaced render-time downstream section grouping with stack cards, stack
+  selection, a stack drawer, stack-scoped protocols, and stack-level actions.
+- Added combined, undoable deletion for selected stacks and selected slides.
+- Made section and imaging undo restore slide snapshots, and made batch section
+  completion, assay start, and delete act on the complete validated selection
+  (#26, #27, #28).
+- Rejected backward and skipped drag transitions (#25).
+- Reworked the processor pickup indicator into a theme-aware edges-only warning
+  treatment (#19).
+- Added sample/stack audit context plus explicit undo and redo events as the
+  reporting foundation for the future Log and Manifest pages.
+
 ## 0.2.6 - 2026-07-18
 
 - Board relayout: the Processor Pickup column is gone; the single Processor

@@ -105,6 +105,12 @@ pub fn run() {
             sql: include_str!("../migrations/0014_stain_requests.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "slide_stacks",
+            sql: include_str!("../migrations/0015_slide_stacks.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

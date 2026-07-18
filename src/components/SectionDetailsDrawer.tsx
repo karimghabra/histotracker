@@ -101,9 +101,10 @@ export function SectionDetailsDrawer({
 }) {
   const {
     markSectionAnalyzed,
-    removeSection,
+    removeSections,
     editSectionTimestamp,
     moveSection,
+    moveSections,
     assignSlide,
     setSlidePicturesTaken,
     completeSectionImaging,
@@ -132,6 +133,12 @@ export function SectionDetailsDrawer({
   const activeSelection = selectedSections.length > 0 ? selectedSections : [section];
   const stainingBatchIds = activeSelection
     .filter((candidate) => candidate.current_stage === "stain_requested")
+    .map((candidate) => candidate.id);
+  const sectioningBatchIds = activeSelection
+    .filter((candidate) => candidate.current_stage === "needs_sectioning")
+    .map((candidate) => candidate.id);
+  const assignmentBatchIds = activeSelection
+    .filter((candidate) => ["sectioned", "assignment_required"].includes(candidate.current_stage))
     .map((candidate) => candidate.id);
   const imagingBatchIds = activeSelection
     .filter((candidate) => ["ready_for_imaging", "pictures_taken"].includes(candidate.current_stage))
@@ -428,9 +435,9 @@ export function SectionDetailsDrawer({
           <Button
             variant="primary"
             className="flex-1"
-            onClick={() => run(() => moveSection(section.id, "assignment_required"))}
+            onClick={() => run(() => moveSections(sectioningBatchIds, "assignment_required"))}
           >
-            <Scissors size={15} /> Mark Sectioned
+            <Scissors size={15} /> {sectioningBatchIds.length > 1 ? `Mark Sectioned (${sectioningBatchIds.length})` : "Mark Sectioned"}
           </Button>
         ) : section.current_stage === "assignment_required" || section.current_stage === "sectioned" ? (
           <Button
@@ -438,7 +445,7 @@ export function SectionDetailsDrawer({
             className="flex-1"
             disabled={!allAssigned || dirtyCount > 0}
             title={dirtyCount > 0 || !allAssigned ? "Click Save All to confirm every slide assignment first." : "Start stain/IHC workflow and move any extras to inventory."}
-            onClick={() => run(() => moveSection(section.id, "stain_requested"))}
+            onClick={() => run(() => moveSections(assignmentBatchIds, "stain_requested"))}
           >
             {startActionLabel} <ChevronRight size={15} />
           </Button>
@@ -475,8 +482,8 @@ export function SectionDetailsDrawer({
         <Button
           variant="danger"
           onClick={() => {
-            if (confirm("Delete this section? You can undo this.")) {
-              removeSection(section.id);
+            if (confirm(activeSelection.length > 1 ? `Delete ${activeSelection.length} selected cut groups? You can undo this.` : "Delete this section? You can undo this.")) {
+              void removeSections(activeSelection.map((candidate) => candidate.id));
               onClose();
             }
           }}

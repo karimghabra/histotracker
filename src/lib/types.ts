@@ -125,6 +125,7 @@ export type SlidePurpose = "unassigned" | "stain" | "extra" | "control" | "excep
 export interface Slide {
   id: number;
   section_request_id: number;
+  stack_id: number | null;
   sample_id?: number;
   slide_ordinal: number;
   depth_duplicate_ordinal: number | null;
@@ -156,7 +157,36 @@ export interface Slide {
   project_name?: string;
   sample_description?: string;
   depth_index?: number;
+  cut_depth_um: number | null;
+  cut_depth_index: number | null;
   is_priority?: number;
+}
+
+export interface SlideStack {
+  id: number;
+  sample_id: number;
+  current_stage: string;
+  stage_stain_requested_at: string | null;
+  stage_stained_at: string | null;
+  stage_deparaffinized_at: string | null;
+  stage_ihc_at: string | null;
+  stage_refrax_at: string | null;
+  stage_coverslipped_at: string | null;
+  stage_dried_at: string | null;
+  stage_ready_for_imaging_at: string | null;
+  stage_pictures_taken_at: string | null;
+  stage_analyzed_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  project_id?: number;
+  parent_code?: string;
+  parent_description?: string;
+  project_code?: string;
+  project_name?: string;
+  is_priority?: number;
+  slide_count?: number;
+  assay_slide_count?: number;
+  slide_summary?: string;
 }
 
 export interface ProcessingBatch {

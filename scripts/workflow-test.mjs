@@ -298,6 +298,30 @@ function makeApi(db) {
     );
   }
 
+  function attachSectionStainSlidesToOpenStack(sectionId) {
+    const section = get(
+      `SELECT sr.sample_id, sr.depth_um, sr.depth_index,
+              COUNT(sl.id) AS stain_count
+         FROM section_requests sr
+         LEFT JOIN slides sl ON sl.section_request_id = sr.id AND sl.purpose = 'stain'
+        WHERE sr.id = ? GROUP BY sr.id`, [sectionId]);
+    if (!section || section.stain_count === 0) return null;
+    let stack = get(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [section.sample_id]);
+    if (!stack) {
+      const created = run(
+        `INSERT INTO slide_stacks (sample_id, current_stage, stage_stain_requested_at)
+         VALUES (?, 'stain_requested', ?)`, [section.sample_id, now()]);
+      stack = { id: Number(created.lastInsertRowid) };
+    }
+    run(
+      `UPDATE slides SET stack_id = ?,
+              cut_depth_um = COALESCE(cut_depth_um, ?),
+              cut_depth_index = COALESCE(cut_depth_index, ?)
+        WHERE section_request_id = ? AND purpose = 'stain'`,
+      [stack.id, section.depth_um, section.depth_index, sectionId]);
+    return stack.id;
+  }
+
   // Save the whole assignment set for a section, then move it to staining.
   // Port of updateSectionStage(id, 'stain_requested') — src/lib/db.ts.
   function startAssayWork(sectionId) {
@@ -307,12 +331,12 @@ function makeApi(db) {
     run(`UPDATE slides SET current_stage = CASE WHEN purpose = 'stain' THEN 'stain_requested' ELSE purpose END,
            stage_stain_requested_at = CASE WHEN purpose = 'stain' THEN COALESCE(stage_stain_requested_at, ?) ELSE stage_stain_requested_at END
            WHERE section_request_id = ?`, [ts, sectionId]);
+    attachSectionStainSlidesToOpenStack(sectionId);
     run(`UPDATE section_requests SET current_stage = 'stain_requested', stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?) WHERE id = ?`, [ts, sectionId]);
   }
 
-  // Port of assignExtraSlideToAssay() — src/lib/db.ts. Joins the block's open
-  // assay section when there is one (issue #9) and never leaves an orphaned,
-  // slide-less section behind (issue #10).
+  // Port of assignExtraSlideToAssay() — src/lib/db.ts. Stack membership owns
+  // downstream grouping; the original section remains immutable cut provenance.
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
     const ts = now();
     const slide = get(
@@ -324,47 +348,19 @@ function makeApi(db) {
     const cat = get(`SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`, [assayType, assayName]);
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
-    const formerSectionId = slide.section_request_id;
-    let targetSectionId;
-    let createdSectionId = null;
-    let slideOrdinal = 1;
-    if (slide.section_stage === "stain_requested") {
-      targetSectionId = formerSectionId;
-      slideOrdinal = slide.slide_ordinal;
-    } else {
-      const existing = get(
-        `SELECT sr.id, COALESCE(MAX(sl.slide_ordinal), 0) + 1 AS next_ordinal
-           FROM section_requests sr LEFT JOIN slides sl ON sl.section_request_id = sr.id
-          WHERE sr.sample_id = ? AND sr.id != ? AND sr.current_stage = 'stain_requested'
-          GROUP BY sr.id ORDER BY sr.id DESC LIMIT 1`, [slide.sample_id, formerSectionId]);
-      if (existing) {
-        targetSectionId = existing.id;
-        slideOrdinal = existing.next_ordinal;
-      } else {
-        const r = run(
-          `INSERT INTO section_requests (sample_id, depth_um, depth_index, duplicates, stains, current_stage,
-             stage_sectioned_at, stage_assignment_required_at, stage_stain_requested_at)
-           VALUES (?, ?, ?, 1, ?, 'stain_requested', ?, ?, ?)`,
-          [slide.sample_id, slide.depth_um, slide.depth_index, assayName, ts, ts, ts]);
-        targetSectionId = Number(r.lastInsertRowid);
-        createdSectionId = targetSectionId;
-      }
-    }
+    let stack = get(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [slide.sample_id]);
+    const createdStackId = stack ? null : Number(run(
+      `INSERT INTO slide_stacks (sample_id, current_stage, stage_stain_requested_at)
+       VALUES (?, 'stain_requested', ?)`, [slide.sample_id, ts]).lastInsertRowid);
+    if (!stack) stack = { id: createdStackId };
     run(
-      `UPDATE slides SET section_request_id = ?, slide_ordinal = ?, purpose = 'stain',
+      `UPDATE slides SET stack_id = ?, cut_depth_um = COALESCE(cut_depth_um, ?),
+             cut_depth_index = COALESCE(cut_depth_index, ?), purpose = 'stain',
              assay_type = ?, assay_name = ?, stain_name = ?, current_stage = 'stain_requested',
              assignment_saved = 1, stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
         WHERE id = ?`,
-      [targetSectionId, slideOrdinal, assayType, assayName, assayName, ts, slideId]);
-    let formerSectionDeleted = false;
-    if (targetSectionId !== formerSectionId) {
-      const remaining = get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`, [formerSectionId]);
-      if (remaining.c === 0) {
-        run(`DELETE FROM section_requests WHERE id = ?`, [formerSectionId]);
-        formerSectionDeleted = true;
-      }
-    }
-    return { formerSectionId, targetSectionId, createdSectionId, formerSectionDeleted };
+      [stack.id, slide.depth_um, slide.depth_index, assayType, assayName, assayName, ts, slideId]);
+    return { stackId: stack.id, createdStackId };
   }
 
   // Port of updateProcessingBatchStart() — src/lib/db.ts (issue #6).
@@ -403,10 +399,10 @@ function makeApi(db) {
 // INVARIANTS — the happy path and data integrity that must always hold
 // ---------------------------------------------------------------------------
 
-invariant("all 14 migrations apply and expected tables exist", () => {
+invariant("all 15 migrations apply and expected tables exist", () => {
   const api = makeApi(freshDb());
   const names = api.all(`SELECT name FROM sqlite_master WHERE type = 'table'`).map((r) => r.name);
-  for (const t of ["projects", "samples", "section_requests", "slides", "processing_batches", "assay_catalog", "stain_requests", "sample_timeline_events"]) {
+  for (const t of ["projects", "samples", "section_requests", "slides", "slide_stacks", "processing_batches", "assay_catalog", "stain_requests", "sample_timeline_events"]) {
     assert(names.includes(t), `missing table ${t}`);
   }
 });
@@ -439,6 +435,75 @@ invariant("full pipeline: received → analyzed leaves a stained, imaged slide",
   const stainSlide = api.get(`SELECT * FROM slides WHERE id = ?`, [slides[0].id]);
   eq(stainSlide.current_stage, "stain_requested", "stain slide entered staining");
   eq(stainSlide.purpose, "stain", "purpose stain");
+  assert(stainSlide.stack_id, "stain slide belongs to a durable stack");
+  eq(stainSlide.cut_depth_um, 100, "stack membership preserves cut depth");
+});
+
+invariant("separate assay sections for one sample share one open stack", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "one stack");
+  api.markEmbedded(id);
+  const [first] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 1 }]);
+  const [second] = api.createSectionRequests(id, [{ depth_um: 200, duplicates: 1 }]);
+  for (const section of [first, second]) {
+    api.sectionToAssignment(section);
+    const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+    api.assignSlide(slide.id, "stain", "stain", "H&E");
+    api.startAssayWork(section);
+  }
+  eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [id]).c, 1,
+     "exactly one open stack");
+  eq(api.get(`SELECT COUNT(DISTINCT stack_id) AS c FROM slides WHERE section_request_id IN (?, ?)`, [first, second]).c, 1,
+     "both cut groups share the stack");
+});
+
+invariant("analyzed stack closes and a later cutting cycle gets a new stack", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "repeat cycle");
+  api.markEmbedded(id);
+  const [first] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 1 }]);
+  api.sectionToAssignment(first);
+  const firstSlide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [first]);
+  api.assignSlide(firstSlide.id, "stain", "stain", "H&E");
+  api.startAssayWork(first);
+  const oldStack = api.get(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [id]);
+  api.run(`UPDATE slide_stacks SET current_stage = 'analyzed', closed_at = ? WHERE id = ?`, [now(), oldStack.id]);
+  api.run(`UPDATE slides SET current_stage = 'analyzed' WHERE stack_id = ?`, [oldStack.id]);
+
+  const [second] = api.createSectionRequests(id, [{ depth_um: 200, duplicates: 1 }]);
+  api.sectionToAssignment(second);
+  const secondSlide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [second]);
+  api.assignSlide(secondSlide.id, "stain", "ihc", "CD31");
+  api.startAssayWork(second);
+  const newStack = api.get(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [id]);
+  assert(newStack.id !== oldStack.id, "new cutting cycle should not reopen the analyzed stack");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE sample_id = ?`, [id]).c, 2,
+    "sample should retain both historical stack cycles");
+});
+
+invariant("stack and slide audit events carry reporting context", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "audit context");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 1 }]);
+  api.sectionToAssignment(section);
+  const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+  api.assignSlide(slide.id, "stain", "stain", "H&E");
+  api.startAssayWork(section);
+  const stack = api.get(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [id]);
+  const stackAudit = api.get(
+    `SELECT sample_id, stack_id FROM audit_events WHERE entity_type = 'slide_stack' AND entity_id = ? ORDER BY id DESC LIMIT 1`,
+    [stack.id]);
+  eq(stackAudit.sample_id, id, "stack audit should identify its sample");
+  eq(stackAudit.stack_id, stack.id, "stack audit should identify its stack");
+  const slideAudit = api.get(
+    `SELECT sample_id, stack_id FROM audit_events WHERE entity_type = 'slide' AND entity_id = ? ORDER BY id DESC LIMIT 1`,
+    [slide.id]);
+  eq(slideAudit.sample_id, id, "slide audit should identify its sample");
+  eq(slideAudit.stack_id, stack.id, "slide audit should identify its stack");
 });
 
 invariant("processing batch enforces a single protocol per batch", () => {
@@ -586,10 +651,9 @@ issue(7, "sending to sectioning is refused until the block is embedded", () => {
      "no section should be created for a non-embedded block");
 });
 
-// #9 — Extra slides getting stained do not merge cleanly. Assigning an extra
-// slide to an assay for a sample that ALREADY has an open assay section should
-// join that section, not mint a brand-new one. Today a new section is minted.
-issue(9, "staining an extra slide joins the sample's existing assay section", () => {
+// #9 — Extras merge through durable stack membership without changing their
+// physical cut-group provenance.
+issue(9, "staining an extra slide joins the sample's existing slide stack", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "merge");
@@ -604,24 +668,19 @@ issue(9, "staining an extra slide joins the sample's existing assay section", ()
   // Later: take the saved extra from inventory and send it to IHC.
   const extra = api.listExtraSlides().find((s) => s.sample_id === id);
   assert(extra, "an extra slide is available in inventory");
+  const originalSectionId = extra.section_request_id;
   api.assignExtraSlideToAssay(extra.id, "ihc", "CD31");
-  // Desired: the sample has exactly ONE open assay section carrying both slides.
-  const openSections = api.all(
-    `SELECT sr.id, COUNT(sl.id) AS stain_slides
-       FROM section_requests sr JOIN slides sl ON sl.section_request_id = sr.id
-      WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sr.current_stage = 'stain_requested'
-      GROUP BY sr.id`, [id]);
-  eq(openSections.length, 1, "extra slide should merge into the existing assay section, not spawn a second");
+  const stacks = api.all(`SELECT id FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL`, [id]);
+  eq(stacks.length, 1, "sample should have exactly one open downstream stack");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE stack_id = ?`, [stacks[0].id]).c, 2,
+    "existing assay and newly assigned extra should share the stack");
+  eq(api.get(`SELECT section_request_id FROM slides WHERE id = ?`, [extra.id]).section_request_id,
+    originalSectionId, "extra should retain its cut-group provenance");
 });
 
-// #10 — Undo/redo erroneously depopulates the extra-slide inventory. The
-// concrete data defect underlying the symptom: assigning a lone extra slide to
-// an assay (assignExtraSlideToAssay) re-parents it to a NEW section and leaves
-// its original section behind with zero slides — an orphan the board's grouping
-// and undo logic then mishandle, which is what makes inventory rows disappear
-// unexpectedly. A clean model must never leave an empty section behind. (The
-// full undo-stack symptom also warrants a UI/Playwright repro — see the plan.)
-issue(10, "assigning an extra slide leaves no orphaned empty section behind", () => {
+// #10 — Assignment keeps the slide in its source section, so undo cannot need
+// to reconstruct deleted/re-parented cut groups.
+issue(10, "assigning an extra preserves its source section", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "orphan");
@@ -637,11 +696,10 @@ issue(10, "assigning an extra slide leaves no orphaned empty section behind", ()
   eq(api.listExtraSlides().length, 1, "one extra in inventory");
   // Send that extra to IHC from the inventory.
   api.assignExtraSlideToAssay(slide.id, "ihc", "CD31");
-  // Desired: the original section is gone (or reused), never left slide-less.
-  const orphans = api.get(
-    `SELECT COUNT(*) AS c FROM section_requests sr
-      WHERE sr.sample_id = ? AND NOT EXISTS (SELECT 1 FROM slides sl WHERE sl.section_request_id = sr.id)`, [id]);
-  eq(orphans.c, 0, "an empty, orphaned section was left behind");
+  eq(api.get(`SELECT section_request_id FROM slides WHERE id = ?`, [slide.id]).section_request_id,
+    section, "assignment should not re-parent the physical slide");
+  eq(api.get(`SELECT COUNT(*) AS c FROM section_requests WHERE id = ?`, [section]).c, 1,
+    "source section should remain as cut history");
 });
 
 // #12 — A slide saved as 'extra' during assignment must NOT appear in the extra
@@ -660,6 +718,51 @@ issue(12, "a fresh extra stays out of inventory until its section leaves Fresh",
   eq(api.listExtraSlides().length, 0, "extra hidden while its section is still in Fresh");
   api.startAssayWork(section); // leaves Fresh into staining
   eq(api.listExtraSlides().length, 1, "extra appears in inventory once the section moves on");
+});
+
+issue(25, "dragging cannot move backward or skip workflow stages", () => {
+  const src = readFileSync(join(HERE, "..", "src", "components", "Board.tsx"), "utf8");
+  assert(src.includes("SECTION_STAGE_ORDER[targetStage]") && src.includes("!== 1"),
+    "section drag handler must require exactly one forward stage");
+  assert(src.includes("STAGE_ORDER[targetStage]") && src.includes("!== 1"),
+    "sample drag handler must require exactly one forward stage");
+});
+
+issue(26, "batch assay start preflights every selected section", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  const drawer = readFileSync(join(HERE, "..", "src", "components", "SectionDetailsDrawer.tsx"), "utf8");
+  assert(actions.includes('stageKey === "stain_requested"') && actions.includes("incompleteIds.length > 0"),
+    "batch action must reject incomplete assignments before its write loop");
+  assert(drawer.includes('moveSections(assignmentBatchIds, "stain_requested")'),
+    "drawer must start assays for the selected batch");
+});
+
+issue(27, "Mark Sectioned advances the selected batch", () => {
+  const drawer = readFileSync(join(HERE, "..", "src", "components", "SectionDetailsDrawer.tsx"), "utf8");
+  assert(drawer.includes('moveSections(sectioningBatchIds, "assignment_required")'),
+    "Mark Sectioned must use the selected section IDs");
+});
+
+issue(28, "section and imaging undo restore slide snapshots", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  assert(actions.includes("for (const slide of beforeSlides) await restoreSlide(slide)"),
+    "section undo must restore its slides");
+  assert(actions.includes("Complete imaging") && actions.includes("for (const section of before) await restoreSectionRequest(section)"),
+    "bulk imaging must register a symmetric undo command");
+});
+
+invariant("downstream UI and actions address durable stack IDs", () => {
+  const app = readFileSync(join(HERE, "..", "src", "App.tsx"), "utf8");
+  const drawer = readFileSync(join(HERE, "..", "src", "components", "StackDetailsDrawer.tsx"), "utf8");
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  assert(app.includes("moveSlideStacks(stackIds, stageKey)"),
+    "App must not translate stack moves back into section IDs");
+  assert(drawer.includes('scopeType="slide_stack"') && drawer.includes("useStackSlides(stack.id)"),
+    "stack drawer must query and mutate stack-owned workflow state");
+  assert(drawer.includes("removeSlides([...selectedSlideIds])"),
+    "stack drawer must support one combined delete for selected slides");
+  assert(actions.includes("restoreSlideStack(stack)"),
+    "stack undo must restore the durable stack snapshot");
 });
 
 // ---------------------------------------------------------------------------

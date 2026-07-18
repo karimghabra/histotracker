@@ -8,7 +8,9 @@ import {
   listOpenSamples,
   listOpenProcessingBatches,
   listOpenSectionRequests,
+  listOpenSlideStacks,
   listSlidesForSectionRequest,
+  listSlidesForStack,
   listStainSlidesForSections,
   listSampleTimelineEvents,
   listExtraSlides,
@@ -105,6 +107,18 @@ export function useOpenSections() {
   return useQuery({
     queryKey: KEYS.openSections,
     queryFn: listOpenSectionRequests,
+  });
+}
+
+export function useOpenSlideStacks() {
+  return useQuery({ queryKey: ["open-slide-stacks"], queryFn: listOpenSlideStacks });
+}
+
+export function useStackSlides(stackId: number | null) {
+  return useQuery({
+    queryKey: ["stack-slides", stackId],
+    queryFn: () => listSlidesForStack(stackId as number),
+    enabled: stackId !== null,
   });
 }
 

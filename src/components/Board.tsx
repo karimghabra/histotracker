@@ -8,7 +8,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import type { ProcessingBatch, Sample, SectionRequest, Slide } from "../lib/types";
+import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
   BOARD_LANES,
@@ -16,13 +16,16 @@ import {
   QUEUE_BY_KEY,
   SECTION_QUEUE_ENTRY,
   SECTION_QUEUE_KEYS,
+  SECTION_STAGE_ORDER,
   SECTION_STAGE_TO_QUEUE,
+  STAGE_ORDER,
   STAGE_TO_QUEUE,
 } from "../lib/stages";
 import { ProcessingBatchRow } from "./ProcessingBatchRow";
 import { QueueColumn } from "./QueueColumn";
 import { SampleCard } from "./SampleCard";
 import { SectionCard } from "./SectionCard";
+import { StackCard } from "./StackCard";
 import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
 type EmbeddedSort = "embedded_date" | "name" | "sample_id";
@@ -30,6 +33,7 @@ type ExtraSlidesSort = "sample_id" | "name";
 type ActiveDrag =
   | { type: "block"; sample: Sample; count?: number }
   | { type: "section"; section: SectionRequest; count?: number }
+  | { type: "stack"; stack: SlideStack; count?: number }
   | { type: "batch"; batch: ProcessingBatch }
   | null;
 
@@ -84,28 +88,22 @@ function rangeSelection(order: number[], anchor: number | null, target: number):
   return order.slice(Math.min(start, end), Math.max(start, end) + 1);
 }
 
-function groupDownstreamSections(sections: SectionRequest[]): SectionRequest[][] {
-  const groups = new Map<number, SectionRequest[]>();
-  for (const section of sections) {
-    const existing = groups.get(section.sample_id) ?? [];
-    existing.push(section);
-    groups.set(section.sample_id, existing);
-  }
-  return [...groups.values()];
-}
-
 export function Board({
   samples,
   sections,
+  stacks,
   batches,
   extraSlides,
   onSelectSample,
   onSampleSelectionChange,
   onSelectSection,
   onSectionSelectionChange,
+  onSelectStack,
+  onStackSelectionChange,
   onSelectExtraSlideSample,
   onMoveSamples,
   onMoveSections,
+  onMoveStacks,
   onRequestProcessingBatch,
   onMoveProcessingBatch,
   onSelectProcessingBatch,
@@ -114,17 +112,22 @@ export function Board({
 }: {
   samples: Sample[];
   sections: SectionRequest[];
+  stacks: SlideStack[];
   batches: ProcessingBatch[];
   extraSlides: Slide[];
   selectedSampleId: number | null;
   selectedSectionId: number | null;
+  selectedStackId: number | null;
   onSelectSample: (id: number) => void;
   onSampleSelectionChange: (ids: number[]) => void;
   onSelectSection: (id: number) => void;
   onSectionSelectionChange: (ids: number[]) => void;
+  onSelectStack: (id: number) => void;
+  onStackSelectionChange: (ids: number[]) => void;
   onSelectExtraSlideSample: (sampleId: number) => void;
   onMoveSamples: (sampleIds: number[], stageKey: string) => void;
   onMoveSections: (sectionIds: number[], stageKey: string) => void;
+  onMoveStacks: (stackIds: number[], stageKey: string) => void;
   onRequestProcessingBatch: (sampleIds: number[]) => void;
   onMoveProcessingBatch: (batchId: number, stageKey: string) => void;
   onSelectProcessingBatch: (batchId: number) => void;
@@ -135,12 +138,14 @@ export function Board({
   const [active, setActive] = useState<ActiveDrag>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<number>>(new Set());
   const [selectedSections, setSelectedSections] = useState<Set<number>>(new Set());
+  const [selectedStacks, setSelectedStacks] = useState<Set<number>>(new Set());
   // Selection highlight for the non-card items (issues #15, #17): only one of
   // block / section / batch / extras-stack is highlighted at a time.
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [selectedExtraSample, setSelectedExtraSample] = useState<number | null>(null);
   const blockAnchor = useRef<number | null>(null);
   const sectionAnchor = useRef<number | null>(null);
+  const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
   const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
   const [assignmentView, setAssignmentView] = useState<"fresh" | "inventory">("fresh");
@@ -157,6 +162,7 @@ export function Board({
       if (event.key !== "Escape") return;
       setSelectedBlocks(new Set());
       setSelectedSections(new Set());
+      setSelectedStacks(new Set());
       setSelectedBatch(null);
       setSelectedExtraSample(null);
     };
@@ -167,11 +173,11 @@ export function Board({
   // Selecting any block or section clears the batch / extras-stack highlight so
   // only one thing is ever highlighted (issues #15, #17).
   useEffect(() => {
-    if (selectedBlocks.size > 0 || selectedSections.size > 0) {
+    if (selectedBlocks.size > 0 || selectedSections.size > 0 || selectedStacks.size > 0) {
       setSelectedBatch(null);
       setSelectedExtraSample(null);
     }
-  }, [selectedBlocks, selectedSections]);
+  }, [selectedBlocks, selectedSections, selectedStacks]);
 
   useEffect(() => {
     onSampleSelectionChange([...selectedBlocks]);
@@ -180,6 +186,10 @@ export function Board({
   useEffect(() => {
     onSectionSelectionChange([...selectedSections]);
   }, [onSectionSelectionChange, selectedSections]);
+
+  useEffect(() => {
+    onStackSelectionChange([...selectedStacks]);
+  }, [onStackSelectionChange, selectedStacks]);
 
   useEffect(() => {
     window.localStorage.setItem("histometer-board-top-height", String(topLaneHeight));
@@ -194,6 +204,7 @@ export function Board({
     [batchMemberIds, samples],
   );
   const visibleSectionOrder = useMemo(() => sections.map((section) => section.id), [sections]);
+  const visibleStackOrder = useMemo(() => stacks.map((stack) => stack.id), [stacks]);
 
   const blocksByQueue = useMemo(() => {
     const map: Record<string, Sample[]> = {};
@@ -222,6 +233,15 @@ export function Board({
     }
     return map;
   }, [sections]);
+
+  const stacksByQueue = useMemo(() => {
+    const map: Record<string, SlideStack[]> = {};
+    for (const stack of stacks) {
+      const key = SECTION_STAGE_TO_QUEUE[stack.current_stage];
+      if (key) (map[key] ??= []).push(stack);
+    }
+    return map;
+  }, [stacks]);
 
   const projectsInEmbedded = useMemo(() => {
     const seen = new Map<number, string>();
@@ -275,6 +295,7 @@ export function Board({
   function handleSelectBatch(id: number) {
     setSelectedBlocks(new Set());
     setSelectedSections(new Set());
+    setSelectedStacks(new Set());
     setSelectedExtraSample(null);
     setSelectedBatch(id);
     onSelectProcessingBatch(id);
@@ -283,6 +304,7 @@ export function Board({
   function handleSelectExtraSample(id: number) {
     setSelectedBlocks(new Set());
     setSelectedSections(new Set());
+    setSelectedStacks(new Set());
     setSelectedBatch(null);
     setSelectedExtraSample(id);
     onSelectExtraSlideSample(id);
@@ -290,6 +312,7 @@ export function Board({
 
   function selectBlock(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedSections(new Set());
+    setSelectedStacks(new Set());
     const targetQueue = STAGE_TO_QUEUE[samples.find((sample) => sample.id === id)?.current_stage ?? ""];
     const queueOrder = targetQueue === "embedded_inventory"
       ? displayedEmbeddedItems.map((sample) => sample.id)
@@ -317,6 +340,7 @@ export function Board({
 
   function toggleBlock(id: number) {
     setSelectedSections(new Set());
+    setSelectedStacks(new Set());
     const target = samples.find((sample) => sample.id === id);
     if (!target) return;
     const targetQueue = STAGE_TO_QUEUE[target.current_stage];
@@ -336,6 +360,7 @@ export function Board({
 
   function selectSection(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedBlocks(new Set());
+    setSelectedStacks(new Set());
     if (event.shiftKey) {
       setSelectedSections(new Set(rangeSelection(visibleSectionOrder, sectionAnchor.current, id)));
     } else if (event.ctrlKey || event.metaKey) {
@@ -353,23 +378,24 @@ export function Board({
     onSelectSection(id);
   }
 
-  function selectSectionGroup(ids: number[], event: MouseEvent<HTMLDivElement>) {
+  function selectStack(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedBlocks(new Set());
-    if (event.ctrlKey || event.metaKey) {
-      setSelectedSections((current) => {
+    setSelectedSections(new Set());
+    if (event.shiftKey) {
+      setSelectedStacks(new Set(rangeSelection(visibleStackOrder, stackAnchor.current, id)));
+    } else if (event.ctrlKey || event.metaKey) {
+      setSelectedStacks((current) => {
         const next = new Set(current);
-        const allSelected = ids.every((id) => next.has(id));
-        for (const id of ids) {
-          if (allSelected) next.delete(id);
-          else next.add(id);
-        }
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
         return next;
       });
+      stackAnchor.current = id;
     } else {
-      setSelectedSections(new Set(ids));
+      setSelectedStacks(new Set([id]));
+      stackAnchor.current = id;
     }
-    sectionAnchor.current = ids[0] ?? null;
-    if (ids[0] != null) onSelectSection(ids[0]);
+    onSelectStack(id);
   }
 
   function handleStart(event: DragStartEvent) {
@@ -384,6 +410,12 @@ export function Board({
         ? selectedSections
         : new Set([data.section.id]);
       if (!selectedSections.has(data.section.id)) setSelectedSections(ids);
+      setActive({ ...data, count: ids.size });
+    } else if (data.type === "stack") {
+      const ids = selectedStacks.has(data.stack.id)
+        ? selectedStacks
+        : new Set([data.stack.id]);
+      if (!selectedStacks.has(data.stack.id)) setSelectedStacks(ids);
       setActive({ ...data, count: ids.size });
     } else {
       setActive(data);
@@ -405,6 +437,10 @@ export function Board({
         return;
       }
       if (selected.every((sample) => STAGE_TO_QUEUE[sample.current_stage] === overId)) return;
+      const targetStage = QUEUE_BY_KEY[overId].entryStage;
+      if (selected.some((sample) => (STAGE_ORDER[targetStage] ?? -1) - (STAGE_ORDER[sample.current_stage] ?? -1) !== 1)) {
+        return;
+      }
       if (overId === "processing") onRequestProcessingBatch(ids);
       else onMoveSamples(ids, QUEUE_BY_KEY[overId].entryStage);
       setSelectedBlocks(new Set());
@@ -413,6 +449,15 @@ export function Board({
       // by dragging it to Needs Embedding (or via its drawer).
       if (overId !== "needs_embedding") return;
       onMoveProcessingBatch(data.batch.id, QUEUE_BY_KEY[overId].entryStage);
+    } else if (data.type === "stack") {
+      if (!SECTION_QUEUE_KEYS.has(overId)) return;
+      const ids = selectedStacks.has(data.stack.id) ? [...selectedStacks] : [data.stack.id];
+      const selected = stacks.filter((stack) => ids.includes(stack.id));
+      if (selected.every((stack) => SECTION_STAGE_TO_QUEUE[stack.current_stage] === overId)) return;
+      const targetStage = SECTION_QUEUE_ENTRY[overId];
+      if (selected.some((stack) => (SECTION_STAGE_ORDER[targetStage] ?? -1) - (SECTION_STAGE_ORDER[stack.current_stage] ?? -1) !== 1)) return;
+      onMoveStacks(ids, targetStage);
+      setSelectedStacks(new Set());
     } else {
       if (!SECTION_QUEUE_KEYS.has(overId)) return;
       const ids = selectedSections.has(data.section.id)
@@ -422,7 +467,11 @@ export function Board({
       if (selected.every((section) => SECTION_STAGE_TO_QUEUE[section.current_stage] === overId)) {
         return;
       }
-      onMoveSections(ids, SECTION_QUEUE_ENTRY[overId]);
+      const targetStage = SECTION_QUEUE_ENTRY[overId];
+      if (selected.some((section) => (SECTION_STAGE_ORDER[targetStage] ?? -1) - (SECTION_STAGE_ORDER[section.current_stage] ?? -1) !== 1)) {
+        return;
+      }
+      onMoveSections(ids, targetStage);
       setSelectedSections(new Set());
     }
   }
@@ -445,9 +494,9 @@ export function Board({
                 style={{ backgroundColor: LANE_COLORS[laneIndex] }}
               />
               <h2 className="text-[13px] font-semibold text-ink">{lane.title}</h2>
-              {(selectedBlocks.size > 1 || selectedSections.size > 1) && (
+              {(selectedBlocks.size > 1 || selectedSections.size > 1 || selectedStacks.size > 1) && (
                 <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand">
-                  {selectedBlocks.size || selectedSections.size} selected
+                  {selectedBlocks.size || selectedSections.size || selectedStacks.size} selected
                 </span>
               )}
             </div>
@@ -468,27 +517,30 @@ export function Board({
 
                   if (SECTION_QUEUE_KEYS.has(queueKey)) {
                     const items = sectionsByQueue[queueKey] ?? [];
+                    const stackItems = stacksByQueue[queueKey] ?? [];
+                    const isDownstream = queueKey === "staining" || queueKey === "analysis_pending";
                     const isAssignment = queueKey === "slide_assignment";
                     const showingInventory = isAssignment && assignmentView === "inventory";
-                    const groups = queueKey === "staining" || queueKey === "analysis_pending"
-                      ? groupDownstreamSections(items)
-                      : items.map((item) => [item]);
-                    const selectedCount = groups.filter((group) => group.every((item) => selectedSections.has(item.id))).length;
+                    const selectedCount = isDownstream
+                      ? stackItems.filter((stack) => selectedStacks.has(stack.id)).length
+                      : items.filter((item) => selectedSections.has(item.id)).length;
                     return (
                       <QueueColumn
                         key={queueKey}
                         queue={queue}
-                        count={showingInventory ? displayedExtraSlideGroups.length : groups.length}
+                        count={showingInventory ? displayedExtraSlideGroups.length : isDownstream ? stackItems.length : items.length}
                         selectedCount={selectedCount}
                         onToggleAll={
-                          !showingInventory && items.length > 0
+                          !showingInventory && (isDownstream ? stackItems.length > 0 : items.length > 0)
                             ? () => {
                                 setSelectedBlocks(new Set());
-                                setSelectedSections(
-                                  selectedCount === groups.length
-                                    ? new Set()
-                                    : new Set(items.map((item) => item.id)),
-                                );
+                                if (isDownstream) {
+                                  setSelectedSections(new Set());
+                                  setSelectedStacks(selectedCount === stackItems.length ? new Set() : new Set(stackItems.map((stack) => stack.id)));
+                                } else {
+                                  setSelectedStacks(new Set());
+                                  setSelectedSections(selectedCount === items.length ? new Set() : new Set(items.map((item) => item.id)));
+                                }
                               }
                             : undefined
                         }
@@ -539,14 +591,19 @@ export function Board({
                             onSelectSample={handleSelectExtraSample}
                             selectedSampleId={selectedExtraSample}
                           />
-                        ) : groups.map((group) => (
+                        ) : isDownstream ? stackItems.map((stack) => (
+                          <StackCard
+                            key={stack.id}
+                            stack={stack}
+                            selected={selectedStacks.has(stack.id)}
+                            onSelect={selectStack}
+                          />
+                        )) : items.map((item) => (
                           <SectionCard
-                            key={group.map((section) => section.id).join("-")}
-                            section={group[0]}
-                            groupedSections={group.length > 1 ? group : undefined}
-                            selected={group.every((section) => selectedSections.has(section.id))}
+                            key={item.id}
+                            section={item}
+                            selected={selectedSections.has(item.id)}
                             onSelect={selectSection}
-                            onSelectGroup={selectSectionGroup}
                           />
                         ))}
                       </QueueColumn>
@@ -663,6 +720,15 @@ export function Board({
         ) : active?.type === "section" ? (
           <div className="relative min-w-48">
             <SectionCard section={active.section} overlay />
+            {(active.count ?? 1) > 1 && (
+              <span className="absolute -right-2 -top-2 rounded-full bg-brand px-2 py-0.5 text-xs font-semibold text-white shadow">
+                {active.count}
+              </span>
+            )}
+          </div>
+        ) : active?.type === "stack" ? (
+          <div className="relative min-w-48">
+            <StackCard stack={active.stack} overlay />
             {(active.count ?? 1) > 1 && (
               <span className="absolute -right-2 -top-2 rounded-full bg-brand px-2 py-0.5 text-xs font-semibold text-white shadow">
                 {active.count}

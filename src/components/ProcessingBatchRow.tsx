@@ -50,8 +50,8 @@ export function ProcessingBatchRow({
       className={cn(
         "rounded-md border transition",
         awaitingPickup
-          // Issue #19: a batch awaiting pickup needs an unmistakable amber glow.
-          ? "border-amber-400 bg-amber-50 shadow-[0_0_16px_rgba(245,158,11,0.55)]"
+          // Issue #19: keep the pickup signal on the edges without washing out the tile.
+          ? "batch-awaiting-pickup"
           : "border-brand/25 bg-brand/5",
         // Issue #17: show which batch is selected.
         selected && "ring-2 ring-brand ring-offset-1",

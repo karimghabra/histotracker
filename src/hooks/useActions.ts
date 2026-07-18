@@ -4,23 +4,36 @@ import {
   acknowledgeRequestsForSlide,
   addSample,
   assignExtraSlideToAssay,
+  completeSlideStackImaging,
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
   deleteSample,
   deleteProcessingBatch,
   deleteSectionRequest,
+  deleteSlide,
+  deleteSlideStack,
+  deleteSlideStackIfEmpty,
+  deleteSlidesForStack,
+  getOpenSlideStack,
   getProcessingBatchSamples,
   getSample,
+  getSlideStack,
   getSectionRequest,
   getSlide,
   listSlidesForSectionRequest,
+  listSlidesForStack,
+  listChecklistRunsForScope,
   moveProcessingBatch as moveProcessingBatchDb,
   reinsertSample,
   reinsertSectionRequest,
   reinsertSlide,
+  reinsertSlideStack,
+  reinsertChecklistRuns,
+  recordAuditEvent,
   restoreSample,
   restoreSectionRequest,
   restoreSlide,
+  restoreSlideStack,
   updateProcessingBatchStart,
   revertSectionToStage,
   revertToStage,
@@ -29,6 +42,7 @@ import {
   setSamplePriority,
   setSectionTimestamp,
   setSlidePicturesTaken as setSlidePicturesTakenDb,
+  syncSlideStack,
   setStageTimestamp,
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
@@ -36,8 +50,9 @@ import {
   updateSampleStage,
   updateSectioningPlan,
   updateSectionStage,
+  updateSlideStackStage,
 } from "../lib/db";
-import type { NewSampleInput, ProcessingType, Sample, SectionRequest, SlidePurpose } from "../lib/types";
+import type { NewSampleInput, ProcessingType, Sample, SectionRequest, Slide, SlidePurpose, SlideStack } from "../lib/types";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
 import { nowTimestamp } from "../lib/utils";
@@ -56,9 +71,12 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["open-samples"] });
     qc.invalidateQueries({ queryKey: ["open-sections"] });
+    qc.invalidateQueries({ queryKey: ["open-slide-stacks"] });
     qc.invalidateQueries({ queryKey: ["processing-batches"] });
     qc.invalidateQueries({ queryKey: ["section-slides"] });
+    qc.invalidateQueries({ queryKey: ["stack-slides"] });
     qc.invalidateQueries({ queryKey: ["imaging-slides"] });
+    qc.invalidateQueries({ queryKey: ["protocol-checklist"] });
     qc.invalidateQueries({ queryKey: ["sample-timeline"] });
     qc.invalidateQueries({ queryKey: ["extra-slides"] });
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
@@ -106,15 +124,23 @@ export function useActions() {
 
   // Same, for section-request snapshots.
   const recordRestoreSection = useCallback(
-    (label: string, before: SectionRequest, after: SectionRequest) => {
+    (
+      label: string,
+      before: SectionRequest,
+      after: SectionRequest,
+      beforeSlides: Awaited<ReturnType<typeof listSlidesForSectionRequest>>,
+      afterSlides: Awaited<ReturnType<typeof listSlidesForSectionRequest>>,
+    ) => {
       record({
         label,
         undo: async () => {
           await restoreSectionRequest(before);
+          for (const slide of beforeSlides) await restoreSlide(slide);
           invalidate();
         },
         redo: async () => {
           await restoreSectionRequest(after);
+          for (const slide of afterSlides) await restoreSlide(slide);
           invalidate();
         },
       });
@@ -473,6 +499,7 @@ export function useActions() {
     async (sectionId: number, stageKey: string) => {
       const before = await getSectionRequest(sectionId);
       if (!before) return;
+      const beforeSlides = await listSlidesForSectionRequest(sectionId);
       const targetOrder = SECTION_STAGE_ORDER[stageKey] ?? 0;
       const currentOrder = SECTION_STAGE_ORDER[before.current_stage] ?? 0;
       if (
@@ -489,10 +516,13 @@ export function useActions() {
       invalidate();
       const after = await getSectionRequest(sectionId);
       if (after) {
+        const afterSlides = await listSlidesForSectionRequest(sectionId);
         recordRestoreSection(
           `Move section → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
           before,
           after,
+          beforeSlides,
+          afterSlides,
         );
       }
     },
@@ -508,7 +538,20 @@ export function useActions() {
       const before = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
         (s): s is SectionRequest => s !== null,
       );
+      const beforeSlides = (await Promise.all(before.map((section) =>
+        listSlidesForSectionRequest(section.id),
+      ))).flat();
       const targetOrder = SECTION_STAGE_ORDER[stageKey] ?? 0;
+      if (stageKey === "stain_requested") {
+        const incomplete = await Promise.all(before.map(async (section) => {
+          const slides = await listSlidesForSectionRequest(section.id);
+          return slides.some((slide) => slide.assignment_saved === 0) ? section.id : null;
+        }));
+        const incompleteIds = incomplete.filter((id): id is number => id !== null);
+        if (incompleteIds.length > 0) {
+          throw new Error(`Save every slide assignment before starting assays (sections: ${incompleteIds.join(", ")}).`);
+        }
+      }
       for (const section of before) {
         const currentOrder = SECTION_STAGE_ORDER[section.current_stage] ?? 0;
         if (
@@ -527,14 +570,19 @@ export function useActions() {
       const after = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
         (s): s is SectionRequest => s !== null,
       );
+      const afterSlides = (await Promise.all(after.map((section) =>
+        listSlidesForSectionRequest(section.id),
+      ))).flat();
       record({
         label: `Move ${before.length} sections → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
         undo: async () => {
           for (const snapshot of before) await restoreSectionRequest(snapshot);
+          for (const slide of beforeSlides) await restoreSlide(slide);
           invalidate();
         },
         redo: async () => {
           for (const snapshot of after) await restoreSectionRequest(snapshot);
+          for (const slide of afterSlides) await restoreSlide(slide);
           invalidate();
         },
       });
@@ -546,10 +594,14 @@ export function useActions() {
     async (sectionId: number, column: string, value: string | null) => {
       const before = await getSectionRequest(sectionId);
       if (!before) return;
+      const beforeSlides = await listSlidesForSectionRequest(sectionId);
       await setSectionTimestamp(sectionId, column, value);
       invalidate();
       const after = await getSectionRequest(sectionId);
-      if (after) recordRestoreSection("Edit section time", before, after);
+      if (after) {
+        const afterSlides = await listSlidesForSectionRequest(sectionId);
+        recordRestoreSection("Edit section time", before, after, beforeSlides, afterSlides);
+      }
     },
     [invalidate, recordRestoreSection],
   );
@@ -596,27 +648,27 @@ export function useActions() {
       const slideBefore = await getSlide(input.slideId);
       if (!slideBefore) return;
       const formerSectionBefore = await getSectionRequest(slideBefore.section_request_id);
+      const stackBefore = formerSectionBefore
+        ? await getOpenSlideStack(formerSectionBefore.sample_id)
+        : null;
       const result = await assignExtraSlideToAssay(input);
       // Fulfilling a requested stain auto-acknowledges the matching request.
       await acknowledgeRequestsForSlide(input.slideId);
       invalidate();
       const slideAfter = await getSlide(input.slideId);
-      const createdSectionAfter =
-        result.createdSectionId != null ? await getSectionRequest(result.createdSectionId) : null;
+      const stackAfter = await getSlideStack(result.stackId);
       record({
         label: `Assign ${slideBefore.slide_code}`,
         undo: async () => {
-          if (result.formerSectionDeleted && formerSectionBefore) {
-            await reinsertSectionRequest(formerSectionBefore);
-          }
           await restoreSlide(slideBefore);
-          if (result.createdSectionId != null) await deleteSectionRequest(result.createdSectionId);
+          if (result.createdStackId != null) await deleteSlideStackIfEmpty(result.createdStackId);
+          else if (stackBefore) await restoreSlideStack(stackBefore);
           invalidate();
         },
         redo: async () => {
-          if (createdSectionAfter) await reinsertSectionRequest(createdSectionAfter);
+          if (result.createdStackId != null && stackAfter) await reinsertSlideStack(stackAfter);
           if (slideAfter) await restoreSlide(slideAfter);
-          if (result.formerSectionDeleted) await deleteSectionRequest(result.formerSectionId);
+          if (stackAfter) await restoreSlideStack(stackAfter);
           invalidate();
         },
       });
@@ -649,33 +701,224 @@ export function useActions() {
 
   const completeSectionImaging = useCallback(
     async (sectionIds: number[]) => {
+      const before = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
+        (section): section is SectionRequest => section !== null,
+      );
+      const beforeSlides = (await Promise.all(sectionIds.map(listSlidesForSectionRequest))).flat();
       await Promise.all(sectionIds.map((id) => completeSectionImagingDb(id)));
       invalidate();
-    },
-    [invalidate],
-  );
-
-  const removeSection = useCallback(
-    async (sectionId: number) => {
-      const before = await getSectionRequest(sectionId);
-      if (!before) return;
-      const slides = await listSlidesForSectionRequest(sectionId);
-      await deleteSectionRequest(sectionId);
-      invalidate();
+      const after = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
+        (section): section is SectionRequest => section !== null,
+      );
+      const afterSlides = (await Promise.all(sectionIds.map(listSlidesForSectionRequest))).flat();
       record({
-        label: "Delete section",
+        label: `Complete imaging (${sectionIds.length})`,
         undo: async () => {
-          await reinsertSectionRequest(before);
-          for (const slide of slides) await reinsertSlide(slide);
+          for (const section of before) await restoreSectionRequest(section);
+          for (const slide of beforeSlides) await restoreSlide(slide);
           invalidate();
         },
         redo: async () => {
-          await deleteSectionRequest(sectionId);
+          for (const section of after) await restoreSectionRequest(section);
+          for (const slide of afterSlides) await restoreSlide(slide);
           invalidate();
         },
       });
     },
     [invalidate, record],
+  );
+
+  const moveSlideStacks = useCallback(
+    async (stackIds: number[], stageKey: string) => {
+      const before = (await Promise.all(stackIds.map(getSlideStack))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const beforeSlides = (await Promise.all(before.map((stack) => listSlidesForStack(stack.id)))).flat();
+      const targetOrder = SECTION_STAGE_ORDER[stageKey];
+      if (targetOrder === undefined) throw new Error(`Unknown slide-stack stage: ${stageKey}`);
+      for (const stack of before) {
+        if (targetOrder <= (SECTION_STAGE_ORDER[stack.current_stage] ?? -1)) {
+          throw new Error("Slide stacks can only move forward through the workflow.");
+        }
+      }
+      for (const stack of before) await updateSlideStackStage(stack.id, stageKey);
+      invalidate();
+      const after = (await Promise.all(before.map((stack) => getSlideStack(stack.id)))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const afterSlides = (await Promise.all(after.map((stack) => listSlidesForStack(stack.id)))).flat();
+      record({
+        label: `Move ${before.length} slide stack${before.length === 1 ? "" : "s"} → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
+        undo: async () => {
+          for (const slide of beforeSlides) await restoreSlide(slide);
+          for (const stack of before) await restoreSlideStack(stack);
+          invalidate();
+        },
+        redo: async () => {
+          for (const slide of afterSlides) await restoreSlide(slide);
+          for (const stack of after) await restoreSlideStack(stack);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const completeSlideStacksImaging = useCallback(
+    async (stackIds: number[]) => {
+      const before = (await Promise.all(stackIds.map(getSlideStack))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const beforeSlides = (await Promise.all(before.map((stack) => listSlidesForStack(stack.id)))).flat();
+      for (const stack of before) await completeSlideStackImaging(stack.id);
+      invalidate();
+      const after = (await Promise.all(before.map((stack) => getSlideStack(stack.id)))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const afterSlides = (await Promise.all(after.map((stack) => listSlidesForStack(stack.id)))).flat();
+      record({
+        label: `Complete imaging (${before.length} stack${before.length === 1 ? "" : "s"})`,
+        undo: async () => {
+          for (const slide of beforeSlides) await restoreSlide(slide);
+          for (const stack of before) await restoreSlideStack(stack);
+          invalidate();
+        },
+        redo: async () => {
+          for (const slide of afterSlides) await restoreSlide(slide);
+          for (const stack of after) await restoreSlideStack(stack);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const removeSlideStacks = useCallback(
+    async (stackIds: number[]) => {
+      const stacks = (await Promise.all(stackIds.map(getSlideStack))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      if (stacks.length === 0) return;
+      const slides = (await Promise.all(stacks.map((stack) => listSlidesForStack(stack.id)))).flat();
+      const checklistRuns = (await Promise.all(
+        stacks.map((stack) => listChecklistRunsForScope("slide_stack", stack.id)),
+      )).flat();
+      for (const stack of stacks) {
+        await deleteSlidesForStack(stack.id);
+        await deleteSlideStack(stack.id);
+      }
+      invalidate();
+      record({
+        label: `Delete ${stacks.length} slide stack${stacks.length === 1 ? "" : "s"}`,
+        undo: async () => {
+          for (const stack of stacks) await reinsertSlideStack(stack);
+          for (const slide of slides) await reinsertSlide(slide);
+          await reinsertChecklistRuns(checklistRuns);
+          invalidate();
+        },
+        redo: async () => {
+          for (const stack of stacks) {
+            await deleteSlidesForStack(stack.id);
+            await deleteSlideStack(stack.id);
+          }
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const removeSlides = useCallback(
+    async (slideIds: number[]) => {
+      const slides = (await Promise.all(slideIds.map(getSlide))).filter(
+        (slide): slide is Slide => slide !== null,
+      );
+      if (slides.length === 0) return;
+      const stackIds = [...new Set(slides.map((slide) => slide.stack_id).filter((id): id is number => id !== null))];
+      const stackSnapshots = (await Promise.all(stackIds.map(getSlideStack))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const checklistRuns = new Map<number, Awaited<ReturnType<typeof listChecklistRunsForScope>>>();
+      for (const stack of stackSnapshots) {
+        checklistRuns.set(stack.id, await listChecklistRunsForScope("slide_stack", stack.id));
+      }
+      for (const slide of slides) await deleteSlide(slide.id);
+      const deletedStacks: SlideStack[] = [];
+      for (const stack of stackSnapshots) {
+        if (await deleteSlideStackIfEmpty(stack.id)) deletedStacks.push(stack);
+      }
+      invalidate();
+      record({
+        label: `Delete ${slides.length} slide${slides.length === 1 ? "" : "s"}`,
+        undo: async () => {
+          for (const stack of deletedStacks) await reinsertSlideStack(stack);
+          for (const slide of slides) await reinsertSlide(slide);
+          for (const stack of deletedStacks) {
+            await reinsertChecklistRuns(checklistRuns.get(stack.id) ?? []);
+          }
+          for (const stack of stackSnapshots) await restoreSlideStack(stack);
+          invalidate();
+        },
+        redo: async () => {
+          for (const slide of slides) await deleteSlide(slide.id);
+          for (const stack of deletedStacks) await deleteSlideStackIfEmpty(stack.id);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const removeSections = useCallback(
+    async (sectionIds: number[]) => {
+      const before = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
+        (section): section is SectionRequest => section !== null,
+      );
+      if (before.length === 0) return;
+      const slides = (await Promise.all(before.map((section) => listSlidesForSectionRequest(section.id)))).flat();
+      const stackIds = [...new Set(slides.map((slide) => slide.stack_id).filter((id): id is number => id !== null))];
+      const stackSnapshots = (await Promise.all(stackIds.map(getSlideStack))).filter(
+        (stack): stack is SlideStack => stack !== null,
+      );
+      const checklistRuns = new Map<number, Awaited<ReturnType<typeof listChecklistRunsForScope>>>();
+      for (const stack of stackSnapshots) {
+        checklistRuns.set(stack.id, await listChecklistRunsForScope("slide_stack", stack.id));
+      }
+      for (const section of before) await deleteSectionRequest(section.id);
+      const stacks: SlideStack[] = [];
+      for (const stack of stackSnapshots) {
+        if (await deleteSlideStackIfEmpty(stack.id)) stacks.push(stack);
+        else await syncSlideStack(stack.id);
+      }
+      invalidate();
+      record({
+        label: before.length === 1 ? "Delete section" : `Delete ${before.length} cut groups`,
+        undo: async () => {
+          for (const section of before) await reinsertSectionRequest(section);
+          for (const stack of stacks) await reinsertSlideStack(stack);
+          for (const slide of slides) await reinsertSlide(slide);
+          for (const stack of stacks) {
+            await reinsertChecklistRuns(checklistRuns.get(stack.id) ?? []);
+          }
+          for (const stack of stackSnapshots) await restoreSlideStack(stack);
+          invalidate();
+        },
+        redo: async () => {
+          for (const section of before) await deleteSectionRequest(section.id);
+          for (const stack of stackSnapshots) {
+            if (stacks.some((deleted) => deleted.id === stack.id)) await deleteSlideStack(stack.id);
+            else await syncSlideStack(stack.id);
+          }
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  const removeSection = useCallback(
+    (sectionId: number) => removeSections([sectionId]),
+    [removeSections],
   );
 
   const setExhausted = useCallback(
@@ -743,6 +986,7 @@ export function useActions() {
     const cmd = popUndo();
     if (!cmd) return null;
     await cmd.undo();
+    await recordAuditEvent("undo", "undo_command", `Undid: ${cmd.label}`, cmd.label);
     return cmd.label;
   }, [popUndo]);
 
@@ -750,6 +994,7 @@ export function useActions() {
     const cmd = popRedo();
     if (!cmd) return null;
     await cmd.redo();
+    await recordAuditEvent("redo", "undo_command", `Redid: ${cmd.label}`, cmd.label);
     return cmd.label;
   }, [popRedo]);
 
@@ -775,8 +1020,13 @@ export function useActions() {
     assignExtraSlide,
     setSlidePicturesTaken,
     completeSectionImaging,
+    moveSlideStacks,
+    completeSlideStacksImaging,
+    removeSlideStacks,
+    removeSlides,
     editSectionTimestamp,
     removeSection,
+    removeSections,
     markSectionAnalyzed: (sectionId: number) => moveSection(sectionId, "analyzed"),
     setExhausted,
     setExhaustedSamples,
