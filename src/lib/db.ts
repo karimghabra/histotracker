@@ -1158,6 +1158,27 @@ export async function listExtraSlides(): Promise<Slide[]> {
   );
 }
 
+/**
+ * Stain/IHC slides across several sections at once — used by the imaging
+ * checklist so a sample's grouped Ready-for-Imaging sections (e.g. an original
+ * stack plus a separately-stained extra) show a checkbox for every slide
+ * (issue #14), not just the representative section's.
+ */
+export async function listStainSlidesForSections(sectionIds: number[]): Promise<Slide[]> {
+  if (sectionIds.length === 0) return [];
+  const db = await getDb();
+  const placeholders = sectionIds.map(() => "?").join(", ");
+  return db.select<Slide[]>(
+    `SELECT sl.*, sr.depth_um, sr.depth_index, s.sample_code AS parent_code
+       FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+       JOIN samples s ON s.id = sr.sample_id
+      WHERE sl.section_request_id IN (${placeholders}) AND sl.purpose = 'stain'
+      ORDER BY sr.depth_index, sl.slide_ordinal, sl.id`,
+    sectionIds,
+  );
+}
+
 export interface ExtraSlideAssignResult {
   formerSectionId: number;
   targetSectionId: number;

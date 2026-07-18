@@ -107,7 +107,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Risk:** Low. **Test:** harness `issue #7` (calls the real unguarded path on a
   `received` block and asserts zero sections created — fails today).
 
-### #5 — Short/Long runs cannot coincide + board layout · **L** · ◑ overlap guard shipped; board relayout deferred
+### #5 — Short/Long runs cannot coincide + board layout · **L** · ✅ overlap guard + board relayout shipped
 - **Root cause (correctness):** `startProcessingBatch` (`db.ts:471`) has no
   "processor empty" check — any number of overlapping batches can run.
 - **Root cause (layout):** `stages.ts:68-83` lays out Processing and Processor
@@ -301,7 +301,7 @@ A second wave of issues filed after the first pass. Status as of 0.2.5:
 - **#13 — "Start Assays" button label · ✅ fixed.** `SectionDetailsDrawer`
   labels the move "Start Assays / Move to Extras" (or "Move to Extras" when the
   stack is all extras) based on the slide mix.
-- **#14 — Extra slide doesn't merge cleanly in Ready for Imaging · ○ open.**
+- **#14 — Extra slide doesn't merge cleanly in Ready for Imaging · ✅ fixed.**
   When a sample already has a section at `ready_for_imaging` and a separately
   stained extra arrives, the grouped card shows the extra but the imaging
   checklist (derived from one section's slides) doesn't add a checkbox. Needs
@@ -316,7 +316,7 @@ A second wave of issues filed after the first pass. Status as of 0.2.5:
   `selected`; `Board` coordinates single-selection across blocks/sections/
   batches/extras.
 - **#18 — Remove Processor Pickup window, move Embedded Inventory to top-right ·
-  ○ open.** Board relayout — same high-risk surface as #5's deferred layout.
+  ✅ fixed.** Board relayout — same high-risk surface as #5's deferred layout.
   Do the two together with a UI/Playwright check.
 - **#19 — Amber glow for a batch awaiting pickup · ✅ fixed.**
   `ProcessingBatchRow` awaiting-pickup style strengthened to a clear glow.

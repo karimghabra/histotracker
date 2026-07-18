@@ -9,6 +9,7 @@ import {
   listOpenProcessingBatches,
   listOpenSectionRequests,
   listSlidesForSectionRequest,
+  listStainSlidesForSections,
   listSampleTimelineEvents,
   listExtraSlides,
   listAssayCatalog,
@@ -76,6 +77,15 @@ export function useSectionSlides(sectionId: number | null) {
     queryKey: ["section-slides", sectionId],
     queryFn: () => listSlidesForSectionRequest(sectionId as number),
     enabled: sectionId !== null,
+  });
+}
+
+export function useImagingSlides(sectionIds: number[]) {
+  const key = [...sectionIds].sort((a, b) => a - b);
+  return useQuery({
+    queryKey: ["imaging-slides", key],
+    queryFn: () => listStainSlidesForSections(sectionIds),
+    enabled: sectionIds.length > 0,
   });
 }
 

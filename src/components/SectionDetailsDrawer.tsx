@@ -4,7 +4,7 @@ import type { SectionRequest, Slide, SlidePurpose } from "../lib/types";
 import { SECTION_STAGES } from "../lib/stages";
 import { Button } from "./ui";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useSectionSlides } from "../hooks/useData";
+import { useAssayCatalog, useImagingSlides, useSectionSlides } from "../hooks/useData";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { duplicateLabel } from "../lib/utils";
@@ -128,7 +128,6 @@ export function SectionDetailsDrawer({
       : "Start Assay Workflow"
     : "Move to Extras";
   const assaySlides = slides.filter((slide) => slide.purpose === "stain");
-  const imagedSlides = assaySlides.filter((slide) => Boolean(slide.stage_pictures_taken_at));
   const showImagingChecklist = ["ready_for_imaging", "pictures_taken"].includes(section.current_stage);
   const activeSelection = selectedSections.length > 0 ? selectedSections : [section];
   const stainingBatchIds = activeSelection
@@ -140,6 +139,10 @@ export function SectionDetailsDrawer({
   const analysisBatchIds = activeSelection
     .filter((candidate) => candidate.current_stage === "pictures_taken")
     .map((candidate) => candidate.id);
+  // Imaging checkboxes span every grouped Ready-for-Imaging section for this
+  // sample, so a separately-stained extra also gets a checkbox (issue #14).
+  const { data: imagingSlides = [] } = useImagingSlides(showImagingChecklist ? imagingBatchIds : []);
+  const imagedImagingSlides = imagingSlides.filter((slide) => Boolean(slide.stage_pictures_taken_at));
   const dirtyCount = Object.keys(drafts).length;
   const assayTypes = [...new Set(slides.filter((slide) => slide.purpose === "stain").map((slide) => slide.assay_type))]
     .filter((value): value is "stain" | "ihc" => value === "stain" || value === "ihc");
@@ -291,21 +294,21 @@ export function SectionDetailsDrawer({
           </section>
         )}
 
-        {showImagingChecklist && hasAssaySlides && (
+        {showImagingChecklist && imagingSlides.length > 0 && (
           <section className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
                 Imaging checklist
               </h3>
-              <span className={`text-[11px] ${imagedSlides.length === assaySlides.length ? "text-emerald-600" : "text-amber-600"}`}>
-                {imagedSlides.length}/{assaySlides.length} imaged
+              <span className={`text-[11px] ${imagedImagingSlides.length === imagingSlides.length ? "text-emerald-600" : "text-amber-600"}`}>
+                {imagedImagingSlides.length}/{imagingSlides.length} imaged
               </span>
             </div>
             <p className="mb-2 text-[11px] text-ink-faint">
               Mark each stain or IHC slide once its images have been captured.
             </p>
             <div className="space-y-1.5">
-              {assaySlides.map((slide) => {
+              {imagingSlides.map((slide) => {
                 const complete = Boolean(slide.stage_pictures_taken_at);
                 return (
                   <label

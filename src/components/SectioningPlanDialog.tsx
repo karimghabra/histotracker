@@ -28,11 +28,14 @@ function parsePlan(raw: string): Row[] {
 
 export function SectioningPlanDialog({
   sample,
+  batchCount = 1,
   onSave,
   onSend,
   onClose,
 }: {
   sample: Sample;
+  /** When > 1, the same plan is sent to that many selected embedded blocks (#8). */
+  batchCount?: number;
   onSave: (plan: Array<{ depth_um: number; duplicates: number }>) => Promise<void>;
   onSend: (groups: Array<{ depth_um: number; duplicates: number }>) => Promise<void>;
   onClose: () => void;
@@ -157,6 +160,11 @@ export function SectioningPlanDialog({
         )}
       </p>
 
+      {batchCount > 1 && (
+        <p className="mt-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
+          This plan will be sent to all {batchCount} selected embedded blocks.
+        </p>
+      )}
       {!canSend && (
         <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
           Cutting unlocks once this block reaches Embedded Inventory. You can still save the plan now.
@@ -177,6 +185,7 @@ export function SectioningPlanDialog({
           title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
         >
           <Scissors size={14} /> Send {selected.length || ""} to Sectioning
+          {batchCount > 1 ? ` · ${batchCount} blocks` : ""}
         </Button>
       </div>
     </Modal>

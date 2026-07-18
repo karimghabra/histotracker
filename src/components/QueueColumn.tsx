@@ -48,8 +48,6 @@ export function QueueColumn({
         ref={setNodeRef}
         className={cn(
           "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden rounded-lg border border-line bg-surface p-1.5 thin-scroll transition",
-          queue.key === "processor_pickup" && count > 0 &&
-            "border-amber-300/70 shadow-[0_0_10px_rgba(245,158,11,0.16)]",
           isOver && "border-brand/50 bg-brand/5 ring-1 ring-brand/30",
         )}
       >

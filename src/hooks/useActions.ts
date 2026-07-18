@@ -58,6 +58,7 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["open-sections"] });
     qc.invalidateQueries({ queryKey: ["processing-batches"] });
     qc.invalidateQueries({ queryKey: ["section-slides"] });
+    qc.invalidateQueries({ queryKey: ["imaging-slides"] });
     qc.invalidateQueries({ queryKey: ["sample-timeline"] });
     qc.invalidateQueries({ queryKey: ["extra-slides"] });
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
@@ -422,6 +423,52 @@ export function useActions() {
     [invalidate, record],
   );
 
+  // Apply one sectioning plan to several embedded blocks at once (issue #8),
+  // recorded as a single undo entry.
+  const sendSectionsToCuttingForSamples = useCallback(
+    async (
+      sampleIds: number[],
+      groups: Array<{ depth_um: number; duplicates: number; stains?: string }>,
+    ) => {
+      if (sampleIds.length === 0) return 0;
+      if (sampleIds.length === 1) return sendSectionsToCutting(sampleIds[0], groups);
+      const beforeBlocks = (await Promise.all(sampleIds.map(getSample))).filter(
+        (s): s is Sample => s !== null,
+      );
+      const allIds: number[] = [];
+      for (const sampleId of sampleIds) {
+        const ids = await createSectionRequests(sampleId, groups);
+        allIds.push(...ids);
+      }
+      invalidate();
+      const afterBlocks = (await Promise.all(sampleIds.map(getSample))).filter(
+        (s): s is Sample => s !== null,
+      );
+      const created = (await Promise.all(allIds.map((id) => getSectionRequest(id)))).filter(
+        (r): r is SectionRequest => r !== null,
+      );
+      const createdSlides = (
+        await Promise.all(allIds.map((id) => listSlidesForSectionRequest(id)))
+      ).flat();
+      record({
+        label: `Send ${allIds.length} sections to cutting · ${sampleIds.length} blocks`,
+        undo: async () => {
+          for (const id of allIds) await deleteSectionRequest(id);
+          for (const snapshot of beforeBlocks) await restoreSample(snapshot);
+          invalidate();
+        },
+        redo: async () => {
+          for (const snap of created) await reinsertSectionRequest(snap);
+          for (const slide of createdSlides) await reinsertSlide(slide);
+          for (const snapshot of afterBlocks) await restoreSample(snapshot);
+          invalidate();
+        },
+      });
+      return allIds.length;
+    },
+    [invalidate, record, sendSectionsToCutting],
+  );
+
   const moveSection = useCallback(
     async (sectionId: number, stageKey: string) => {
       const before = await getSectionRequest(sectionId);
@@ -721,6 +768,7 @@ export function useActions() {
     createSamples,
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
     sendSectionsToCutting,
+    sendSectionsToCuttingForSamples,
     moveSection,
     moveSections,
     assignSlide,
