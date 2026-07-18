@@ -1,0 +1,28 @@
+name: Workflow tests
+
+# Runs the data-layer workflow harness (scripts/workflow-test.mjs) on every
+# push and pull request. The harness loads the real migrations into in-memory
+# SQLite and asserts the lab-pipeline invariants plus a gate per GitHub issue,
+# so a workflow regression fails here instead of shipping in an installer.
+#
+# No dependency install is needed — the harness uses only Node built-ins
+# (node:sqlite requires Node 22+).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  workflow-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run the workflow harness
+        run: node scripts/workflow-test.mjs
