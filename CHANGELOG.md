@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.5 - 2026-07-18
+
+- Fresh slides saved as "Extra" during assignment no longer appear in the Extra
+  inventory until their cut group leaves the Fresh tab (#12).
+- The assignment button now reads "Start Assays / Move to Extras" (or "Move to
+  Extras" for an all-extras stack), matching what the action actually does (#13).
+- Clicking an extras stack in the inventory now highlights it and clears any
+  other selection (#15).
+- Moving several sections at once now undoes as a single action instead of one
+  slide at a time (#16).
+- Selecting a processing batch now highlights that batch and clears other
+  highlighted tiles (#17).
+- A processing batch awaiting pickup now has a clear amber glow (#19).
+
 ## 0.2.4 - 2026-07-18
 
 - Fixed a regression from 0.2.3 where the processor could refuse to start any

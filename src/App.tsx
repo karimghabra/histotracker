@@ -34,7 +34,7 @@ export default function App() {
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSection, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSections, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -495,9 +495,7 @@ export default function App() {
                 void moveSamples(sampleIds, stageKey).catch((error) => flash(String(error)));
               }}
               onMoveSections={(sectionIds, stageKey) => {
-                void Promise.all(sectionIds.map((id) => moveSection(id, stageKey))).catch((error) =>
-                  flash(String(error)),
-                );
+                void moveSections(sectionIds, stageKey).catch((error) => flash(String(error)));
               }}
               onRequestProcessingBatch={setPendingBatchSampleIds}
               onMoveProcessingBatch={(batchId, stageKey) => {

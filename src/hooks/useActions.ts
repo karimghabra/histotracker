@@ -452,6 +452,49 @@ export function useActions() {
     [invalidate, recordRestoreSection],
   );
 
+  // Move several sections at once as a SINGLE undo entry (issue #16): a batch
+  // move must undo as one action, not one item at a time.
+  const moveSections = useCallback(
+    async (sectionIds: number[], stageKey: string) => {
+      if (sectionIds.length === 0) return;
+      if (sectionIds.length === 1) return moveSection(sectionIds[0], stageKey);
+      const before = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
+        (s): s is SectionRequest => s !== null,
+      );
+      const targetOrder = SECTION_STAGE_ORDER[stageKey] ?? 0;
+      for (const section of before) {
+        const currentOrder = SECTION_STAGE_ORDER[section.current_stage] ?? 0;
+        if (
+          stageKey === "pictures_taken" &&
+          currentOrder < (SECTION_STAGE_ORDER.stained ?? Number.MAX_SAFE_INTEGER)
+        ) {
+          throw new Error("Complete staining before moving slides to pictures or analysis.");
+        }
+      }
+      for (const section of before) {
+        const currentOrder = SECTION_STAGE_ORDER[section.current_stage] ?? 0;
+        if (targetOrder < currentOrder) await revertSectionToStage(section.id, stageKey);
+        else await updateSectionStage(section.id, stageKey);
+      }
+      invalidate();
+      const after = (await Promise.all(sectionIds.map(getSectionRequest))).filter(
+        (s): s is SectionRequest => s !== null,
+      );
+      record({
+        label: `Move ${before.length} sections → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
+        undo: async () => {
+          for (const snapshot of before) await restoreSectionRequest(snapshot);
+          invalidate();
+        },
+        redo: async () => {
+          for (const snapshot of after) await restoreSectionRequest(snapshot);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, moveSection, record],
+  );
+
   const editSectionTimestamp = useCallback(
     async (sectionId: number, column: string, value: string | null) => {
       const before = await getSectionRequest(sectionId);
@@ -679,6 +722,7 @@ export function useActions() {
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
     sendSectionsToCutting,
     moveSection,
+    moveSections,
     assignSlide,
     assignExtraSlide,
     setSlidePicturesTaken,

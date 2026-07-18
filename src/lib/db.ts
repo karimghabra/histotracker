@@ -1149,6 +1149,10 @@ export async function listExtraSlides(): Promise<Slide[]> {
        JOIN projects p ON p.id = s.project_id
       WHERE sl.purpose = 'extra' AND sl.assignment_saved = 1
         AND sl.current_stage = 'extra' AND p.is_active = 1
+        -- Only after the cut group has left the Fresh/assignment tab (issue #12):
+        -- a slide saved as 'extra' during assignment must not surface in the
+        -- inventory until its section is dispositioned onward.
+        AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
       ORDER BY s.is_priority DESC, p.code COLLATE NOCASE, s.project_sample_number,
                sr.depth_index, sl.depth_duplicate_ordinal, sl.id`,
   );

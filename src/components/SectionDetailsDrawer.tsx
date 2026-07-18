@@ -119,6 +119,14 @@ export function SectionDetailsDrawer({
   const showAssignments = ["sectioned", "assignment_required"].includes(section.current_stage);
   const allAssigned = slides.length > 0 && slides.every((slide) => slide.assignment_saved === 1);
   const hasAssaySlides = slides.some((slide) => slide.purpose === "stain");
+  const hasExtras = slides.some((slide) => slide.purpose === "extra");
+  // Button label reflects what the move actually does for this stack (issue #13):
+  // start stain/IHC work, push extras to inventory, or both.
+  const startActionLabel = hasAssaySlides
+    ? hasExtras
+      ? "Start Assays / Move to Extras"
+      : "Start Assay Workflow"
+    : "Move to Extras";
   const assaySlides = slides.filter((slide) => slide.purpose === "stain");
   const imagedSlides = assaySlides.filter((slide) => Boolean(slide.stage_pictures_taken_at));
   const showImagingChecklist = ["ready_for_imaging", "pictures_taken"].includes(section.current_stage);
@@ -426,10 +434,10 @@ export function SectionDetailsDrawer({
             variant="primary"
             className="flex-1"
             disabled={!allAssigned || dirtyCount > 0}
-            title={dirtyCount > 0 || !allAssigned ? "Click Save All to confirm every slide assignment first." : "Start stain/IHC workflow."}
+            title={dirtyCount > 0 || !allAssigned ? "Click Save All to confirm every slide assignment first." : "Start stain/IHC workflow and move any extras to inventory."}
             onClick={() => run(() => moveSection(section.id, "stain_requested"))}
           >
-            Start Assay Workflow <ChevronRight size={15} />
+            {startActionLabel} <ChevronRight size={15} />
           </Button>
         ) : section.current_stage === "stain_requested" ? (
           <Button

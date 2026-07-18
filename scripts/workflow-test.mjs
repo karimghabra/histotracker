@@ -386,6 +386,7 @@ function makeApi(db) {
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
          JOIN samples s ON s.id = sr.sample_id JOIN projects p ON p.id = s.project_id
         WHERE sl.purpose = 'extra' AND sl.assignment_saved = 1 AND sl.current_stage = 'extra' AND p.is_active = 1
+          AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
         ORDER BY sl.id`);
   }
 
@@ -630,6 +631,9 @@ issue(10, "assigning an extra slide leaves no orphaned empty section behind", ()
   api.sectionToAssignment(section);
   const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
   api.assignSlide(slide.id, "extra", "", "");
+  // An all-extras stack leaves the Fresh tab into 'ready_for_imaging' (then
+  // hides from the board); only then is the saved extra offered in inventory.
+  api.run(`UPDATE section_requests SET current_stage = 'ready_for_imaging' WHERE id = ?`, [section]);
   eq(api.listExtraSlides().length, 1, "one extra in inventory");
   // Send that extra to IHC from the inventory.
   api.assignExtraSlideToAssay(slide.id, "ihc", "CD31");
@@ -638,6 +642,24 @@ issue(10, "assigning an extra slide leaves no orphaned empty section behind", ()
     `SELECT COUNT(*) AS c FROM section_requests sr
       WHERE sr.sample_id = ? AND NOT EXISTS (SELECT 1 FROM slides sl WHERE sl.section_request_id = sr.id)`, [id]);
   eq(orphans.c, 0, "an empty, orphaned section was left behind");
+});
+
+// #12 — A slide saved as 'extra' during assignment must NOT appear in the extra
+// inventory while its section is still in the Fresh/assignment tab; it should
+// surface only once the section is dispositioned onward.
+issue(12, "a fresh extra stays out of inventory until its section leaves Fresh", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "fresh extras");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 2 }]);
+  api.sectionToAssignment(section);
+  const slides = api.all(`SELECT * FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`, [section]);
+  api.assignSlide(slides[0].id, "stain", "stain", "H&E");
+  api.assignSlide(slides[1].id, "extra", "", "");
+  eq(api.listExtraSlides().length, 0, "extra hidden while its section is still in Fresh");
+  api.startAssayWork(section); // leaves Fresh into staining
+  eq(api.listExtraSlides().length, 1, "extra appears in inventory once the section moves on");
 });
 
 // ---------------------------------------------------------------------------

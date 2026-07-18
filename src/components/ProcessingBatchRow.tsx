@@ -2,7 +2,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { ChevronDown, ChevronRight, Clock3, FlaskConical } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProcessingBatch } from "../lib/types";
-import { parseTimestamp } from "../lib/utils";
+import { cn, parseTimestamp } from "../lib/utils";
 
 function remaining(batch: ProcessingBatch, now: number): string {
   if (batch.current_stage !== "processing_started") return "";
@@ -18,10 +18,12 @@ function remaining(batch: ProcessingBatch, now: number): string {
 export function ProcessingBatchRow({
   batch,
   overlay = false,
+  selected = false,
   onSelect,
 }: {
   batch: ProcessingBatch;
   overlay?: boolean;
+  selected?: boolean;
   onSelect?: (batchId: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -45,13 +47,17 @@ export function ProcessingBatchRow({
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
       onClick={() => !overlay && onSelect?.(batch.id)}
-      className={`rounded-md border transition ${
+      className={cn(
+        "rounded-md border transition",
         awaitingPickup
-          ? "border-amber-300/70 bg-amber-50/30 shadow-[0_0_7px_rgba(245,158,11,0.13)]"
-          : "border-brand/25 bg-brand/5"
-      } ${
-        overlay ? "cursor-grabbing shadow-lg" : "cursor-grab"
-      } ${isDragging && !overlay ? "opacity-30" : ""}`}
+          // Issue #19: a batch awaiting pickup needs an unmistakable amber glow.
+          ? "border-amber-400 bg-amber-50 shadow-[0_0_16px_rgba(245,158,11,0.55)]"
+          : "border-brand/25 bg-brand/5",
+        // Issue #17: show which batch is selected.
+        selected && "ring-2 ring-brand ring-offset-1",
+        overlay ? "cursor-grabbing shadow-lg" : "cursor-grab",
+        isDragging && !overlay && "opacity-30",
+      )}
     >
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         <button
