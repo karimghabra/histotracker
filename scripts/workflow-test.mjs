@@ -168,12 +168,19 @@ function makeApi(db) {
     );
     if (notReady.length) throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
 
-    // One run at a time: reject a batch that would overlap one still processing.
-    const overlapping = all(
-      `SELECT id FROM processing_batches WHERE status = 'processing' AND (ready_at IS NULL OR ready_at > ?)`,
+    // One run at a time, judged by actual sample state (not the batch status
+    // column, which can go stale/orphaned and wedge the processor).
+    const activeRun = all(
+      `SELECT pb.id
+         FROM processing_batches pb
+         JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+         JOIN samples s ON s.id = pbm.sample_id
+        WHERE s.current_stage = 'processing_started'
+          AND (pb.ready_at IS NULL OR pb.ready_at > ?)
+        LIMIT 1`,
       [startedAt],
     );
-    if (overlapping.length) throw new Error("The processor already has a run in progress.");
+    if (activeRun.length) throw new Error("The processor already has a run in progress.");
 
     const durH = processingType.toLowerCase() === "long" ? 52 : 18;
     const started = new Date(startedAt.replace(" ", "T"));
@@ -521,6 +528,29 @@ issue(5, "cannot start a second batch while the processor is busy", () => {
   try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Long", startedAt: now() }); }
   catch { threw = true; }
   assert(threw, "overlapping processor run should be rejected");
+});
+
+// #5 regression (reported in 0.2.3): a stale/orphaned batch row whose samples
+// have moved off 'processing_started' must NOT block a new run. The old guard
+// keyed off pb.status='processing' and wedged the processor; the sample-based
+// guard must let a fresh batch start.
+issue(5, "a stale 'processing' batch row does not block a new run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "old run", { processingType: "Short" });
+  const b = api.addSample(p, "EE", "new run", { processingType: "Short" });
+  api.completePreprocessing(a.id);
+  api.completePreprocessing(b.id);
+  const batchA = api.startProcessingBatch({ sampleIds: [a.id], processingType: "Short", startedAt: now() });
+  // Simulate the sample advancing out of the processor WITHOUT going through
+  // moveBatch, so pb.status stays 'processing' (the orphaned-row condition).
+  api.run(`UPDATE samples SET current_stage = 'embedded' WHERE id = ?`, [a.id]);
+  eq(api.get(`SELECT status FROM processing_batches WHERE id = ?`, [batchA]).status, "processing",
+     "batch row is still marked processing (stale)");
+  let started = true;
+  try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Short", startedAt: now() }); }
+  catch { started = false; }
+  assert(started, "a new run must start despite the stale batch row");
 });
 
 // #6 — Editing a batch's start time recomputes the ready time and every

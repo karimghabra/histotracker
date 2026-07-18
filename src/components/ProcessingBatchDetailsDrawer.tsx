@@ -62,7 +62,10 @@ export function ProcessingBatchDetailsDrawer({
           <dl className="space-y-1 text-xs">
             <EditableStartRow
               value={batch.started_at}
-              editable={batch.current_stage === "processing_started" && Boolean(onEditStart)}
+              editable={
+                (batch.current_stage === "processing_started" ||
+                  batch.current_stage === "processed") && Boolean(onEditStart)
+              }
               onSave={(next) => onEditStart?.(batch.id, next)}
             />
             <Row label="Expected ready" value={batch.ready_at ?? "—"} />

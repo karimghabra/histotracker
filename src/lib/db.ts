@@ -502,16 +502,24 @@ export async function startProcessingBatch(input: {
     );
   }
 
-  // The processor runs one batch at a time (issue #5). Reject a new run that
-  // would overlap a batch still processing. A run planned to begin after the
-  // current one finishes (started_at >= its ready_at) is allowed. Timestamps
-  // are "YYYY-MM-DD HH:MM", so lexical comparison is chronological.
-  const overlapping = await db.select<Array<{ id: number }>>(
-    `SELECT id FROM processing_batches
-      WHERE status = 'processing' AND (ready_at IS NULL OR ready_at > ?)`,
+  // The processor runs one batch at a time (issue #5). "Busy" is judged from
+  // actual sample state — a run is only in the processor while its samples sit
+  // at 'processing_started' with a window that hasn't ended — NOT from the
+  // batch's status column, which can go stale/orphaned and otherwise wedge the
+  // processor so no new run can start. A run planned to begin after the current
+  // one finishes is allowed. Timestamps are "YYYY-MM-DD HH:MM", so lexical
+  // comparison is chronological.
+  const activeRun = await db.select<Array<{ id: number }>>(
+    `SELECT pb.id
+       FROM processing_batches pb
+       JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE s.current_stage = 'processing_started'
+        AND (pb.ready_at IS NULL OR pb.ready_at > ?)
+      LIMIT 1`,
     [input.startedAt],
   );
-  if (overlapping.length > 0) {
+  if (activeRun.length > 0) {
     throw new Error(
       "The processor already has a run in progress. Move it to Processor Pickup, or plan this run to start after it finishes.",
     );

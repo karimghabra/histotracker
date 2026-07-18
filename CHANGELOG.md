@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 - 2026-07-18
+
+- Fixed a regression from 0.2.3 where the processor could refuse to start any
+  batch at all. The one-run-at-a-time guard now judges "busy" from actual
+  sample state (samples in the processor) rather than the batch status column,
+  which could go stale/orphaned and wedge the processor (#5).
+- The processor start-time editor is now available while a batch is awaiting
+  pickup too, not only while actively processing, so a misinput can still be
+  corrected after the run finishes (#6).
+
 ## 0.2.3 - 2026-07-18
 
 - The processor now runs one batch at a time: starting a run that would overlap
