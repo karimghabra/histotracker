@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6 - 2026-07-18
+
+- Board relayout: the Processor Pickup column is gone; the single Processor
+  window now holds both the running run and the run awaiting pickup (flagged by
+  its amber tile glow), and Embedded Inventory moved up to the top row — four
+  windows on top, four on the bottom (#5, #18).
+- The imaging checklist now shows a checkbox for every stain/IHC slide across a
+  sample's grouped Ready-for-Imaging sections, so a separately-stained extra is
+  no longer missing its checkbox (#14).
+- A sectioning plan can now be sent to several selected embedded blocks at once
+  as a single action (#8).
+
 ## 0.2.5 - 2026-07-18
 
 - Fresh slides saved as "Extra" during assignment no longer appear in the Extra

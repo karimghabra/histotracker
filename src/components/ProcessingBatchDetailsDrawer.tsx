@@ -101,7 +101,7 @@ export function ProcessingBatchDetailsDrawer({
               Moving this batch early will ask for confirmation before skipping the remaining countdown.
             </p>
             <Button variant="primary" className="w-full" onClick={() => onMove(batch.id, "processed")}>
-              Move to Processor Pickup
+              Mark Ready for Pickup
             </Button>
           </>
         ) : (

@@ -409,7 +409,9 @@ export function Board({
       else onMoveSamples(ids, QUEUE_BY_KEY[overId].entryStage);
       setSelectedBlocks(new Set());
     } else if (data.type === "batch") {
-      if (overId !== "processor_pickup" && overId !== "needs_embedding") return;
+      // Pickup was folded into the processor window (#18); a batch now advances
+      // by dragging it to Needs Embedding (or via its drawer).
+      if (overId !== "needs_embedding") return;
       onMoveProcessingBatch(data.batch.id, QUEUE_BY_KEY[overId].entryStage);
     } else {
       if (!SECTION_QUEUE_KEYS.has(overId)) return;
@@ -453,10 +455,11 @@ export function Board({
               <div
                 className="grid h-full min-h-0 gap-2"
                 style={{
-                  minWidth: laneIndex === 1 ? "930px" : "720px",
+                  // Top lane's last column (Embedded Inventory) is the wide one.
+                  minWidth: laneIndex === 0 ? "930px" : "720px",
                   gridTemplateColumns:
-                    laneIndex === 1
-                      ? "1.45fr repeat(4, minmax(0, 1fr))"
+                    laneIndex === 0
+                      ? "repeat(3, minmax(0, 1fr)) 1.45fr"
                       : "repeat(4, minmax(0, 1fr))",
                 }}
               >

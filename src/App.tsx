@@ -212,7 +212,7 @@ export default function App() {
       stageKey === "processed" &&
       batch?.current_stage === "processing_started" &&
       !window.confirm(
-        "This batch is still processing. Are you sure you want to stop waiting and move it to Processor Pickup early?",
+        "This batch is still processing. Are you sure you want to stop waiting and mark it ready for pickup early?",
       )
     ) {
       return;

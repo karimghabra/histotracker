@@ -68,10 +68,11 @@ export interface QueueDef {
 
 export const BOARD_QUEUES: QueueDef[] = [
   { key: "preprocessing", title: "Pre-processing", stages: ["received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol"], entryStage: "in_fixative", lane: 0 },
-  { key: "processing", title: "Processing", stages: ["processing_started"], entryStage: "processing_started", lane: 0 },
-  { key: "processor_pickup", title: "Processor Pickup", stages: ["processed"], entryStage: "processed", lane: 0 },
+  // One processor window holds the running run and the run awaiting pickup
+  // (issues #5, #18); a ready batch is flagged by its own amber tile glow.
+  { key: "processing", title: "Processor", stages: ["processing_started", "processed"], entryStage: "processing_started", lane: 0 },
   { key: "needs_embedding", title: "Needs Embedding", stages: ["needs_embedding"], entryStage: "needs_embedding", lane: 0 },
-  { key: "embedded_inventory", title: "Embedded Inventory", stages: ["embedded"], entryStage: "embedded", lane: 1 },
+  { key: "embedded_inventory", title: "Embedded Inventory", stages: ["embedded"], entryStage: "embedded", lane: 0 },
   { key: "needs_sectioning", title: "Needs Sectioning", stages: ["needs_sectioning"], entryStage: "needs_sectioning", lane: 1 },
   { key: "slide_assignment", title: "Assign Slides", stages: ["assignment_required"], entryStage: "assignment_required", lane: 1 },
   { key: "staining", title: "Staining / IHC", stages: ["sectioned", "stain_requested", "stained", "deparaffinized", "ihc_complete"], entryStage: "stain_requested", lane: 1 },
@@ -79,8 +80,8 @@ export const BOARD_QUEUES: QueueDef[] = [
 ];
 
 export const BOARD_LANES: Array<{ title: string; queues: string[] }> = [
-  { title: "Processing & Embedding", queues: ["preprocessing", "processing", "processor_pickup", "needs_embedding"] },
-  { title: "Embedded Inventory & Analysis", queues: ["embedded_inventory", "needs_sectioning", "slide_assignment", "staining", "analysis_pending"] },
+  { title: "Processing & Embedding", queues: ["preprocessing", "processing", "needs_embedding", "embedded_inventory"] },
+  { title: "Sectioning & Analysis", queues: ["needs_sectioning", "slide_assignment", "staining", "analysis_pending"] },
 ];
 
 export const QUEUE_BY_KEY: Record<string, QueueDef> = Object.fromEntries(
@@ -124,7 +125,6 @@ export const SECTION_STAGE_ORDER: Record<string, number> = Object.fromEntries(
 export const BLOCK_QUEUE_KEYS = new Set([
   "preprocessing",
   "processing",
-  "processor_pickup",
   "needs_embedding",
   "embedded_inventory",
 ]);
