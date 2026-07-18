@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, FlaskConical, X } from "lucide-react";
+import { CheckCircle2, Clock3, FlaskConical, Pencil, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProcessingBatch, Sample } from "../lib/types";
 import { parseTimestamp } from "../lib/utils";
@@ -19,12 +19,15 @@ export function ProcessingBatchDetailsDrawer({
   batch,
   samples,
   onMove,
+  onEditStart,
   width = 320,
   onClose,
 }: {
   batch: ProcessingBatch;
   samples: Sample[];
   onMove: (batchId: number, stageKey: string) => void;
+  /** Correct the batch start time (issue #6); recomputes ready time + members. */
+  onEditStart?: (batchId: number, startedAt: string) => void;
   width?: number;
   onClose: () => void;
 }) {
@@ -57,10 +60,19 @@ export function ProcessingBatchDetailsDrawer({
             <Clock3 size={15} className="text-amber-600" /> {countdown(batch, now)}
           </div>
           <dl className="space-y-1 text-xs">
-            <Row label="Started" value={batch.started_at} />
+            <EditableStartRow
+              value={batch.started_at}
+              editable={
+                (batch.current_stage === "processing_started" ||
+                  batch.current_stage === "processed") && Boolean(onEditStart)
+              }
+              onSave={(next) => onEditStart?.(batch.id, next)}
+            />
             <Row label="Expected ready" value={batch.ready_at ?? "—"} />
             <Row label="Operator" value={batch.operator_name || "—"} />
-            <Row label="Checklist" value={`${batch.checklist_completed}/${batch.checklist_total}`} />
+            {batch.checklist_total > 0 && (
+              <Row label="Checklist" value={`${batch.checklist_completed}/${batch.checklist_total}`} />
+            )}
           </dl>
         </div>
 
@@ -107,6 +119,68 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between gap-3">
       <dt className="text-ink-faint">{label}</dt>
       <dd className="text-right text-ink-soft">{value}</dd>
+    </div>
+  );
+}
+
+function EditableStartRow({
+  value,
+  editable,
+  onSave,
+}: {
+  value: string;
+  editable: boolean;
+  onSave: (next: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  if (!editable) return <Row label="Started" value={value} />;
+  if (editing) {
+    return (
+      <div className="flex items-center justify-between gap-2">
+        <dt className="text-ink-faint">Started</dt>
+        <dd className="flex items-center gap-1">
+          <input
+            type="datetime-local"
+            value={draft}
+            autoFocus
+            onChange={(event) => setDraft(event.target.value)}
+            className="rounded border border-line px-1 py-0.5 text-[11px] outline-none focus:border-brand"
+          />
+          <button
+            onClick={() => {
+              if (draft) onSave(draft.replace("T", " ").slice(0, 16));
+              setEditing(false);
+            }}
+            className="rounded bg-brand px-1.5 py-0.5 text-[11px] text-white"
+          >
+            Set
+          </button>
+          <button
+            onClick={() => setEditing(false)}
+            className="rounded px-1 py-0.5 text-[11px] text-ink-faint hover:bg-black/5"
+          >
+            Cancel
+          </button>
+        </dd>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <dt className="text-ink-faint">Started</dt>
+      <dd>
+        <button
+          onClick={() => {
+            setDraft(value.replace(" ", "T"));
+            setEditing(true);
+          }}
+          className="group inline-flex items-center gap-1 rounded px-1 text-ink-soft hover:bg-black/5 hover:text-ink"
+        >
+          {value}
+          <Pencil size={10} className="opacity-0 group-hover:opacity-60" />
+        </button>
+      </dd>
     </div>
   );
 }

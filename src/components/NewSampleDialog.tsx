@@ -5,6 +5,17 @@ import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
 import type { Project, ProcessingType } from "../lib/types";
 
+/** Expand a single next code ("EE-0022") into a range label for quantity > 1. */
+function codeRange(first: string, quantity: number): string {
+  if (quantity <= 1) return first;
+  const match = first.match(/^(.*-)(\d+)$/);
+  if (!match) return first;
+  const width = match[2].length;
+  const start = Number(match[2]);
+  const last = `${match[1]}${String(start + quantity - 1).padStart(width, "0")}`;
+  return `${first} – ${last}`;
+}
+
 export function NewSampleDialog({
   project,
   onClose,
@@ -12,13 +23,14 @@ export function NewSampleDialog({
   project: Project;
   onClose: () => void;
 }) {
-  const { createSample } = useActions();
+  const { createSamples } = useActions();
   const [saving, setSaving] = useState(false);
   const [previewCode, setPreviewCode] = useState("…");
   const [description, setDescription] = useState("");
   const [fixative, setFixative] = useState(FIXATIVE_OPTIONS[0]);
   const [processing, setProcessing] = useState<ProcessingType>("Short");
   const [needsDecalc, setNeedsDecalc] = useState(false);
+  const [quantity, setQuantity] = useState(1);
   const [stains, setStains] = useState("");
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
@@ -28,9 +40,12 @@ export function NewSampleDialog({
     nextSampleCode(project.id, project.code).then(setPreviewCode);
   }, [project.id, project.code]);
 
+  // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
+  const previewLabel = codeRange(previewCode, quantity);
+
   async function save() {
     setSaving(true);
-    await createSample(
+    await createSamples(
       {
         project_id: project.id,
         sample_description: description,
@@ -43,6 +58,7 @@ export function NewSampleDialog({
         overall_notes: overallNotes,
       },
       project.code,
+      quantity,
     );
     setSaving(false);
     onClose();
@@ -50,9 +66,20 @@ export function NewSampleDialog({
 
   return (
     <Modal title={`New Sample · ${project.code}`} onClose={onClose} width="max-w-lg">
-      <Field label="Next Sample ID">
-        <TextInput value={previewCode} readOnly className="bg-surface font-semibold" />
-      </Field>
+      <div className="grid grid-cols-[1fr_6rem] gap-x-4">
+        <Field label={quantity > 1 ? "Sample IDs" : "Next Sample ID"}>
+          <TextInput value={previewLabel} readOnly className="bg-surface font-semibold" />
+        </Field>
+        <Field label="Quantity">
+          <TextInput
+            type="number"
+            min={1}
+            max={99}
+            value={quantity}
+            onChange={(e) => setQuantity(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+          />
+        </Field>
+      </div>
       <Field label="Description">
         <TextInput
           value={description}
@@ -61,6 +88,11 @@ export function NewSampleDialog({
           placeholder="e.g. 2 week Stretch PLA"
         />
       </Field>
+      {quantity > 1 && (
+        <p className="-mt-2 mb-3 text-xs text-ink-faint">
+          Creates {quantity} samples with identical details, each with its own ID.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-x-4">
         <Field label="Fixative">
           <Select value={fixative} onChange={(e) => setFixative(e.target.value)}>
@@ -105,7 +137,7 @@ export function NewSampleDialog({
           Cancel
         </Button>
         <Button variant="primary" onClick={save} disabled={saving}>
-          Create Sample
+          Create {quantity > 1 ? `${quantity} Samples` : "Sample"}
         </Button>
       </div>
     </Modal>

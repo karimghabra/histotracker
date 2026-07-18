@@ -34,7 +34,7 @@ export default function App() {
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSection, startProcessingBatch, moveProcessingBatch, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSection, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -264,6 +264,9 @@ export default function App() {
       batch={selectedBatch}
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
       onMove={moveBatchWithConfirmation}
+      onEditStart={(batchId, startedAt) =>
+        void editBatchStart(batchId, startedAt).catch((error) => flash(String(error)))
+      }
       width={drawerWidth}
       onClose={() => setSelectedBatchId(null)}
     />

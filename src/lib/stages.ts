@@ -54,7 +54,8 @@ export const BLOCK_TIMELINE_STAGES: StageDef[] = STAGES.filter((s) =>
   BLOCK_TIMELINE_KEYS.includes(s.key),
 );
 
-export const FIXATIVE_OPTIONS = ["PFA", "Z-Fix", "Other"];
+// Z-Fix is used most frequently, so it leads the list and is the dialog default.
+export const FIXATIVE_OPTIONS = ["Z-Fix", "PFA", "Other"];
 export const PROCESSING_OPTIONS: Array<"Short" | "Long"> = ["Short", "Long"];
 
 export interface QueueDef {

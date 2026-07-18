@@ -84,7 +84,8 @@ export function ProcessingBatchRow({
       </div>
       {batch.operator_name && (
         <div className="border-t border-brand/10 px-7 py-1 text-[10px] text-ink-faint">
-          {batch.operator_name} · checklist {batch.checklist_completed}/{batch.checklist_total}
+          {batch.operator_name}
+          {batch.checklist_total > 0 && ` · checklist ${batch.checklist_completed}/${batch.checklist_total}`}
         </div>
       )}
       {expanded && !overlay && (

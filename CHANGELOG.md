@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.2.4 - 2026-07-18
+
+- Fixed a regression from 0.2.3 where the processor could refuse to start any
+  batch at all. The one-run-at-a-time guard now judges "busy" from actual
+  sample state (samples in the processor) rather than the batch status column,
+  which could go stale/orphaned and wedge the processor (#5).
+- The processor start-time editor is now available while a batch is awaiting
+  pickup too, not only while actively processing, so a misinput can still be
+  corrected after the run finishes (#6).
+
+## 0.2.3 - 2026-07-18
+
+- The processor now runs one batch at a time: starting a run that would overlap
+  a batch still processing is rejected (a run planned to begin after the current
+  one finishes is still allowed) (#5).
+- Processing batch start times can be corrected from the batch drawer; the
+  expected-ready time and each sample's start stamp recompute automatically,
+  and the change is undoable (#6).
+- Staining an extra slide now joins the block's existing open stain/IHC section
+  instead of spawning a separate one, so companion slides stay together through
+  imaging (#9).
+- Assigning an extra slide no longer leaves an orphaned, empty section behind,
+  and the assignment is now undoable — fixing extras disappearing from the
+  inventory on undo (#10).
+
+## 0.2.2 - 2026-07-17
+
+- Default the New Sample fixative to Z-Fix, the most frequently used agent (#2).
+- Removed the mandatory processor-load checklist from the batch-start dialog,
+  which the technician can't act on while at the processor (#3).
+- Added a Quantity field to New Sample so multiple samples with identical
+  details can be created at once, each with its own ID, as a single undo (#1).
+- Blocked sending a block to sectioning until it reaches Embedded Inventory,
+  both in the sectioning dialog and at the data layer (#7).
+
 ## 0.2.1 - 2026-07-17
 
 - Fixed a sync failure on the workstation ("TypeError: c.arrayBuffer is not a function") caused by calling the wrong write-excel-file API when building the status workbook. The same fix corrects the manual Excel workbook export.

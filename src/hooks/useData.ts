@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  acknowledgeRequestsForSlide,
   addProject,
   addUser,
   addSample,
@@ -12,7 +11,6 @@ import {
   listSlidesForSectionRequest,
   listSampleTimelineEvents,
   listExtraSlides,
-  assignExtraSlideToAssay,
   listAssayCatalog,
   listProjects,
   listStainRequests,
@@ -91,25 +89,6 @@ export function useSampleTimelineEvents(sampleId: number | null) {
 
 export function useExtraSlides() {
   return useQuery({ queryKey: ["extra-slides"], queryFn: listExtraSlides });
-}
-
-export function useExtraSlideMutations() {
-  const qc = useQueryClient();
-  const assign = useMutation({
-    mutationFn: async (input: { slideId: number; assayType: "stain" | "ihc"; assayName: string }) => {
-      await assignExtraSlideToAssay(input);
-      // Fulfilling a requested stain auto-acknowledges the matching request.
-      await acknowledgeRequestsForSlide(input.slideId);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["extra-slides"] });
-      qc.invalidateQueries({ queryKey: ["open-sections"] });
-      qc.invalidateQueries({ queryKey: ["section-slides"] });
-      qc.invalidateQueries({ queryKey: ["sample-timeline"] });
-      qc.invalidateQueries({ queryKey: ["stain-requests"] });
-    },
-  });
-  return { assign };
 }
 
 export function useOpenSections() {

@@ -502,6 +502,29 @@ export async function startProcessingBatch(input: {
     );
   }
 
+  // The processor runs one batch at a time (issue #5). "Busy" is judged from
+  // actual sample state — a run is only in the processor while its samples sit
+  // at 'processing_started' with a window that hasn't ended — NOT from the
+  // batch's status column, which can go stale/orphaned and otherwise wedge the
+  // processor so no new run can start. A run planned to begin after the current
+  // one finishes is allowed. Timestamps are "YYYY-MM-DD HH:MM", so lexical
+  // comparison is chronological.
+  const activeRun = await db.select<Array<{ id: number }>>(
+    `SELECT pb.id
+       FROM processing_batches pb
+       JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE s.current_stage = 'processing_started'
+        AND (pb.ready_at IS NULL OR pb.ready_at > ?)
+      LIMIT 1`,
+    [input.startedAt],
+  );
+  if (activeRun.length > 0) {
+    throw new Error(
+      "The processor already has a run in progress. Move it to Processor Pickup, or plan this run to start after it finishes.",
+    );
+  }
+
   const started = parseTimestamp(input.startedAt) ?? new Date();
   const readyAt = new Date(
     started.getTime() + processingDurationHours(input.processingType) * 3600_000,
@@ -708,6 +731,36 @@ export async function moveProcessingBatch(batchId: number, stageKey: string): Pr
   }
 }
 
+/**
+ * Correct a processing batch's start time (issue #6). Recomputes the expected
+ * ready time from the protocol duration and rewrites each member's
+ * processing_started_at so the batch, its samples, and the countdown stay
+ * consistent. Only meaningful while the batch is still processing.
+ */
+export async function updateProcessingBatchStart(
+  batchId: number,
+  startedAt: string,
+): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ processing_type: string }>>(
+    `SELECT processing_type FROM processing_batches WHERE id = ?`,
+    [batchId],
+  );
+  const type = rows[0]?.processing_type;
+  if (!type) throw new Error("That processing batch no longer exists.");
+  const started = parseTimestamp(startedAt) ?? new Date();
+  const readyAt = new Date(started.getTime() + processingDurationHours(type) * 3600_000);
+  await db.execute(
+    `UPDATE processing_batches SET started_at = ?, ready_at = ? WHERE id = ?`,
+    [startedAt, formatLocalTimestamp(readyAt), batchId],
+  );
+  await db.execute(
+    `UPDATE samples SET processing_started_at = ?
+      WHERE id IN (SELECT sample_id FROM processing_batch_members WHERE batch_id = ?)`,
+    [startedAt, batchId],
+  );
+}
+
 export async function deleteProcessingBatch(batchId: number): Promise<void> {
   const db = await getDb();
   await db.execute(
@@ -906,6 +959,15 @@ export async function createSectionRequests(
 ): Promise<number[]> {
   if (groups.length === 0) return [];
   const db = await getDb();
+  // A block can only be cut once it has reached Embedded Inventory (issue #7).
+  const sampleRows = await db.select<Array<{ current_stage: string }>>(
+    `SELECT current_stage FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const stage = sampleRows[0]?.current_stage;
+  if (!stage || (STAGE_ORDER[stage] ?? -1) < STAGE_ORDER.embedded) {
+    throw new Error("This block must be embedded before it can be sent to sectioning.");
+  }
   const timestamp = nowTimestamp();
   const ids: number[] = [];
   const existingDepths = await db.select<Array<{ depth_um: number; depth_index: number }>>(
@@ -1092,21 +1154,43 @@ export async function listExtraSlides(): Promise<Slide[]> {
   );
 }
 
+export interface ExtraSlideAssignResult {
+  formerSectionId: number;
+  targetSectionId: number;
+  createdSectionId: number | null;
+  formerSectionDeleted: boolean;
+}
+
+/**
+ * Send an extra slide into stain/IHC work. Rather than always minting a new
+ * cut group (which stranded companions until the imaging stage — issue #9),
+ * the slide joins the block's existing open assay section when there is one:
+ *   - already in an open assay section  -> convert it in place;
+ *   - another open assay section exists  -> re-parent onto it;
+ *   - none                              -> create a new section.
+ * If re-parenting empties the slide's former cut group, that group is removed
+ * so no orphaned, slide-less section is left behind (issue #10). The returned
+ * metadata lets the caller register an undo command.
+ */
 export async function assignExtraSlideToAssay(input: {
   slideId: number;
   assayType: "stain" | "ihc";
   assayName: string;
-}): Promise<void> {
+}): Promise<ExtraSlideAssignResult> {
   const db = await getDb();
   const timestamp = nowTimestamp();
+  const assayName = input.assayName.trim();
   const rows = await db.select<Array<{
     section_request_id: number;
+    section_stage: string;
     sample_id: number;
+    slide_ordinal: number;
     slide_code: string;
     depth_um: number;
     depth_index: number;
   }>>(
-    `SELECT sl.section_request_id, sr.sample_id, sl.slide_code, sr.depth_um, sr.depth_index
+    `SELECT sl.section_request_id, sr.current_stage AS section_stage, sr.sample_id,
+            sl.slide_ordinal, sl.slide_code, sr.depth_um, sr.depth_index
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`,
     [input.slideId],
@@ -1115,34 +1199,77 @@ export async function assignExtraSlideToAssay(input: {
   if (!slide) throw new Error("That extra slide is no longer available.");
   const catalog = await db.select<Array<{ id: number }>>(
     `SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`,
-    [input.assayType, input.assayName.trim()],
+    [input.assayType, assayName],
   );
   if (!catalog.length) throw new Error("Choose an active stain or IHC agent from the catalog.");
-  const request = await db.execute(
-    `INSERT INTO section_requests
-      (sample_id, depth_um, depth_index, duplicates, stains, current_stage,
-       stage_sectioned_at, stage_assignment_required_at, stage_stain_requested_at)
-     VALUES (?, ?, ?, 1, ?, 'stain_requested', ?, ?, ?)`,
-    [slide.sample_id, slide.depth_um, slide.depth_index, input.assayName.trim(), timestamp, timestamp, timestamp],
-  );
-  const assayRequestId = request.lastInsertId;
-  if (!assayRequestId) throw new Error("Could not create assay work for that slide.");
+
+  const formerSectionId = slide.section_request_id;
+  let targetSectionId: number;
+  let createdSectionId: number | null = null;
+  let slideOrdinal = 1;
+
+  if (slide.section_stage === "stain_requested") {
+    // The slide already sits in an open assay section for this block — convert
+    // it in place, keeping its ordinal, so companions stay on one card.
+    targetSectionId = formerSectionId;
+    slideOrdinal = slide.slide_ordinal;
+  } else {
+    const existing = await db.select<Array<{ id: number; next_ordinal: number }>>(
+      `SELECT sr.id, COALESCE(MAX(sl.slide_ordinal), 0) + 1 AS next_ordinal
+         FROM section_requests sr LEFT JOIN slides sl ON sl.section_request_id = sr.id
+        WHERE sr.sample_id = ? AND sr.id != ? AND sr.current_stage = 'stain_requested'
+        GROUP BY sr.id
+        ORDER BY sr.id DESC LIMIT 1`,
+      [slide.sample_id, formerSectionId],
+    );
+    if (existing.length > 0) {
+      targetSectionId = existing[0].id;
+      slideOrdinal = existing[0].next_ordinal;
+    } else {
+      const request = await db.execute(
+        `INSERT INTO section_requests
+          (sample_id, depth_um, depth_index, duplicates, stains, current_stage,
+           stage_sectioned_at, stage_assignment_required_at, stage_stain_requested_at)
+         VALUES (?, ?, ?, 1, ?, 'stain_requested', ?, ?, ?)`,
+        [slide.sample_id, slide.depth_um, slide.depth_index, assayName, timestamp, timestamp, timestamp],
+      );
+      if (!request.lastInsertId) throw new Error("Could not create assay work for that slide.");
+      targetSectionId = request.lastInsertId;
+      createdSectionId = targetSectionId;
+    }
+  }
+
   await db.execute(
     `UPDATE slides
-        SET section_request_id = ?, slide_ordinal = 1,
+        SET section_request_id = ?, slide_ordinal = ?,
             purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
             current_stage = 'stain_requested', assignment_saved = 1,
             stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
       WHERE id = ?`,
-    [assayRequestId, input.assayType, input.assayName.trim(), input.assayName.trim(), timestamp, input.slideId],
+    [targetSectionId, slideOrdinal, input.assayType, assayName, assayName, timestamp, input.slideId],
   );
+
+  let formerSectionDeleted = false;
+  if (targetSectionId !== formerSectionId) {
+    const remaining = await db.select<Array<{ c: number }>>(
+      `SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`,
+      [formerSectionId],
+    );
+    if ((remaining[0]?.c ?? 0) === 0) {
+      await deleteSectionRequest(formerSectionId);
+      formerSectionDeleted = true;
+    }
+  }
+
   await db.execute(
     `INSERT INTO sample_timeline_events
       (sample_id, user_id, event_type, summary, created_at)
      VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
              'extra_slide_assigned', ?, ?)`,
-    [slide.sample_id, `${slide.slide_code} assigned to ${input.assayType === "ihc" ? "IHC" : "stain"}: ${input.assayName.trim()}`, timestamp],
+    [slide.sample_id, `${slide.slide_code} assigned to ${input.assayType === "ihc" ? "IHC" : "stain"}: ${assayName}`, timestamp],
   );
+
+  return { formerSectionId, targetSectionId, createdSectionId, formerSectionDeleted };
 }
 
 export async function getSlide(id: number): Promise<Slide | null> {
@@ -1416,6 +1543,25 @@ export async function reinsertSlide(snapshot: Slide): Promise<void> {
     `INSERT INTO slides (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
     values,
   );
+}
+
+// Mutable slide columns a snapshot restore may overwrite (everything but id
+// and created_at). Used to undo extra-slide assignment.
+const SLIDE_RESTORE_COLUMNS = [
+  "section_request_id", "slide_ordinal", "depth_duplicate_ordinal", "slide_code",
+  "purpose", "stain_name", "slice_count", "control_agent", "assay_type", "assay_name",
+  "assignment_saved", "current_stage", "stage_cut_at", "stage_stain_requested_at",
+  "stage_staining_started_at", "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at",
+  "stage_dried_at", "stage_ready_for_imaging_at", "stage_pictures_taken_at",
+  "stage_analyzed_at", "location", "notes",
+] as const;
+
+/** Restore a previously captured slide snapshot (for undo of assignment). */
+export async function restoreSlide(snapshot: Slide): Promise<void> {
+  const db = await getDb();
+  const assignments = SLIDE_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
+  const values = SLIDE_RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
+  await db.execute(`UPDATE slides SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
 }
 
 export async function restoreSectionRequest(snapshot: SectionRequest): Promise<void> {
