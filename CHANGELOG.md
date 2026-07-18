@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.3 - 2026-07-18
+
+- The processor now runs one batch at a time: starting a run that would overlap
+  a batch still processing is rejected (a run planned to begin after the current
+  one finishes is still allowed) (#5).
+- Processing batch start times can be corrected from the batch drawer; the
+  expected-ready time and each sample's start stamp recompute automatically,
+  and the change is undoable (#6).
+- Staining an extra slide now joins the block's existing open stain/IHC section
+  instead of spawning a separate one, so companion slides stay together through
+  imaging (#9).
+- Assigning an extra slide no longer leaves an orphaned, empty section behind,
+  and the assignment is now undoable — fixing extras disappearing from the
+  inventory on undo (#10).
+
 ## 0.2.2 - 2026-07-17
 
 - Default the New Sample fixative to Z-Fix, the most frequently used agent (#2).

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, CheckCircle2, Star, X } from "lucide-react";
 import type { Slide } from "../lib/types";
-import { useAssayCatalog, useExtraSlideMutations } from "../hooks/useData";
+import { useAssayCatalog } from "../hooks/useData";
+import { useActions } from "../hooks/useActions";
 import { Button } from "./ui";
 
 type AssaySelection = `${"stain" | "ihc"}:${string}`;
@@ -16,10 +17,11 @@ export function ExtraSlideDetailsDrawer({
   onClose: () => void;
 }) {
   const { data: catalog = [] } = useAssayCatalog();
-  const { assign } = useExtraSlideMutations();
+  const { assignExtraSlide } = useActions();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [assays, setAssays] = useState<Record<number, AssaySelection | "">>({});
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const parentCode = slides[0]?.parent_code ?? "Extra slides";
   const description = slides[0]?.sample_description ?? "";
   const projectCode = slides[0]?.project_code ?? "";
@@ -37,10 +39,11 @@ export function ExtraSlideDetailsDrawer({
   async function assignSelected() {
     if (!readyToAssign) return;
     setError(null);
+    setBusy(true);
     try {
       for (const slide of selectedSlides) {
         const [assayType, ...nameParts] = assays[slide.id].split(":");
-        await assign.mutateAsync({
+        await assignExtraSlide({
           slideId: slide.id,
           assayType: assayType as "stain" | "ihc",
           assayName: nameParts.join(":"),
@@ -50,6 +53,8 @@ export function ExtraSlideDetailsDrawer({
       setAssays({});
     } catch (cause) {
       setError(String(cause));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -149,7 +154,7 @@ export function ExtraSlideDetailsDrawer({
         <Button
           variant="primary"
           className="w-full"
-          disabled={!readyToAssign || assign.isPending}
+          disabled={!readyToAssign || busy}
           onClick={() => void assignSelected()}
         >
           <CheckCircle2 size={15} />

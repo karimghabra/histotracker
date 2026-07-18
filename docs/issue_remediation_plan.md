@@ -72,7 +72,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Test:** harness `issue #1` already proves the data layer stores N identical
   descriptions with distinct codes; add a UI test for the quantity field.
 
-### #6 — Allow processor timings to be edited · **M**
+### #6 — Allow processor timings to be edited · **M** · ✅ fixed (pending QA)
 - **Root cause:** A batch's `started_at`/`ready_at` are fixed at start
   (`db.ts:511-522`). The block's `processing_started_at` is editable via the
   sample timeline (`stages.ts:43-52` includes `processing_started`), but editing
@@ -107,7 +107,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Risk:** Low. **Test:** harness `issue #7` (calls the real unguarded path on a
   `received` block and asserts zero sections created — fails today).
 
-### #5 — Short/Long runs cannot coincide + board layout · **L**
+### #5 — Short/Long runs cannot coincide + board layout · **L** · ◑ overlap guard shipped; board relayout deferred
 - **Root cause (correctness):** `startProcessingBatch` (`db.ts:471`) has no
   "processor empty" check — any number of overlapping batches can run.
 - **Root cause (layout):** `stages.ts:68-83` lays out Processing and Processor
@@ -133,7 +133,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 
 ## Phase 3 — Extras / staining correctness (shared code path)
 
-### #9 — Extra slides getting stained don't merge cleanly · **L**
+### #9 — Extra slides getting stained don't merge cleanly · **L** · ✅ fixed (pending QA)
 - **Root cause:** `assignExtraSlideToAssay` (`db.ts:1095-1146`) always **mints a
   brand-new `section_request`** for the slide instead of joining the sample's
   existing open assay section. The staining lane groups by `sample_id`
@@ -152,7 +152,7 @@ Phases 3 and 5 change data semantics — land the harness gates for them first.
 - **Test:** harness `issue #9` (asserts exactly one open assay section for the
   sample after staining an extra — currently 2).
 
-### #10 — Undo/redo depopulates the extra-slide inventory · **M–L**
+### #10 — Undo/redo depopulates the extra-slide inventory · **M–L** · ✅ fixed (pending QA)
 - **Root cause (data):** The extra-slide assignment path has **no undo
   command** — `useExtraSlideMutations.assign` (`useData.ts:98-111`) invalidates
   queries but never calls `record(...)`, unlike every mutation in `useActions`.

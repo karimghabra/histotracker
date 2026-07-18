@@ -152,9 +152,9 @@ function makeApi(db) {
     run(`UPDATE samples SET ethanol_placed_at = ?, current_stage = 'in_ethanol' WHERE id = ?`, [now(), sampleId]);
   }
 
-  // Port of startProcessingBatch() — src/lib/db.ts. `guardEmptyProcessor`
-  // reflects the *desired* fix for issue #5 (off by default = current behaviour).
-  function startProcessingBatch({ sampleIds, processingType, startedAt, guardEmptyProcessor = false }) {
+  // Port of startProcessingBatch() — src/lib/db.ts, including the single-run
+  // processor guard (issue #5).
+  function startProcessingBatch({ sampleIds, processingType, startedAt }) {
     if (sampleIds.length === 0) throw new Error("Select at least one sample.");
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
@@ -168,10 +168,12 @@ function makeApi(db) {
     );
     if (notReady.length) throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
 
-    if (guardEmptyProcessor) {
-      const busy = get(`SELECT COUNT(*) AS c FROM processing_batches WHERE status = 'processing'`);
-      if (busy.c > 0) throw new Error("The processor already has a run in progress.");
-    }
+    // One run at a time: reject a batch that would overlap one still processing.
+    const overlapping = all(
+      `SELECT id FROM processing_batches WHERE status = 'processing' AND (ready_at IS NULL OR ready_at > ?)`,
+      [startedAt],
+    );
+    if (overlapping.length) throw new Error("The processor already has a run in progress.");
 
     const durH = processingType.toLowerCase() === "long" ? 52 : 18;
     const started = new Date(startedAt.replace(" ", "T"));
@@ -301,30 +303,73 @@ function makeApi(db) {
     run(`UPDATE section_requests SET current_stage = 'stain_requested', stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?) WHERE id = ?`, [ts, sectionId]);
   }
 
-  // Port of assignExtraSlideToAssay() — src/lib/db.ts. This is the code path
-  // exercised by issue #9: it always MINTS A NEW section_request for the slide.
+  // Port of assignExtraSlideToAssay() — src/lib/db.ts. Joins the block's open
+  // assay section when there is one (issue #9) and never leaves an orphaned,
+  // slide-less section behind (issue #10).
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
     const ts = now();
     const slide = get(
-      `SELECT sl.section_request_id, sr.sample_id, sl.slide_code, sr.depth_um, sr.depth_index
+      `SELECT sl.section_request_id, sr.current_stage AS section_stage, sr.sample_id,
+              sl.slide_ordinal, sl.slide_code, sr.depth_um, sr.depth_index
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [slideId]);
     if (!slide) throw new Error("That extra slide is no longer available.");
     const cat = get(`SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`, [assayType, assayName]);
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
-    const r = run(
-      `INSERT INTO section_requests (sample_id, depth_um, depth_index, duplicates, stains, current_stage,
-         stage_sectioned_at, stage_assignment_required_at, stage_stain_requested_at)
-       VALUES (?, ?, ?, 1, ?, 'stain_requested', ?, ?, ?)`,
-      [slide.sample_id, slide.depth_um, slide.depth_index, assayName, ts, ts, ts]);
-    const newSection = Number(r.lastInsertRowid);
+
+    const formerSectionId = slide.section_request_id;
+    let targetSectionId;
+    let createdSectionId = null;
+    let slideOrdinal = 1;
+    if (slide.section_stage === "stain_requested") {
+      targetSectionId = formerSectionId;
+      slideOrdinal = slide.slide_ordinal;
+    } else {
+      const existing = get(
+        `SELECT sr.id, COALESCE(MAX(sl.slide_ordinal), 0) + 1 AS next_ordinal
+           FROM section_requests sr LEFT JOIN slides sl ON sl.section_request_id = sr.id
+          WHERE sr.sample_id = ? AND sr.id != ? AND sr.current_stage = 'stain_requested'
+          GROUP BY sr.id ORDER BY sr.id DESC LIMIT 1`, [slide.sample_id, formerSectionId]);
+      if (existing) {
+        targetSectionId = existing.id;
+        slideOrdinal = existing.next_ordinal;
+      } else {
+        const r = run(
+          `INSERT INTO section_requests (sample_id, depth_um, depth_index, duplicates, stains, current_stage,
+             stage_sectioned_at, stage_assignment_required_at, stage_stain_requested_at)
+           VALUES (?, ?, ?, 1, ?, 'stain_requested', ?, ?, ?)`,
+          [slide.sample_id, slide.depth_um, slide.depth_index, assayName, ts, ts, ts]);
+        targetSectionId = Number(r.lastInsertRowid);
+        createdSectionId = targetSectionId;
+      }
+    }
     run(
-      `UPDATE slides SET section_request_id = ?, slide_ordinal = 1, purpose = 'stain',
+      `UPDATE slides SET section_request_id = ?, slide_ordinal = ?, purpose = 'stain',
              assay_type = ?, assay_name = ?, stain_name = ?, current_stage = 'stain_requested',
              assignment_saved = 1, stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
         WHERE id = ?`,
-      [newSection, assayType, assayName, assayName, ts, slideId]);
-    return newSection;
+      [targetSectionId, slideOrdinal, assayType, assayName, assayName, ts, slideId]);
+    let formerSectionDeleted = false;
+    if (targetSectionId !== formerSectionId) {
+      const remaining = get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`, [formerSectionId]);
+      if (remaining.c === 0) {
+        run(`DELETE FROM section_requests WHERE id = ?`, [formerSectionId]);
+        formerSectionDeleted = true;
+      }
+    }
+    return { formerSectionId, targetSectionId, createdSectionId, formerSectionDeleted };
+  }
+
+  // Port of updateProcessingBatchStart() — src/lib/db.ts (issue #6).
+  function updateProcessingBatchStart(batchId, startedAt) {
+    const type = get(`SELECT processing_type FROM processing_batches WHERE id = ?`, [batchId]).processing_type;
+    const durH = type.toLowerCase() === "long" ? 52 : 18;
+    const started = new Date(startedAt.replace(" ", "T"));
+    const readyAt = new Date(started.getTime() + durH * 3600_000);
+    const readyStr = `${readyAt.getFullYear()}-${pad(readyAt.getMonth() + 1)}-${pad(readyAt.getDate())} ${pad(readyAt.getHours())}:${pad(readyAt.getMinutes())}`;
+    run(`UPDATE processing_batches SET started_at = ?, ready_at = ? WHERE id = ?`, [startedAt, readyStr, batchId]);
+    run(`UPDATE samples SET processing_started_at = ? WHERE id IN (SELECT sample_id FROM processing_batch_members WHERE batch_id = ?)`, [startedAt, batchId]);
+    return readyStr;
   }
 
   // The Extra Slides inventory query — src/lib/db.ts listExtraSlides().
@@ -342,6 +387,7 @@ function makeApi(db) {
     seedProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
+    updateProcessingBatchStart,
   };
 }
 
@@ -475,7 +521,23 @@ issue(5, "cannot start a second batch while the processor is busy", () => {
   try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Long", startedAt: now() }); }
   catch { threw = true; }
   assert(threw, "overlapping processor run should be rejected");
-}, { knownOpen: true });
+});
+
+// #6 — Editing a batch's start time recomputes the ready time and every
+// member's processing_started_at so batch and samples stay consistent.
+issue(6, "editing a batch start time recomputes ready time and member timestamps", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const s = api.addSample(p, "EE", "timing", { processingType: "Short" });
+  api.completePreprocessing(s.id);
+  const batch = api.startProcessingBatch({ sampleIds: [s.id], processingType: "Short", startedAt: "2026-02-01 09:00" });
+  api.updateProcessingBatchStart(batch, "2026-02-01 06:00");
+  const row = api.get(`SELECT started_at, ready_at FROM processing_batches WHERE id = ?`, [batch]);
+  eq(row.started_at, "2026-02-01 06:00", "batch start corrected");
+  eq(row.ready_at, "2026-02-02 00:00", "ready recomputed (+18h Short run)");
+  eq(api.get(`SELECT processing_started_at FROM samples WHERE id = ?`, [s.id]).processing_started_at,
+     "2026-02-01 06:00", "member processing_started_at follows");
+});
 
 // #7 — Sections must not be cuttable before the block is embedded. We call the
 // REAL (unguarded) createSectionRequests port on a 'received' block; today it
@@ -519,7 +581,7 @@ issue(9, "staining an extra slide joins the sample's existing assay section", ()
       WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sr.current_stage = 'stain_requested'
       GROUP BY sr.id`, [id]);
   eq(openSections.length, 1, "extra slide should merge into the existing assay section, not spawn a second");
-}, { knownOpen: true });
+});
 
 // #10 — Undo/redo erroneously depopulates the extra-slide inventory. The
 // concrete data defect underlying the symptom: assigning a lone extra slide to
@@ -546,7 +608,7 @@ issue(10, "assigning an extra slide leaves no orphaned empty section behind", ()
     `SELECT COUNT(*) AS c FROM section_requests sr
       WHERE sr.sample_id = ? AND NOT EXISTS (SELECT 1 FROM slides sl WHERE sl.section_request_id = sr.id)`, [id]);
   eq(orphans.c, 0, "an empty, orphaned section was left behind");
-}, { knownOpen: true });
+});
 
 // ---------------------------------------------------------------------------
 // Report

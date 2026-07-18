@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import {
   acknowledgeRequestsForSlide,
   addSample,
+  assignExtraSlideToAssay,
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
   deleteSample,
@@ -19,6 +20,8 @@ import {
   reinsertSlide,
   restoreSample,
   restoreSectionRequest,
+  restoreSlide,
+  updateProcessingBatchStart,
   revertSectionToStage,
   revertToStage,
   setBlockExhausted,
@@ -232,6 +235,30 @@ export function useActions() {
         },
         redo: async () => {
           for (const snapshot of after) await restoreSample(snapshot);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  // Correct a processing batch's start time; undo restores the previous time
+  // (members share it, so re-applying recomputes ready_at both ways). Issue #6.
+  const editBatchStart = useCallback(
+    async (batchId: number, startedAt: string) => {
+      const members = await getProcessingBatchSamples(batchId);
+      const oldStart = members[0]?.processing_started_at ?? null;
+      await updateProcessingBatchStart(batchId, startedAt);
+      invalidate();
+      if (!oldStart) return;
+      record({
+        label: "Edit processing start time",
+        undo: async () => {
+          await updateProcessingBatchStart(batchId, oldStart);
+          invalidate();
+        },
+        redo: async () => {
+          await updateProcessingBatchStart(batchId, startedAt);
           invalidate();
         },
       });
@@ -472,6 +499,41 @@ export function useActions() {
     [invalidate, record],
   );
 
+  // Assign an extra slide from inventory to stain/IHC work. Undo reverses the
+  // slide move plus any section create/delete the merge performed (issue #10).
+  const assignExtraSlide = useCallback(
+    async (input: { slideId: number; assayType: "stain" | "ihc"; assayName: string }) => {
+      const slideBefore = await getSlide(input.slideId);
+      if (!slideBefore) return;
+      const formerSectionBefore = await getSectionRequest(slideBefore.section_request_id);
+      const result = await assignExtraSlideToAssay(input);
+      // Fulfilling a requested stain auto-acknowledges the matching request.
+      await acknowledgeRequestsForSlide(input.slideId);
+      invalidate();
+      const slideAfter = await getSlide(input.slideId);
+      const createdSectionAfter =
+        result.createdSectionId != null ? await getSectionRequest(result.createdSectionId) : null;
+      record({
+        label: `Assign ${slideBefore.slide_code}`,
+        undo: async () => {
+          if (result.formerSectionDeleted && formerSectionBefore) {
+            await reinsertSectionRequest(formerSectionBefore);
+          }
+          await restoreSlide(slideBefore);
+          if (result.createdSectionId != null) await deleteSectionRequest(result.createdSectionId);
+          invalidate();
+        },
+        redo: async () => {
+          if (createdSectionAfter) await reinsertSectionRequest(createdSectionAfter);
+          if (slideAfter) await restoreSlide(slideAfter);
+          if (result.formerSectionDeleted) await deleteSectionRequest(result.formerSectionId);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
   const setSlidePicturesTaken = useCallback(
     async (slideId: number, complete: boolean) => {
       const before = await getSlide(slideId);
@@ -606,6 +668,7 @@ export function useActions() {
     moveSamples,
     startProcessingBatch,
     moveProcessingBatch,
+    editBatchStart,
     editTimestamp,
     saveDetails,
     saveSectioningPlan,
@@ -617,6 +680,7 @@ export function useActions() {
     sendSectionsToCutting,
     moveSection,
     assignSlide,
+    assignExtraSlide,
     setSlidePicturesTaken,
     completeSectionImaging,
     editSectionTimestamp,
