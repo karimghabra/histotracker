@@ -35,9 +35,11 @@ export function groupExtraSlides(slides: Slide[]): ExtraSlideGroup[] {
 export function ExtraSlideInventory({
   slides,
   onSelectSample,
+  selectedSampleId = null,
 }: {
   slides: Slide[];
   onSelectSample: (sampleId: number) => void;
+  selectedSampleId?: number | null;
 }) {
   const [search, setSearch] = useState("");
   const groups = useMemo(() => groupExtraSlides(slides), [slides]);
@@ -69,7 +71,11 @@ export function ExtraSlideInventory({
             type="button"
             key={group.sampleId}
             onClick={() => onSelectSample(group.sampleId)}
-            className="group flex w-full items-center gap-2 rounded-md border border-line bg-white px-2 py-1.5 text-left transition hover:border-brand/40"
+            className={`group flex w-full items-center gap-2 rounded-md border bg-white px-2 py-1.5 text-left transition hover:border-brand/40 ${
+              selectedSampleId === group.sampleId
+                ? "border-brand ring-2 ring-brand ring-offset-1"
+                : "border-line"
+            }`}
           >
             <Archive size={13} className="shrink-0 text-ink-faint" />
             <span className="shrink-0 text-xs font-semibold text-ink">{group.parentCode}</span>

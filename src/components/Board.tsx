@@ -135,6 +135,10 @@ export function Board({
   const [active, setActive] = useState<ActiveDrag>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<number>>(new Set());
   const [selectedSections, setSelectedSections] = useState<Set<number>>(new Set());
+  // Selection highlight for the non-card items (issues #15, #17): only one of
+  // block / section / batch / extras-stack is highlighted at a time.
+  const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
+  const [selectedExtraSample, setSelectedExtraSample] = useState<number | null>(null);
   const blockAnchor = useRef<number | null>(null);
   const sectionAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
@@ -153,10 +157,21 @@ export function Board({
       if (event.key !== "Escape") return;
       setSelectedBlocks(new Set());
       setSelectedSections(new Set());
+      setSelectedBatch(null);
+      setSelectedExtraSample(null);
     };
     window.addEventListener("keydown", clear);
     return () => window.removeEventListener("keydown", clear);
   }, []);
+
+  // Selecting any block or section clears the batch / extras-stack highlight so
+  // only one thing is ever highlighted (issues #15, #17).
+  useEffect(() => {
+    if (selectedBlocks.size > 0 || selectedSections.size > 0) {
+      setSelectedBatch(null);
+      setSelectedExtraSample(null);
+    }
+  }, [selectedBlocks, selectedSections]);
 
   useEffect(() => {
     onSampleSelectionChange([...selectedBlocks]);
@@ -253,6 +268,24 @@ export function Board({
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  }
+
+  // Clicking a processing batch (#17) or an extras stack (#15) highlights that
+  // item and clears every other selection.
+  function handleSelectBatch(id: number) {
+    setSelectedBlocks(new Set());
+    setSelectedSections(new Set());
+    setSelectedExtraSample(null);
+    setSelectedBatch(id);
+    onSelectProcessingBatch(id);
+  }
+
+  function handleSelectExtraSample(id: number) {
+    setSelectedBlocks(new Set());
+    setSelectedSections(new Set());
+    setSelectedBatch(null);
+    setSelectedExtraSample(id);
+    onSelectExtraSlideSample(id);
   }
 
   function selectBlock(id: number, event: MouseEvent<HTMLDivElement>) {
@@ -500,7 +533,8 @@ export function Board({
                         {showingInventory ? (
                           <ExtraSlideInventory
                             slides={displayedExtraSlides}
-                            onSelectSample={onSelectExtraSlideSample}
+                            onSelectSample={handleSelectExtraSample}
+                            selectedSampleId={selectedExtraSample}
                           />
                         ) : groups.map((group) => (
                           <SectionCard
@@ -575,7 +609,8 @@ export function Board({
                         <ProcessingBatchRow
                           key={batch.id}
                           batch={batch}
-                          onSelect={onSelectProcessingBatch}
+                          selected={selectedBatch === batch.id}
+                          onSelect={handleSelectBatch}
                         />
                       ))}
                       {items.map((sample) => (

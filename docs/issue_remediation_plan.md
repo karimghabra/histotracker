@@ -287,3 +287,41 @@ so the schema is the wire format. #4 and #11 add columns/tables — when they sh
 **every** workstation and viewer must run the matching build, and the version
 must bump. Additive migrations are safe; destructive ones are not. Non-schema UI
 changes (#1, #2, #3, #7 UI, #8) are always compatible.
+
+---
+
+## Follow-up issues (#12–#19)
+
+A second wave of issues filed after the first pass. Status as of 0.2.5:
+
+- **#12 — Fresh extras surface in inventory too early · ✅ fixed.**
+  `listExtraSlides` now also requires the section to have left the Fresh/
+  assignment stage (`current_stage NOT IN needs_sectioning/sectioned/
+  assignment_required`). Harness gate: `issue #12`.
+- **#13 — "Start Assays" button label · ✅ fixed.** `SectionDetailsDrawer`
+  labels the move "Start Assays / Move to Extras" (or "Move to Extras" when the
+  stack is all extras) based on the slide mix.
+- **#14 — Extra slide doesn't merge cleanly in Ready for Imaging · ○ open.**
+  When a sample already has a section at `ready_for_imaging` and a separately
+  stained extra arrives, the grouped card shows the extra but the imaging
+  checklist (derived from one section's slides) doesn't add a checkbox. Needs
+  the imaging view to aggregate slides across a sample's grouped
+  ready-for-imaging sections. Related to #9; UI-layer, best done with a driven
+  UI test.
+- **#15 — Extras stack selection highlight · ✅ fixed.** `ExtraSlideInventory`
+  takes `selectedSampleId`; `Board` clears other selection on click.
+- **#16 — Batch move undo · ✅ fixed.** New `moveSections` records one combined
+  undo; `App` uses it for `onMoveSections`.
+- **#17 — Batch selection highlight · ✅ fixed.** `ProcessingBatchRow` takes
+  `selected`; `Board` coordinates single-selection across blocks/sections/
+  batches/extras.
+- **#18 — Remove Processor Pickup window, move Embedded Inventory to top-right ·
+  ○ open.** Board relayout — same high-risk surface as #5's deferred layout.
+  Do the two together with a UI/Playwright check.
+- **#19 — Amber glow for a batch awaiting pickup · ✅ fixed.**
+  `ProcessingBatchRow` awaiting-pickup style strengthened to a clear glow.
+
+UI-only fixes (#13, #15, #17, #19) and the undo fix (#16) are validated by
+type-check + code review; the data-layer fix (#12) has a harness gate. Still
+open from this wave: **#14** (imaging merge) and **#18** (board relayout),
+alongside the earlier **#4, #8, #11** and #5's deferred board layout.
