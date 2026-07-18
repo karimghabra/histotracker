@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 - 2026-07-18
+
+- Corrected downstream stack identity to sample + physical cut depth + current
+  stage. Fresh staining work can no longer pull a companion stack backward
+  from imaging, and different cut depths can never share a stack.
+- Added forward-arrival merging: companion stacks merge only when the newer
+  stack reaches the same stage as an existing sample-depth stack.
+- Added migration repair for mixed-depth or mixed-stage stacks created by
+  0.3.0, preserving the most advanced group's stack identity.
+- Kept multi-stack protocol checklists while filtering stain and IHC batch
+  updates to selected stacks that actually contain the matching assay type.
+
 ## 0.3.0 - 2026-07-18
 
 - Added durable slide stacks as the owner of downstream staining, imaging, and

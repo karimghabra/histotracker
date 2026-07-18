@@ -956,7 +956,6 @@ export async function syncAssayWorkflowStep(
         WHERE id = ?`,
       [readyAt, sectionRequestId],
     );
-    await syncStacksForSection(sectionRequestId);
   }
 }
 
@@ -1196,11 +1195,19 @@ export async function listStainSlidesForSections(sectionIds: number[]): Promise<
   );
 }
 
-export async function getOpenSlideStack(sampleId: number): Promise<SlideStack | null> {
+export async function getOpenSlideStack(
+  sampleId: number,
+  depthUm: number,
+  stageKey = "stain_requested",
+  excludeId?: number,
+): Promise<SlideStack | null> {
   const db = await getDb();
   const rows = await db.select<SlideStack[]>(
-    `SELECT * FROM slide_stacks WHERE sample_id = ? AND closed_at IS NULL LIMIT 1`,
-    [sampleId],
+    `SELECT * FROM slide_stacks
+      WHERE sample_id = ? AND depth_um = ? AND current_stage = ?
+        AND closed_at IS NULL AND (? IS NULL OR id != ?)
+      ORDER BY id ASC LIMIT 1`,
+    [sampleId, depthUm, stageKey, excludeId ?? null, excludeId ?? null],
   );
   return rows[0] ?? null;
 }
@@ -1253,7 +1260,7 @@ export async function deleteSlideStackIfEmpty(id: number): Promise<boolean> {
 export async function reinsertSlideStack(snapshot: SlideStack): Promise<void> {
   const db = await getDb();
   const columns = [
-    "id", "sample_id", "current_stage", ...Object.values(STACK_STAGE_COLUMNS),
+    "id", "sample_id", "depth_um", "depth_index", "current_stage", ...Object.values(STACK_STAGE_COLUMNS),
     "closed_at", "created_at",
   ];
   const values = columns.map((column) => (snapshot as unknown as Record<string, unknown>)[column]);
@@ -1316,15 +1323,20 @@ export async function reinsertChecklistRuns(snapshots: ChecklistRunSnapshot[]): 
   }
 }
 
-async function getOrCreateOpenSlideStack(sampleId: number): Promise<number> {
-  const existing = await getOpenSlideStack(sampleId);
+async function getOrCreateOpenSlideStack(
+  sampleId: number,
+  depthUm: number,
+  depthIndex: number,
+): Promise<number> {
+  const existing = await getOpenSlideStack(sampleId, depthUm, "stain_requested");
   if (existing) return existing.id;
   const db = await getDb();
   const timestamp = nowTimestamp();
   const result = await db.execute(
-    `INSERT INTO slide_stacks (sample_id, current_stage, stage_stain_requested_at)
-     VALUES (?, 'stain_requested', ?)`,
-    [sampleId, timestamp],
+    `INSERT INTO slide_stacks
+      (sample_id, depth_um, depth_index, current_stage, stage_stain_requested_at)
+     VALUES (?, ?, ?, 'stain_requested', ?)`,
+    [sampleId, depthUm, depthIndex, timestamp],
   );
   if (result.lastInsertId == null) throw new Error("Could not create the slide stack.");
   return result.lastInsertId;
@@ -1343,7 +1355,11 @@ async function attachSectionStainSlidesToOpenStack(sectionId: number): Promise<n
   );
   const section = rows[0];
   if (!section || section.stain_count === 0) return null;
-  const stackId = await getOrCreateOpenSlideStack(section.sample_id);
+  const stackId = await getOrCreateOpenSlideStack(
+    section.sample_id,
+    section.depth_um,
+    section.depth_index,
+  );
   await db.execute(
     `UPDATE slides
         SET stack_id = ?,
@@ -1369,7 +1385,8 @@ const STACK_STAGE_COLUMNS: Record<string, string> = {
 };
 
 const STACK_RESTORE_COLUMNS = [
-  "sample_id", "current_stage", ...Object.values(STACK_STAGE_COLUMNS), "closed_at",
+  "sample_id", "depth_um", "depth_index", "current_stage",
+  ...Object.values(STACK_STAGE_COLUMNS), "closed_at",
 ] as const;
 
 export async function restoreSlideStack(snapshot: SlideStack): Promise<void> {
@@ -1381,42 +1398,6 @@ export async function restoreSlideStack(snapshot: SlideStack): Promise<void> {
   await db.execute(`UPDATE slide_stacks SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
 }
 
-function normalizedStackStage(stage: string): string {
-  return stage === "assigned" || stage === "cut" ? "stain_requested" : stage;
-}
-
-async function syncStacksForSection(sectionId: number): Promise<void> {
-  const db = await getDb();
-  const stackRows = await db.select<Array<{ stack_id: number }>>(
-    `SELECT DISTINCT stack_id FROM slides
-      WHERE section_request_id = ? AND purpose = 'stain' AND stack_id IS NOT NULL`,
-    [sectionId],
-  );
-  for (const { stack_id: stackId } of stackRows) await syncSlideStack(stackId);
-}
-
-export async function syncSlideStack(stackId: number): Promise<void> {
-  const db = await getDb();
-  const slides = await db.select<Array<{ current_stage: string }>>(
-    `SELECT current_stage FROM slides WHERE stack_id = ? AND purpose = 'stain'`,
-    [stackId],
-  );
-  if (slides.length === 0) return;
-  const stage = slides
-    .map((slide) => normalizedStackStage(slide.current_stage))
-    .sort((a, b) => (SECTION_STAGE_ORDER[a] ?? 0) - (SECTION_STAGE_ORDER[b] ?? 0))[0];
-  const column = STACK_STAGE_COLUMNS[stage];
-  if (!column) return;
-  const timestamp = nowTimestamp();
-  await db.execute(
-    `UPDATE slide_stacks
-        SET current_stage = ?, ${column} = COALESCE(${column}, ?),
-            closed_at = CASE WHEN ? = 'analyzed' THEN COALESCE(closed_at, ?) ELSE NULL END
-      WHERE id = ?`,
-    [stage, timestamp, stage, timestamp, stackId],
-  );
-}
-
 export async function listOpenSlideStacks(): Promise<SlideStack[]> {
   const db = await getDb();
   return db.select<SlideStack[]>(
@@ -1426,6 +1407,10 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
             COUNT(sl.id) AS slide_count,
             COALESCE(SUM(CASE WHEN sl.purpose = 'stain' THEN 1 ELSE 0 END), 0)
               AS assay_slide_count,
+            COALESCE(MAX(CASE WHEN sl.purpose = 'stain' AND sl.assay_type = 'stain' THEN 1 ELSE 0 END), 0)
+              AS has_stain,
+            COALESCE(MAX(CASE WHEN sl.purpose = 'stain' AND sl.assay_type = 'ihc' THEN 1 ELSE 0 END), 0)
+              AS has_ihc,
             COALESCE(GROUP_CONCAT(
               CASE WHEN sl.purpose = 'stain' THEN
                 sl.slide_code || ': ' || CASE WHEN sl.assay_type = 'ihc'
@@ -1461,19 +1446,14 @@ export async function listSlidesForStack(stackId: number): Promise<Slide[]> {
   );
 }
 
-export async function updateSlideStackStage(stackId: number, stageKey: string): Promise<void> {
+export async function updateSlideStackStage(stackId: number, stageKey: string): Promise<number> {
   const column = STACK_STAGE_COLUMNS[stageKey];
   if (!column) throw new Error(`Unknown slide-stack stage: ${stageKey}`);
+  const source = await getSlideStack(stackId);
+  if (!source) throw new Error("That slide stack no longer exists.");
   const db = await getDb();
   const timestamp = nowTimestamp();
   const slideColumn = SECTION_STAGE_COLUMNS[stageKey];
-  await db.execute(
-    `UPDATE slide_stacks
-        SET current_stage = ?, ${column} = COALESCE(${column}, ?),
-            closed_at = CASE WHEN ? = 'analyzed' THEN COALESCE(closed_at, ?) ELSE NULL END
-      WHERE id = ?`,
-    [stageKey, timestamp, stageKey, timestamp, stackId],
-  );
   if (slideColumn) {
     await db.execute(
       `UPDATE slides
@@ -1487,6 +1467,28 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
       [stageKey, stackId],
     );
   }
+
+  const mergeTarget = stageKey === "analyzed"
+    ? null
+    : await getOpenSlideStack(source.sample_id, source.depth_um, stageKey, source.id);
+  if (mergeTarget) {
+    await db.execute(`UPDATE slides SET stack_id = ? WHERE stack_id = ?`, [mergeTarget.id, source.id]);
+    await db.execute(
+      `UPDATE slide_stacks SET ${column} = COALESCE(${column}, ?) WHERE id = ?`,
+      [timestamp, mergeTarget.id],
+    );
+    await deleteSlideStack(source.id);
+    return mergeTarget.id;
+  }
+
+  await db.execute(
+    `UPDATE slide_stacks
+        SET current_stage = ?, ${column} = COALESCE(${column}, ?),
+            closed_at = CASE WHEN ? = 'analyzed' THEN COALESCE(closed_at, ?) ELSE NULL END
+      WHERE id = ?`,
+    [stageKey, timestamp, stageKey, timestamp, stackId],
+  );
+  return stackId;
 }
 
 export async function syncAssayStackWorkflowStep(
@@ -1538,23 +1540,8 @@ export async function syncAssayStackWorkflowStep(
   if (completion.every(Boolean)) await updateSlideStackStage(stackId, "ready_for_imaging");
 }
 
-export async function completeSlideStackImaging(stackId: number): Promise<void> {
-  const db = await getDb();
-  const timestamp = nowTimestamp();
-  await db.execute(
-    `UPDATE slides
-        SET current_stage = 'pictures_taken',
-            stage_pictures_taken_at = COALESCE(stage_pictures_taken_at, ?)
-      WHERE stack_id = ? AND purpose = 'stain'`,
-    [timestamp, stackId],
-  );
-  await db.execute(
-    `UPDATE slide_stacks
-        SET current_stage = 'pictures_taken',
-            stage_pictures_taken_at = COALESCE(stage_pictures_taken_at, ?)
-      WHERE id = ?`,
-    [timestamp, stackId],
-  );
+export async function completeSlideStackImaging(stackId: number): Promise<number> {
+  return updateSlideStackStage(stackId, "pictures_taken");
 }
 
 export async function deleteSlidesForStack(stackId: number): Promise<void> {
@@ -1598,8 +1585,16 @@ export async function assignExtraSlideToAssay(input: {
   );
   if (!catalog.length) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
-  const openStack = await getOpenSlideStack(slide.sample_id);
-  const stackId = openStack?.id ?? await getOrCreateOpenSlideStack(slide.sample_id);
+  const openStack = await getOpenSlideStack(
+    slide.sample_id,
+    slide.depth_um,
+    "stain_requested",
+  );
+  const stackId = openStack?.id ?? await getOrCreateOpenSlideStack(
+    slide.sample_id,
+    slide.depth_um,
+    slide.depth_index,
+  );
 
   await db.execute(
     `UPDATE slides
@@ -1699,18 +1694,11 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
       WHERE id = ?`,
     [allImaged ? "pictures_taken" : "ready_for_imaging", allImaged ? timestamp : null, slide.section_request_id],
   );
-  await syncStacksForSection(slide.section_request_id);
 }
 
 export async function deleteSlide(id: number): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ stack_id: number | null }>>(
-    `SELECT stack_id FROM slides WHERE id = ?`,
-    [id],
-  );
   await db.execute(`DELETE FROM slides WHERE id = ?`, [id]);
-  const stackId = rows[0]?.stack_id;
-  if (stackId != null) await syncSlideStack(stackId);
 }
 
 /** Mark every assay slide in a section as imaged for bulk imaging completion. */
@@ -1736,7 +1724,6 @@ export async function completeSectionImaging(sectionId: number): Promise<void> {
       WHERE id = ?`,
     [timestamp, sectionId],
   );
-  await syncStacksForSection(sectionId);
 }
 
 export async function listAssayCatalog(): Promise<AssayCatalogEntry[]> {
@@ -1853,7 +1840,6 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
     `UPDATE section_requests SET current_stage = ?, ${column} = COALESCE(${column}, ?) WHERE id = ?`,
     [stageKey, timestamp, id],
   );
-  await syncStacksForSection(id);
 }
 
 export async function revertSectionToStage(id: number, stageKey: string): Promise<void> {
@@ -1932,7 +1918,6 @@ export async function restoreSlide(snapshot: Slide): Promise<void> {
   const assignments = SLIDE_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
   const values = SLIDE_RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
   await db.execute(`UPDATE slides SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-  await syncStacksForSection(snapshot.section_request_id);
 }
 
 export async function restoreSectionRequest(snapshot: SectionRequest): Promise<void> {

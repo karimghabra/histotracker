@@ -3,12 +3,11 @@
 ## Purpose
 
 This document is the implementation roadmap for the workflow-integrity release
-and the operational features that follow it. It reflects `master` at 0.2.6 and
-the open GitHub issues reviewed on 2026-07-18.
+and the operational features that follow it. It reflects the 0.3.0 release and
+the stack-identity correction prepared for 0.3.1 on 2026-07-18.
 
-The app is not deployed. The current local database is disposable, so 0.3.0
-will begin from a fresh database rather than attempting to repair historical,
-conflicting slide state.
+The app is not deployed broadly, but migration 16 repairs stack state produced
+by 0.3.0 so local test data can be upgraded without a database reset.
 
 ## Current Baseline
 
@@ -30,8 +29,8 @@ conflicting slide state.
 
 Completed on `codex/slide-stack-foundation`:
 
-- Migration 15, durable stack queries, immutable copied slide depth, and one
-  open stack per sample.
+- Migration 15, durable stack queries, and immutable copied slide depth. Its
+  initial sample-only stack identity is corrected by migration 16.
 - Stack-owned downstream cards, selection, drawer, protocol checklists, stage
   transitions, imaging, analysis, whole-stack delete, selected-slide delete,
   and symmetric undo/redo snapshots.
@@ -40,30 +39,48 @@ Completed on `codex/slide-stack-foundation`:
   and cut-provenance invariants.
 - Audit context for stack/slide events and explicit undo/redo audit records.
 
-Remaining release gates:
+0.3.0 was released from `master`. Its remaining browser and native smoke gates
+carry forward to 0.3.1:
 
 - Add browser-level smoke coverage for multi-select, deletion, imaging undo,
   drag rejection, and the pickup indicator in light and dark themes.
 - Run `cargo check` once a Rust toolchain is available, then exercise the real
   Tauri application against a fresh development database.
 - Synchronize version numbers and lockfiles only after those gates pass; then
-  build and confirm the Windows installer before tagging 0.3.0.
+  build and confirm the Windows installer before tagging 0.3.1.
+
+## Release 0.3.1: Sample-Depth Stacks
+
+- Define an open board stack by sample, physical cut depth, and current stage.
+  Same-depth slides join only when they occupy the same stage; different depths
+  always remain separate.
+- Treat the stack stage as canonical. Slide timestamp edits must not derive a
+  replacement stage and pull an existing stack backward.
+- On a forward move, merge into an existing destination stack only when sample,
+  depth, and destination stage all match. Preserve every physical slide and its
+  original section provenance.
+- Repair 0.3.0 mixed stacks by grouping their slides by copied depth and actual
+  stage. Keep the original ID for the most advanced group and clear inherited
+  future-stage timestamps from newly split earlier groups.
+- Preserve multi-selection for batched protocol work, filtering each stain or
+  IHC checklist to selected stacks containing that assay type.
+- Gate the exact regression where slide A is ready for imaging and fresh
+  companion slide B starts staining at the same depth, then verify they merge
+  only when B reaches ready for imaging.
 
 ### Database and Domain Model
 
-- Delete the development database before running the release candidate, then
-  apply the complete migration set to a clean database. Do not implement data
-  backfill or compatibility handling for prior, conflicting stacks.
-- Add an additive migration for `slide_stacks`. A stack represents one sample's
-  active downstream assay/imaging lifecycle and owns its downstream stage and
-  timestamps. A new cutting cycle creates a new stack only after the prior
-  stack is complete.
+- Apply the complete migration set to clean databases and migration 16 to 0.3.0
+  databases. The migration splits conflicting mixed-depth or mixed-stage rows.
+- A `slide_stack` represents one sample-depth pair at one downstream stage and
+  owns its stage and timestamps. A companion stack may coexist at an earlier
+  stage and merges only after reaching the same destination stage.
 - Add nullable `stack_id` and immutable copied depth fields to `slides`. A
   slide retains its physical-slide identity and depth when it joins a stack.
   Sections remain cut groups and pre-assignment workflow records.
-- Entering assay work creates or joins the sample's open stack. Assigning an
-  extra changes that slide's purpose and `stack_id`; it must not re-parent the
-  slide to an arbitrary section or delete a cut group.
+- Entering assay work creates or joins the sample-depth staining stack.
+  Assigning an extra changes that slide's purpose and `stack_id`; it must not
+  re-parent the slide to an arbitrary section or delete a cut group.
 - Extend the existing audit surface as needed for reporting: retain the
   existing trigger-based `audit_events`, add stable sample/stack context and
   structured details for stack actions, and record undo/redo as explicit audit

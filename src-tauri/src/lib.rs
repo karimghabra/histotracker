@@ -111,6 +111,12 @@ pub fn run() {
             sql: include_str!("../migrations/0015_slide_stacks.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "stage_local_depth_stacks",
+            sql: include_str!("../migrations/0016_stage_local_depth_stacks.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

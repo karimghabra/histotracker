@@ -165,6 +165,8 @@ export interface Slide {
 export interface SlideStack {
   id: number;
   sample_id: number;
+  depth_um: number;
+  depth_index: number;
   current_stage: string;
   stage_stain_requested_at: string | null;
   stage_stained_at: string | null;
@@ -186,6 +188,8 @@ export interface SlideStack {
   is_priority?: number;
   slide_count?: number;
   assay_slide_count?: number;
+  has_stain?: number;
+  has_ihc?: number;
   slide_summary?: string;
 }
 

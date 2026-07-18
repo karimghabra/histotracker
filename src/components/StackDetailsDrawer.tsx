@@ -43,8 +43,11 @@ export function StackDetailsDrawer({
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const activeStacks = selectedStacks.length > 0 ? selectedStacks : [stack];
   const activeIds = activeStacks.map((candidate) => candidate.id);
-  const stainingIds = activeStacks
-    .filter((candidate) => candidate.current_stage === "stain_requested")
+  const stainStackIds = activeStacks
+    .filter((candidate) => candidate.current_stage === "stain_requested" && candidate.has_stain === 1)
+    .map((candidate) => candidate.id);
+  const ihcStackIds = activeStacks
+    .filter((candidate) => candidate.current_stage === "stain_requested" && candidate.has_ihc === 1)
     .map((candidate) => candidate.id);
   const imagingIds = activeStacks
     .filter((candidate) => candidate.current_stage === "ready_for_imaging")
@@ -79,7 +82,7 @@ export function StackDetailsDrawer({
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
             <Layers size={16} className="shrink-0" />
-            <span className="truncate">{stack.parent_code} slide stack</span>
+            <span className="truncate">{stack.parent_code} | {stack.depth_um} um</span>
           </h2>
           <p className="truncate text-xs text-ink-faint">
             {stack.parent_description || stack.project_name || `Stack ${stack.id}`}
@@ -183,7 +186,7 @@ export function StackDetailsDrawer({
             stageKey="stain_workflow_v3"
             protocolName="Stain workflow"
             labels={["Stained", "Coverslipped", "Dried"]}
-            batchScopeIds={stainingIds.filter((id) => id !== stack.id)}
+            batchScopeIds={stainStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "stain", sortOrder, complete))).then(() => undefined)
             }
@@ -196,7 +199,7 @@ export function StackDetailsDrawer({
             stageKey="ihc_workflow_v3"
             protocolName="IHC workflow"
             labels={["IHC stained", "Coverslipped", "Dried"]}
-            batchScopeIds={stainingIds.filter((id) => id !== stack.id)}
+            batchScopeIds={ihcStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "ihc", sortOrder, complete))).then(() => undefined)
             }
