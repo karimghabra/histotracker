@@ -36,7 +36,7 @@ export default function App() {
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -296,6 +296,11 @@ export default function App() {
       onEditStart={(batchId, startedAt) =>
         void editBatchStart(batchId, startedAt).catch((error) => flash(String(error)))
       }
+      onConfirmStart={(batchId, actualStartedAt) => {
+        void confirmProcessingBatchStart(batchId, actualStartedAt)
+          .then(() => flash("Processing run started"))
+          .catch((error) => flash(String(error)));
+      }}
       width={drawerWidth}
       onClose={() => setSelectedBatchId(null)}
     />
@@ -545,6 +550,11 @@ export default function App() {
                 setSelectedExtraSampleId(null);
                 setSelectedBatchId(batchId);
               }}
+              onConfirmProcessingBatchStart={(batchId) => {
+                void confirmProcessingBatchStart(batchId)
+                  .then(() => flash("Processing run started"))
+                  .catch((error) => flash(String(error)));
+              }}
               onToggleSamplePriority={(sampleId) => {
                 void togglePriority(sampleId).catch((error) => flash(String(error)));
               }}
@@ -580,6 +590,10 @@ export default function App() {
           onStart={async (input) => {
             await startProcessingBatch(input);
             flash(`Started ${input.processingType.toLowerCase()} batch · ${input.sampleIds.length} samples`);
+          }}
+          onPlan={async (input) => {
+            await planProcessingBatch(input);
+            flash(`Planned ${input.processingType.toLowerCase()} batch · ${input.sampleIds.length} samples`);
           }}
           onClose={() => setPendingBatchSampleIds(null)}
         />

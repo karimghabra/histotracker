@@ -484,6 +484,24 @@ function formatLocalTimestamp(date: Date): string {
   )}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * Raised by startProcessingBatch when a run is already active and the caller
+ * did not opt into concurrent runs. Carries the active run's ready time so the
+ * dialog can show it (issue #23).
+ */
+export class ProcessorBusyError extends Error {
+  readonly readyAt: string | null;
+  constructor(readyAt: string | null) {
+    super(
+      readyAt
+        ? `A run is already in the processor, ready around ${readyAt}.`
+        : "A run is already in the processor.",
+    );
+    this.name = "ProcessorBusyError";
+    this.readyAt = readyAt;
+  }
+}
+
 export async function startProcessingBatch(input: {
   sampleIds: number[];
   processingType: "Short" | "Long";
@@ -491,6 +509,8 @@ export async function startProcessingBatch(input: {
   startedAt: string;
   checklistLabels: string[];
   notes?: string;
+  /** Skip the "processor already busy" guard and run this batch concurrently. */
+  allowConcurrent?: boolean;
 }): Promise<number> {
   if (input.sampleIds.length === 0) throw new Error("Select at least one sample.");
   const db = await getDb();
@@ -518,27 +538,45 @@ export async function startProcessingBatch(input: {
     );
   }
 
-  // The processor runs one batch at a time (issue #5). "Busy" is judged from
-  // actual sample state — a run is only in the processor while its samples sit
-  // at 'processing_started' with a window that hasn't ended — NOT from the
-  // batch's status column, which can go stale/orphaned and otherwise wedge the
-  // processor so no new run can start. A run planned to begin after the current
-  // one finishes is allowed. Timestamps are "YYYY-MM-DD HH:MM", so lexical
-  // comparison is chronological.
-  const activeRun = await db.select<Array<{ id: number }>>(
-    `SELECT pb.id
-       FROM processing_batches pb
-       JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+  // A sample already committed to a planned run must be confirmed there, not
+  // started in a different batch (issues #4, #24).
+  const planned = await db.select<Array<{ sample_code: string }>>(
+    `SELECT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
        JOIN samples s ON s.id = pbm.sample_id
-      WHERE s.current_stage = 'processing_started'
-        AND (pb.ready_at IS NULL OR pb.ready_at > ?)
-      LIMIT 1`,
-    [input.startedAt],
+      WHERE pbm.sample_id IN (${placeholders}) AND pb.status = 'planned'`,
+    input.sampleIds,
   );
-  if (activeRun.length > 0) {
+  if (planned.length > 0) {
     throw new Error(
-      "The processor already has a run in progress. Move it to Processor Pickup, or plan this run to start after it finishes.",
+      `Already in a planned run — confirm that run instead: ${planned.map((r) => r.sample_code).join(", ")}`,
     );
+  }
+
+  // Running two batches at once is the technician's call (issue #23). If a run
+  // is already in the processor and this one would overlap it, we surface the
+  // conflict as a typed ProcessorBusyError so the batch-start dialog can offer
+  // "Start anyway"; passing allowConcurrent skips the check. "Busy" is judged
+  // from actual sample state — a run is only in the processor while its samples
+  // sit at 'processing_started' with a window that hasn't ended — NOT from the
+  // batch status column, which can go stale/orphaned. Timestamps are
+  // "YYYY-MM-DD HH:MM", so lexical comparison is chronological.
+  if (!input.allowConcurrent) {
+    const activeRun = await db.select<Array<{ id: number; ready_at: string | null }>>(
+      `SELECT pb.id, pb.ready_at
+         FROM processing_batches pb
+         JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+         JOIN samples s ON s.id = pbm.sample_id
+        WHERE s.current_stage = 'processing_started'
+          AND (pb.ready_at IS NULL OR pb.ready_at > ?)
+        ORDER BY pb.ready_at DESC
+        LIMIT 1`,
+      [input.startedAt],
+    );
+    if (activeRun.length > 0) {
+      throw new ProcessorBusyError(activeRun[0].ready_at ?? null);
+    }
   }
 
   const started = parseTimestamp(input.startedAt) ?? new Date();
@@ -627,6 +665,146 @@ export async function startProcessingBatch(input: {
   }
 }
 
+/**
+ * Schedule a processing run for a future start (issues #4, #24). The batch is
+ * created with status 'planned'; its member samples stay in pre-processing until
+ * the technician confirms the actual start via confirmProcessingBatchStart. No
+ * concurrency guard applies — a planned run is not yet in the processor.
+ */
+export async function planProcessingBatch(input: {
+  sampleIds: number[];
+  processingType: "Short" | "Long";
+  operatorName: string;
+  plannedStartAt: string;
+  notes?: string;
+}): Promise<number> {
+  if (input.sampleIds.length === 0) throw new Error("Select at least one sample.");
+  const db = await getDb();
+  const placeholders = input.sampleIds.map(() => "?").join(", ");
+  const samples = await db.select<Sample[]>(
+    `SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`,
+    input.sampleIds,
+  );
+  if (samples.length !== input.sampleIds.length) throw new Error("One or more samples no longer exist.");
+
+  const incompatible = samples.filter((s) => s.processing_type !== input.processingType);
+  if (incompatible.length > 0) {
+    throw new Error(`Selected samples do not share the ${input.processingType} protocol.`);
+  }
+  const notReady = samples.filter(
+    (s) =>
+      (s.needs_decalcification === 1 && !s.decalc_completed_at) ||
+      !s.fixative_placed_at ||
+      !s.fixative_removed_at ||
+      !s.ethanol_placed_at,
+  );
+  if (notReady.length > 0) {
+    throw new Error(
+      `Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`,
+    );
+  }
+
+  // A sample can only be committed to one open (planned or running) batch.
+  const alreadyBatched = await db.select<Array<{ sample_code: string }>>(
+    `SELECT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${placeholders})
+        AND pb.status IN ('planned', 'processing')`,
+    input.sampleIds,
+  );
+  if (alreadyBatched.length > 0) {
+    throw new Error(
+      `Already committed to a batch: ${alreadyBatched.map((r) => r.sample_code).join(", ")}`,
+    );
+  }
+
+  const planned = parseTimestamp(input.plannedStartAt) ?? new Date();
+  const readyAt = new Date(
+    planned.getTime() + processingDurationHours(input.processingType) * 3600_000,
+  );
+  const batchResult = await db.execute(
+    `INSERT INTO processing_batches
+      (processing_type, operator_name, status, started_at, planned_start_at, ready_at, notes)
+     VALUES (?, ?, 'planned', ?, ?, ?, ?)`,
+    [
+      input.processingType,
+      input.operatorName.trim(),
+      // started_at is NOT NULL; seed it with the planned time until confirmed.
+      input.plannedStartAt,
+      input.plannedStartAt,
+      formatLocalTimestamp(readyAt),
+      input.notes?.trim() ?? "",
+    ],
+  );
+  const batchId = batchResult.lastInsertId ?? 0;
+  for (const sample of samples) {
+    await db.execute(
+      `INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`,
+      [batchId, sample.id],
+    );
+  }
+  return batchId;
+}
+
+/**
+ * Confirm that a planned run actually started (issue #4). Transitions the batch
+ * to 'processing', stamps the real start (defaulting to the planned time),
+ * recomputes the ready time, and moves every member into the processor so the
+ * countdown begins.
+ */
+export async function confirmProcessingBatchStart(
+  batchId: number,
+  actualStartedAt?: string,
+): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ status: string; processing_type: string; planned_start_at: string | null }>>(
+    `SELECT status, processing_type, planned_start_at FROM processing_batches WHERE id = ?`,
+    [batchId],
+  );
+  const batch = rows[0];
+  if (!batch) throw new Error("That processing batch no longer exists.");
+  if (batch.status !== "planned") throw new Error("Only a planned run can be confirmed as started.");
+  const startedAt = actualStartedAt ?? batch.planned_start_at ?? nowTimestamp();
+  const started = parseTimestamp(startedAt) ?? new Date();
+  const readyAt = new Date(
+    started.getTime() + processingDurationHours(batch.processing_type) * 3600_000,
+  );
+  await db.execute(
+    `UPDATE processing_batches
+        SET status = 'processing', started_at = ?, ready_at = ?
+      WHERE id = ?`,
+    [startedAt, formatLocalTimestamp(readyAt), batchId],
+  );
+  await db.execute(
+    `UPDATE samples
+        SET current_stage = 'processing_started', processing_started_at = ?
+      WHERE id IN (SELECT sample_id FROM processing_batch_members WHERE batch_id = ?)`,
+    [startedAt, batchId],
+  );
+}
+
+/** Return a batch to 'planned' (undo of confirmProcessingBatchStart). The
+ * caller restores the member samples' snapshots separately. */
+export async function revertProcessingBatchToPlanned(batchId: number): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ processing_type: string; planned_start_at: string | null }>>(
+    `SELECT processing_type, planned_start_at FROM processing_batches WHERE id = ?`,
+    [batchId],
+  );
+  const batch = rows[0];
+  if (!batch) return;
+  const planned = parseTimestamp(batch.planned_start_at ?? "") ?? new Date();
+  const readyAt = new Date(
+    planned.getTime() + processingDurationHours(batch.processing_type) * 3600_000,
+  );
+  await db.execute(
+    `UPDATE processing_batches SET status = 'planned', started_at = ?, ready_at = ? WHERE id = ?`,
+    [batch.planned_start_at ?? formatLocalTimestamp(planned), formatLocalTimestamp(readyAt), batchId],
+  );
+}
+
 type ProcessingBatchRow = Omit<ProcessingBatch, "member_ids" | "member_codes"> & {
   member_ids_csv: string;
   member_codes_csv: string;
@@ -640,6 +818,9 @@ export async function listOpenProcessingBatches(): Promise<ProcessingBatch[]> {
             GROUP_CONCAT(s.sample_code) AS member_codes_csv,
             COUNT(s.id) AS member_count,
             CASE
+              -- A planned run parks in the Processor window (issues #4, #24)
+              -- even though its samples are still in pre-processing.
+              WHEN pb.status = 'planned' THEN 'processing_started'
               WHEN SUM(CASE WHEN s.current_stage = 'processing_started' THEN 1 ELSE 0 END) > 0
                 THEN 'processing_started'
               ELSE 'processed'
@@ -657,9 +838,10 @@ export async function listOpenProcessingBatches(): Promise<ProcessingBatch[]> {
        FROM processing_batches pb
        JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
        JOIN samples s ON s.id = pbm.sample_id
-      WHERE s.current_stage IN ('processing_started', 'processed')
+      WHERE pb.status = 'planned'
+         OR s.current_stage IN ('processing_started', 'processed')
       GROUP BY pb.id
-      ORDER BY pb.started_at ASC, pb.id ASC`,
+      ORDER BY pb.status = 'planned', pb.started_at ASC, pb.id ASC`,
   );
   return rows.map((row) => ({
     ...row,

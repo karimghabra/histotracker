@@ -117,6 +117,12 @@ pub fn run() {
             sql: include_str!("../migrations/0016_stage_local_depth_stacks.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "planned_processing_runs",
+            sql: include_str!("../migrations/0017_planned_processing_runs.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

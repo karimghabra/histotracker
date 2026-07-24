@@ -152,9 +152,10 @@ function makeApi(db) {
     run(`UPDATE samples SET ethanol_placed_at = ?, current_stage = 'in_ethanol' WHERE id = ?`, [now(), sampleId]);
   }
 
-  // Port of startProcessingBatch() — src/lib/db.ts, including the single-run
-  // processor guard (issue #5).
-  function startProcessingBatch({ sampleIds, processingType, startedAt }) {
+  // Port of startProcessingBatch() — src/lib/db.ts. The processor-busy check is
+  // advisory: it throws unless the caller opts into a concurrent run via
+  // allowConcurrent (issue #23).
+  function startProcessingBatch({ sampleIds, processingType, startedAt, allowConcurrent = false }) {
     if (sampleIds.length === 0) throw new Error("Select at least one sample.");
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
@@ -168,19 +169,22 @@ function makeApi(db) {
     );
     if (notReady.length) throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
 
-    // One run at a time, judged by actual sample state (not the batch status
-    // column, which can go stale/orphaned and wedge the processor).
-    const activeRun = all(
-      `SELECT pb.id
-         FROM processing_batches pb
-         JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
-         JOIN samples s ON s.id = pbm.sample_id
-        WHERE s.current_stage = 'processing_started'
-          AND (pb.ready_at IS NULL OR pb.ready_at > ?)
-        LIMIT 1`,
-      [startedAt],
-    );
-    if (activeRun.length) throw new Error("The processor already has a run in progress.");
+    // Advisory concurrency guard, judged by actual sample state (not the batch
+    // status column, which can go stale/orphaned). The technician may override
+    // it to run two batches simultaneously (issue #23).
+    if (!allowConcurrent) {
+      const activeRun = all(
+        `SELECT pb.id
+           FROM processing_batches pb
+           JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+           JOIN samples s ON s.id = pbm.sample_id
+          WHERE s.current_stage = 'processing_started'
+            AND (pb.ready_at IS NULL OR pb.ready_at > ?)
+          LIMIT 1`,
+        [startedAt],
+      );
+      if (activeRun.length) throw new Error("PROCESSOR_BUSY");
+    }
 
     const durH = processingType.toLowerCase() === "long" ? 52 : 18;
     const started = new Date(startedAt.replace(" ", "T"));
@@ -200,6 +204,56 @@ function makeApi(db) {
       [startedAt, ...sampleIds],
     );
     return batchId;
+  }
+
+  // Port of planProcessingBatch() — schedules a run for a future start (issues
+  // #4, #24). Members stay in pre-processing; status is 'planned'.
+  function planProcessingBatch({ sampleIds, processingType, plannedStartAt }) {
+    const placeholders = sampleIds.map(() => "?").join(", ");
+    const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
+    if (samples.some((s) => s.processing_type !== processingType)) {
+      throw new Error(`Selected samples do not share the ${processingType} protocol.`);
+    }
+    const committed = all(
+      `SELECT s.sample_code FROM processing_batch_members pbm
+         JOIN processing_batches pb ON pb.id = pbm.batch_id
+         JOIN samples s ON s.id = pbm.sample_id
+        WHERE pbm.sample_id IN (${placeholders}) AND pb.status IN ('planned', 'processing')`,
+      sampleIds,
+    );
+    if (committed.length) throw new Error("ALREADY_BATCHED");
+    const durH = processingType.toLowerCase() === "long" ? 52 : 18;
+    const planned = new Date(plannedStartAt.replace(" ", "T"));
+    const readyAt = new Date(planned.getTime() + durH * 3600_000);
+    const readyStr = `${readyAt.getFullYear()}-${pad(readyAt.getMonth() + 1)}-${pad(readyAt.getDate())} ${pad(readyAt.getHours())}:${pad(readyAt.getMinutes())}`;
+    const r = run(
+      `INSERT INTO processing_batches (processing_type, operator_name, status, started_at, planned_start_at, ready_at)
+       VALUES (?, 'Tech', 'planned', ?, ?, ?)`,
+      [processingType, plannedStartAt, plannedStartAt, readyStr],
+    );
+    const batchId = Number(r.lastInsertRowid);
+    for (const s of samples) {
+      run(`INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`, [batchId, s.id]);
+    }
+    return batchId;
+  }
+
+  // Port of confirmProcessingBatchStart() — planned → processing (issue #4).
+  function confirmProcessingBatchStart(batchId, actualStartedAt) {
+    const batch = get(`SELECT status, processing_type, planned_start_at FROM processing_batches WHERE id = ?`, [batchId]);
+    if (!batch) throw new Error("That processing batch no longer exists.");
+    if (batch.status !== "planned") throw new Error("Only a planned run can be confirmed as started.");
+    const startedAt = actualStartedAt ?? batch.planned_start_at;
+    const durH = batch.processing_type.toLowerCase() === "long" ? 52 : 18;
+    const started = new Date(startedAt.replace(" ", "T"));
+    const readyAt = new Date(started.getTime() + durH * 3600_000);
+    const readyStr = `${readyAt.getFullYear()}-${pad(readyAt.getMonth() + 1)}-${pad(readyAt.getDate())} ${pad(readyAt.getHours())}:${pad(readyAt.getMinutes())}`;
+    run(`UPDATE processing_batches SET status = 'processing', started_at = ?, ready_at = ? WHERE id = ?`,
+      [startedAt, readyStr, batchId]);
+    run(`UPDATE samples SET current_stage = 'processing_started', processing_started_at = ?
+           WHERE id IN (SELECT sample_id FROM processing_batch_members WHERE batch_id = ?)`,
+      [startedAt, batchId]);
+    return readyStr;
   }
 
   function moveBatch(batchId, stageKey) {
@@ -452,6 +506,7 @@ function makeApi(db) {
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack,
+    planProcessingBatch, confirmProcessingBatchStart,
   };
 }
 
@@ -459,12 +514,15 @@ function makeApi(db) {
 // INVARIANTS — the happy path and data integrity that must always hold
 // ---------------------------------------------------------------------------
 
-invariant("all 16 migrations apply and expected tables exist", () => {
+invariant("all 17 migrations apply and expected tables exist", () => {
   const api = makeApi(freshDb());
   const names = api.all(`SELECT name FROM sqlite_master WHERE type = 'table'`).map((r) => r.name);
   for (const t of ["projects", "samples", "section_requests", "slides", "slide_stacks", "processing_batches", "assay_catalog", "stain_requests", "sample_timeline_events"]) {
     assert(names.includes(t), `missing table ${t}`);
   }
+  // Migration 0017 adds the planned-run column (issues #4, #24).
+  const cols = api.all(`PRAGMA table_info(processing_batches)`).map((r) => r.name);
+  assert(cols.includes("planned_start_at"), "processing_batches must gain planned_start_at");
 });
 
 invariant("migration 16 repairs a 0.3.0 stack pulled backward by fresh staining", () => {
@@ -762,10 +820,10 @@ issue(2, "Z-Fix leads FIXATIVE_OPTIONS (the New Sample dialog default)", () => {
   eq(first, "Z-Fix", "first fixative option / dialog default");
 });
 
-// #5 — Short and Long runs cannot coincide. A second batch must be refused
-// while one is already processing. The current startProcessingBatch has no such
-// guard (guardEmptyProcessor defaults off), so this fails until the check ships.
-issue(5, "cannot start a second batch while the processor is busy", () => {
+// #23 — Running two batches at once is the technician's call. Starting a second
+// overlapping run WITHOUT opting in must warn (throw ProcessorBusy) so the dialog
+// can offer "Start anyway"; WITH allowConcurrent it must succeed.
+issue(23, "an overlapping run warns by default but can be started concurrently", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const a = api.addSample(p, "EE", "batch A", { processingType: "Short" });
@@ -773,10 +831,17 @@ issue(5, "cannot start a second batch while the processor is busy", () => {
   api.completePreprocessing(a.id);
   api.completePreprocessing(b.id);
   api.startProcessingBatch({ sampleIds: [a.id], processingType: "Short", startedAt: now() });
-  let threw = false;
+  let warned = false;
   try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Long", startedAt: now() }); }
-  catch { threw = true; }
-  assert(threw, "overlapping processor run should be rejected");
+  catch (err) { warned = err.message === "PROCESSOR_BUSY"; }
+  assert(warned, "overlapping run should warn when not opted in");
+  // The technician overrides and runs both simultaneously.
+  const second = api.startProcessingBatch({
+    sampleIds: [b.id], processingType: "Long", startedAt: now(), allowConcurrent: true,
+  });
+  assert(second > 0, "a concurrent run must start when allowConcurrent is set");
+  eq(api.get(`SELECT current_stage FROM samples WHERE id = ?`, [b.id]).current_stage,
+     "processing_started", "the concurrent run's sample entered the processor");
 });
 
 // #5 regression (reported in 0.2.3): a stale/orphaned batch row whose samples
@@ -800,6 +865,60 @@ issue(5, "a stale 'processing' batch row does not block a new run", () => {
   try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Short", startedAt: now() }); }
   catch { started = false; }
   assert(started, "a new run must start despite the stale batch row");
+});
+
+// #4 / #24 — A planned run holds status 'planned' with its scheduled start in
+// planned_start_at; its members stay in pre-processing (NOT in the processor)
+// until confirmed. Confirming stamps the real start, recomputes ready, and moves
+// the members into the processor so the countdown begins.
+issue(4, "a planned run stays out of the processor until it is confirmed", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const s = api.addSample(p, "EE", "planned", { processingType: "Short" });
+  api.completePreprocessing(s.id);
+  const batch = api.planProcessingBatch({ sampleIds: [s.id], processingType: "Short", plannedStartAt: "2026-03-01 07:30" });
+  const row = api.get(`SELECT status, planned_start_at, ready_at FROM processing_batches WHERE id = ?`, [batch]);
+  eq(row.status, "planned", "batch is planned");
+  eq(row.planned_start_at, "2026-03-01 07:30", "planned start recorded");
+  eq(row.ready_at, "2026-03-02 01:30", "ready time projected from the planned start (+18h Short)");
+  eq(api.get(`SELECT current_stage FROM samples WHERE id = ?`, [s.id]).current_stage, "in_ethanol",
+     "a planned run does NOT move its samples into the processor");
+
+  // A planned run must not block a concurrent 'start now' guard either.
+  const activeRun = api.all(
+    `SELECT pb.id FROM processing_batches pb
+       JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
+       JOIN samples sm ON sm.id = pbm.sample_id
+      WHERE sm.current_stage = 'processing_started'`);
+  eq(activeRun.length, 0, "a planned run is not counted as in-processor");
+});
+
+issue(24, "confirming a planned run starts the countdown", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const s = api.addSample(p, "EE", "confirm", { processingType: "Long" });
+  api.completePreprocessing(s.id);
+  const batch = api.planProcessingBatch({ sampleIds: [s.id], processingType: "Long", plannedStartAt: "2026-03-01 08:00" });
+  const ready = api.confirmProcessingBatchStart(batch, "2026-03-01 09:15");
+  const row = api.get(`SELECT status, started_at, ready_at FROM processing_batches WHERE id = ?`, [batch]);
+  eq(row.status, "processing", "confirmed run is processing");
+  eq(row.started_at, "2026-03-01 09:15", "actual start stamped");
+  eq(ready, "2026-03-03 13:15", "ready recomputed from the actual start (+52h Long)");
+  eq(api.get(`SELECT current_stage, processing_started_at FROM samples WHERE id = ?`, [s.id]).current_stage,
+     "processing_started", "members enter the processor on confirm");
+});
+
+// A sample can only be committed to one open (planned or running) batch.
+issue(4, "a sample already committed to a batch cannot be planned again", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const s = api.addSample(p, "EE", "double", { processingType: "Short" });
+  api.completePreprocessing(s.id);
+  api.planProcessingBatch({ sampleIds: [s.id], processingType: "Short", plannedStartAt: "2026-03-01 07:30" });
+  let threw = false;
+  try { api.planProcessingBatch({ sampleIds: [s.id], processingType: "Short", plannedStartAt: "2026-03-02 07:30" }); }
+  catch (err) { threw = err.message === "ALREADY_BATCHED"; }
+  assert(threw, "a committed sample cannot be planned into a second batch");
 });
 
 // #6 — Editing a batch's start time recomputes the ready time and every
@@ -903,6 +1022,44 @@ issue(12, "a fresh extra stays out of inventory until its section leaves Fresh",
   eq(api.listExtraSlides().length, 1, "extra appears in inventory once the section moves on");
 });
 
+// #14 — A separately-stained INVENTORY extra that reaches Ready for Imaging must
+// merge onto the companion stack already there, so every slide (including the
+// extra) is owned by one stack and therefore gets its own imaging checkbox. The
+// drawer renders one checkbox per slide in listSlidesForStack(stackId), so the
+// gate asserts the merged stack owns both slides with imaging timestamps set.
+issue(14, "an inventory extra merges into the imaging stack and gains a checkbox", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "imaging merge");
+  api.markEmbedded(id);
+  // One cut at 100µm: slide 0 → H&E, slide 1 → saved extra.
+  const [section] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 2 }]);
+  api.sectionToAssignment(section);
+  const slides = api.all(`SELECT * FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`, [section]);
+  api.assignSlide(slides[0].id, "stain", "stain", "H&E");
+  api.assignSlide(slides[1].id, "extra", "", "");
+  api.startAssayWork(section);
+  // The H&E companion finishes staining and sits in Ready for Imaging.
+  const companionStack = api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slides[0].id]).stack_id;
+  const imagingStackId = api.moveSlideStack(companionStack, "ready_for_imaging");
+
+  // Later: take the saved extra from inventory, stain it independently, and send
+  // it forward. It starts a fresh staining stack, then advances to imaging.
+  const extra = api.listExtraSlides().find((s) => s.id === slides[1].id);
+  assert(extra, "the saved extra is available in inventory");
+  const { stackId: extraStack } = api.assignExtraSlideToAssay(extra.id, "stain", "H&E");
+  assert(extraStack !== imagingStackId, "a separately-stained extra starts its own staining stack");
+  const mergedId = api.moveSlideStack(extraStack, "ready_for_imaging");
+
+  eq(mergedId, imagingStackId, "the extra merges into the companion imaging stack");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE sample_id = ? AND depth_um = 100 AND closed_at IS NULL`, [id]).c,
+     1, "one imaging stack remains for the sample-depth");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE stack_id = ?`, [imagingStackId]).c,
+     2, "the merged stack owns both the companion and the extra");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE stack_id = ? AND stage_ready_for_imaging_at IS NOT NULL`, [imagingStackId]).c,
+     2, "every slide in the imaging stack has an imaging timestamp (so each gets a checkbox)");
+});
+
 issue(25, "dragging cannot move backward or skip workflow stages", () => {
   const src = readFileSync(join(HERE, "..", "src", "components", "Board.tsx"), "utf8");
   assert(src.includes("SECTION_STAGE_ORDER[targetStage]") && src.includes("!== 1"),
@@ -944,6 +1101,46 @@ issue(28, "section and imaging undo restore slide snapshots", () => {
     "section undo must restore its slides");
   assert(actions.includes("Complete imaging") && actions.includes("for (const section of before) await restoreSectionRequest(section)"),
     "bulk imaging must register a symmetric undo command");
+});
+
+// #29 — Undoing "start assay workflow" must not leave the minted slide stack
+// behind as an empty tile stuck in the assay lane. Restoring the section's
+// slides clears their stack_id, so the section-move undo must ALSO reconcile the
+// stacks the move touched: delete a stack it created, recreate it on redo.
+issue(29, "undoing start-assay removes the stack the move created", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  const dbSource = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  assert(
+    actions.includes("snapshotStacksForSlides") &&
+    actions.includes("await ensureStacks(") &&
+    actions.includes("await pruneStacks("),
+    "section-move undo/redo must snapshot and reconcile the slide stacks it touches",
+  );
+  assert(dbSource.includes("deleteSlideStackIfEmpty"),
+    "an empty minted stack must be prunable when its slides are restored");
+});
+
+// The stack-pruning primitive itself: a stack with no slides is removed, one
+// that still owns slides survives. Backstops the undo reconciliation above.
+invariant("deleteSlideStackIfEmpty removes only childless stacks", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "prune");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 1 }]);
+  api.sectionToAssignment(section);
+  const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+  api.assignSlide(slide.id, "stain", "stain", "H&E");
+  api.startAssayWork(section);
+  const stackId = api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id;
+  assert(stackId != null, "start assay attaches the slide to a stack");
+  // While the stack still owns the slide, pruning must NOT remove it.
+  api.run(`DELETE FROM slide_stacks WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`, [stackId, stackId]);
+  eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE id = ?`, [stackId]).c, 1, "stack with slides survives");
+  // Detach the slide (undo restoring slides), then prune: the stack is gone.
+  api.run(`UPDATE slides SET stack_id = NULL WHERE id = ?`, [slide.id]);
+  api.run(`DELETE FROM slide_stacks WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`, [stackId, stackId]);
+  eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE id = ?`, [stackId]).c, 0, "emptied stack is pruned");
 });
 
 invariant("downstream UI and actions address durable stack IDs", () => {

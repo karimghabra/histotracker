@@ -1,5 +1,5 @@
 import { useDraggable } from "@dnd-kit/core";
-import { ChevronDown, ChevronRight, Clock3, FlaskConical } from "lucide-react";
+import { CalendarClock, ChevronDown, ChevronRight, Clock3, FlaskConical, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProcessingBatch } from "../lib/types";
 import { cn, parseTimestamp } from "../lib/utils";
@@ -15,31 +15,51 @@ function remaining(batch: ProcessingBatch, now: number): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+// "PLANNED FOR 07:30 · TOMORROW" / "· MON" (issues #4, #24): the tile must show
+// the scheduled start, not a timer that misleadingly counts up before the run.
+function plannedLabel(batch: ProcessingBatch): string {
+  const when = parseTimestamp(batch.planned_start_at);
+  if (!when) return "PLANNED";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(when) - startOfDay(new Date())) / 86_400_000);
+  const day =
+    days === 0 ? "TODAY" :
+    days === 1 ? "TOMORROW" :
+    when.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase();
+  return `PLANNED FOR ${clock} · ${day}`;
+}
+
 export function ProcessingBatchRow({
   batch,
   overlay = false,
   selected = false,
   onSelect,
+  onConfirmStart,
 }: {
   batch: ProcessingBatch;
   overlay?: boolean;
   selected?: boolean;
   onSelect?: (batchId: number) => void;
+  onConfirmStart?: (batchId: number) => void;
 }) {
+  const isPlanned = batch.status === "planned";
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (batch.current_stage !== "processing_started") return undefined;
+    if (isPlanned || batch.current_stage !== "processing_started") return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
-  }, [batch.current_stage]);
+  }, [isPlanned, batch.current_stage]);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `batch-${batch.id}`,
     data: { type: "batch", batch },
-    disabled: overlay,
+    // A planned run has not entered the processor, so it cannot be dragged onward.
+    disabled: overlay || isPlanned,
   });
-  const time = remaining(batch, now);
-  const awaitingPickup = batch.current_stage === "processed";
+  const time = isPlanned ? "" : remaining(batch, now);
+  const awaitingPickup = !isPlanned && batch.current_stage === "processed";
 
   return (
     <div
@@ -49,13 +69,15 @@ export function ProcessingBatchRow({
       onClick={() => !overlay && onSelect?.(batch.id)}
       className={cn(
         "rounded-md border transition",
-        awaitingPickup
-          // Issue #19: keep the pickup signal on the edges without washing out the tile.
-          ? "batch-awaiting-pickup"
-          : "border-brand/25 bg-brand/5",
+        isPlanned
+          ? "border-dashed border-ink-faint/40 bg-surface"
+          : awaitingPickup
+            // Issue #19: keep the pickup signal on the edges without washing out the tile.
+            ? "batch-awaiting-pickup"
+            : "border-brand/25 bg-brand/5",
         // Issue #17: show which batch is selected.
         selected && "ring-2 ring-brand ring-offset-1",
-        overlay ? "cursor-grabbing shadow-lg" : "cursor-grab",
+        overlay ? "cursor-grabbing shadow-lg" : isPlanned ? "cursor-pointer" : "cursor-grab",
         isDragging && !overlay && "opacity-30",
       )}
     >
@@ -72,7 +94,7 @@ export function ProcessingBatchRow({
         >
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
-        <FlaskConical size={12} className="text-brand" />
+        {isPlanned ? <CalendarClock size={12} className="text-ink-soft" /> : <FlaskConical size={12} className="text-brand" />}
         <span className="text-xs font-semibold text-ink">Batch {batch.id}</span>
         <span className="text-[10px] text-ink-soft">
           {batch.processing_type} · {batch.member_count} samples
@@ -88,6 +110,26 @@ export function ProcessingBatchRow({
           </span>
         )}
       </div>
+      {isPlanned && (
+        <div className="flex items-center gap-2 border-t border-ink-faint/15 px-2 py-1.5">
+          <span className="inline-flex items-center gap-1 rounded bg-ink-faint/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-ink-soft">
+            <CalendarClock size={10} /> {plannedLabel(batch)}
+          </span>
+          {onConfirmStart && !overlay && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onConfirmStart(batch.id);
+              }}
+              className="ml-auto inline-flex items-center gap-1 rounded border border-brand bg-brand px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-brand/90"
+            >
+              <Play size={10} /> Confirm start
+            </button>
+          )}
+        </div>
+      )}
       {batch.operator_name && (
         <div className="border-t border-brand/10 px-7 py-1 text-[10px] text-ink-faint">
           {batch.operator_name}

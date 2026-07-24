@@ -199,6 +199,7 @@ export interface ProcessingBatch {
   operator_name: string;
   status: string;
   started_at: string;
+  planned_start_at: string | null;
   ready_at: string | null;
   collected_at: string | null;
   completed_at: string | null;

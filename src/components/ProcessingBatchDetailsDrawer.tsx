@@ -1,10 +1,11 @@
-import { CheckCircle2, Clock3, FlaskConical, Pencil, X } from "lucide-react";
+import { CalendarClock, CheckCircle2, Clock3, FlaskConical, Pencil, Play, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProcessingBatch, Sample } from "../lib/types";
 import { parseTimestamp } from "../lib/utils";
 import { Button } from "./ui";
 
 function countdown(batch: ProcessingBatch, now: number): string {
+  if (batch.status === "planned") return "Planned — not started yet";
   if (batch.current_stage !== "processing_started") return "Complete — awaiting pickup";
   const ready = parseTimestamp(batch.ready_at);
   if (!ready) return "Ready time unavailable";
@@ -20,6 +21,7 @@ export function ProcessingBatchDetailsDrawer({
   samples,
   onMove,
   onEditStart,
+  onConfirmStart,
   width = 320,
   onClose,
 }: {
@@ -28,10 +30,16 @@ export function ProcessingBatchDetailsDrawer({
   onMove: (batchId: number, stageKey: string) => void;
   /** Correct the batch start time (issue #6); recomputes ready time + members. */
   onEditStart?: (batchId: number, startedAt: string) => void;
+  /** Confirm a planned run actually started (issue #4). */
+  onConfirmStart?: (batchId: number, actualStartedAt?: string) => void;
   width?: number;
   onClose: () => void;
 }) {
+  const isPlanned = batch.status === "planned";
   const [now, setNow] = useState(() => Date.now());
+  const [confirmAt, setConfirmAt] = useState(() =>
+    (batch.planned_start_at ?? "").replace(" ", "T").slice(0, 16),
+  );
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -60,14 +68,18 @@ export function ProcessingBatchDetailsDrawer({
             <Clock3 size={15} className="text-amber-600" /> {countdown(batch, now)}
           </div>
           <dl className="space-y-1 text-xs">
-            <EditableStartRow
-              value={batch.started_at}
-              editable={
-                (batch.current_stage === "processing_started" ||
-                  batch.current_stage === "processed") && Boolean(onEditStart)
-              }
-              onSave={(next) => onEditStart?.(batch.id, next)}
-            />
+            {isPlanned ? (
+              <Row label="Planned start" value={batch.planned_start_at ?? "—"} />
+            ) : (
+              <EditableStartRow
+                value={batch.started_at}
+                editable={
+                  (batch.current_stage === "processing_started" ||
+                    batch.current_stage === "processed") && Boolean(onEditStart)
+                }
+                onSave={(next) => onEditStart?.(batch.id, next)}
+              />
+            )}
             <Row label="Expected ready" value={batch.ready_at ?? "—"} />
             <Row label="Operator" value={batch.operator_name || "—"} />
             {batch.checklist_total > 0 && (
@@ -95,7 +107,29 @@ export function ProcessingBatchDetailsDrawer({
       </div>
 
       <div className="border-t border-line px-4 py-3">
-        {batch.current_stage === "processing_started" ? (
+        {isPlanned ? (
+          <>
+            <label className="mb-1 flex items-center gap-1 text-xs font-medium text-ink-soft">
+              <CalendarClock size={13} /> Actual start
+            </label>
+            <input
+              type="datetime-local"
+              value={confirmAt}
+              onChange={(event) => setConfirmAt(event.target.value)}
+              className="mb-2 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-brand"
+            />
+            <Button
+              variant="primary"
+              className="w-full"
+              disabled={!onConfirmStart}
+              onClick={() =>
+                onConfirmStart?.(batch.id, confirmAt ? confirmAt.replace("T", " ").slice(0, 16) : undefined)
+              }
+            >
+              <Play size={15} /> Confirm start &amp; begin countdown
+            </Button>
+          </>
+        ) : batch.current_stage === "processing_started" ? (
           <>
             <p className="mb-2 text-xs text-amber-700">
               Moving this batch early will ask for confirmation before skipping the remaining countdown.
@@ -169,16 +203,16 @@ function EditableStartRow({
   return (
     <div className="flex items-center justify-between gap-2">
       <dt className="text-ink-faint">Started</dt>
-      <dd>
+      <dd className="flex items-center gap-2">
+        <span className="text-ink-soft">{value}</span>
         <button
           onClick={() => {
             setDraft(value.replace(" ", "T"));
             setEditing(true);
           }}
-          className="group inline-flex items-center gap-1 rounded px-1 text-ink-soft hover:bg-black/5 hover:text-ink"
+          className="inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[11px] font-medium text-brand hover:bg-brand/5"
         >
-          {value}
-          <Pencil size={10} className="opacity-0 group-hover:opacity-60" />
+          <Pencil size={11} /> Edit
         </button>
       </dd>
     </div>

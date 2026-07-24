@@ -23,6 +23,9 @@ import {
   listSlidesForStack,
   listChecklistRunsForScope,
   moveProcessingBatch as moveProcessingBatchDb,
+  planProcessingBatch as planProcessingBatchDb,
+  confirmProcessingBatchStart as confirmProcessingBatchStartDb,
+  revertProcessingBatchToPlanned,
   reinsertSample,
   reinsertSectionRequest,
   reinsertSlide,
@@ -80,6 +83,39 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
   }, [qc]);
 
+  // --- Slide-stack reconciliation for section-move undo/redo (issue #29) ------
+  // A section entering the assay stage mints (or joins) a slide stack. Restoring
+  // the section's slides alone re-points them off that stack but leaves it behind
+  // as an empty tile stuck in the assay lane. So we snapshot the stacks a
+  // section's slides belong to on each side of the move and reconcile: undo
+  // removes a stack the move created; redo recreates it.
+  const snapshotStacksForSlides = useCallback(
+    async (slides: Slide[]): Promise<SlideStack[]> => {
+      const ids = [...new Set(slides.map((s) => s.stack_id).filter((v): v is number => v != null))];
+      const stacks = await Promise.all(ids.map(getSlideStack));
+      return stacks.filter((s): s is SlideStack => s !== null);
+    },
+    [],
+  );
+
+  // Make the given stacks exist and match their snapshots BEFORE repointing
+  // slides onto them, so the stack_id foreign key always resolves.
+  const ensureStacks = useCallback(async (snapshots: SlideStack[]) => {
+    for (const snap of snapshots) {
+      const existing = await getSlideStack(snap.id);
+      if (existing) await restoreSlideStack(snap);
+      else await reinsertSlideStack(snap);
+    }
+  }, []);
+
+  // Drop stacks that exist only on the other side of the move and no longer own
+  // any slides — the freshly minted stack after an undo of "start assay".
+  const pruneStacks = useCallback(async (candidates: SlideStack[], keepIds: Set<number>) => {
+    for (const snap of candidates) {
+      if (!keepIds.has(snap.id)) await deleteSlideStackIfEmpty(snap.id);
+    }
+  }, []);
+
   function validateForwardSampleMove(sample: Sample, stageKey: string) {
     const targetOrder = STAGE_ORDER[stageKey] ?? 0;
     const currentOrder = STAGE_ORDER[sample.current_stage] ?? 0;
@@ -128,22 +164,30 @@ export function useActions() {
       after: SectionRequest,
       beforeSlides: Awaited<ReturnType<typeof listSlidesForSectionRequest>>,
       afterSlides: Awaited<ReturnType<typeof listSlidesForSectionRequest>>,
+      beforeStacks: SlideStack[] = [],
+      afterStacks: SlideStack[] = [],
     ) => {
+      const beforeIds = new Set(beforeStacks.map((s) => s.id));
+      const afterIds = new Set(afterStacks.map((s) => s.id));
       record({
         label,
         undo: async () => {
+          await ensureStacks(beforeStacks);
           await restoreSectionRequest(before);
           for (const slide of beforeSlides) await restoreSlide(slide);
+          await pruneStacks(afterStacks, beforeIds);
           invalidate();
         },
         redo: async () => {
+          await ensureStacks(afterStacks);
           await restoreSectionRequest(after);
           for (const slide of afterSlides) await restoreSlide(slide);
+          await pruneStacks(beforeStacks, afterIds);
           invalidate();
         },
       });
     },
-    [invalidate, record],
+    [ensureStacks, pruneStacks, invalidate, record],
   );
 
   const moveSample = useCallback(
@@ -219,6 +263,7 @@ export function useActions() {
       startedAt: string;
       checklistLabels: string[];
       notes?: string;
+      allowConcurrent?: boolean;
     }) => {
       const before = (await Promise.all(input.sampleIds.map(getSample))).filter(
         (s): s is Sample => s !== null,
@@ -242,6 +287,60 @@ export function useActions() {
         },
       });
       return batchId;
+    },
+    [invalidate, record],
+  );
+
+  // Schedule a run for a future start (issues #4, #24). Members stay in
+  // pre-processing until confirmed; undo just removes the planned batch.
+  const planProcessingBatch = useCallback(
+    async (input: {
+      sampleIds: number[];
+      processingType: ProcessingType;
+      operatorName: string;
+      plannedStartAt: string;
+      notes?: string;
+    }) => {
+      let batchId = await planProcessingBatchDb(input);
+      invalidate();
+      record({
+        label: `Plan ${input.processingType.toLowerCase()} batch · ${input.sampleIds.length} samples`,
+        undo: async () => {
+          await deleteProcessingBatch(batchId);
+          invalidate();
+        },
+        redo: async () => {
+          batchId = await planProcessingBatchDb(input);
+          invalidate();
+        },
+      });
+      return batchId;
+    },
+    [invalidate, record],
+  );
+
+  // Confirm a planned run actually started: it enters the processor and the
+  // countdown begins (issue #4). Undo returns it to planned and its samples to
+  // pre-processing.
+  const confirmProcessingBatchStart = useCallback(
+    async (batchId: number, actualStartedAt?: string) => {
+      const before = await getProcessingBatchSamples(batchId);
+      await confirmProcessingBatchStartDb(batchId, actualStartedAt);
+      invalidate();
+      const after = await getProcessingBatchSamples(batchId);
+      record({
+        label: "Confirm processing start",
+        undo: async () => {
+          for (const snapshot of before) await restoreSample(snapshot);
+          await revertProcessingBatchToPlanned(batchId);
+          invalidate();
+        },
+        redo: async () => {
+          await confirmProcessingBatchStartDb(batchId, actualStartedAt);
+          for (const snapshot of after) await restoreSample(snapshot);
+          invalidate();
+        },
+      });
     },
     [invalidate, record],
   );
@@ -498,6 +597,7 @@ export function useActions() {
       const before = await getSectionRequest(sectionId);
       if (!before) return;
       const beforeSlides = await listSlidesForSectionRequest(sectionId);
+      const beforeStacks = await snapshotStacksForSlides(beforeSlides);
       const targetOrder = SECTION_STAGE_ORDER[stageKey] ?? 0;
       const currentOrder = SECTION_STAGE_ORDER[before.current_stage] ?? 0;
       if (
@@ -515,16 +615,19 @@ export function useActions() {
       const after = await getSectionRequest(sectionId);
       if (after) {
         const afterSlides = await listSlidesForSectionRequest(sectionId);
+        const afterStacks = await snapshotStacksForSlides(afterSlides);
         recordRestoreSection(
           `Move section → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
           before,
           after,
           beforeSlides,
           afterSlides,
+          beforeStacks,
+          afterStacks,
         );
       }
     },
-    [invalidate, recordRestoreSection],
+    [invalidate, recordRestoreSection, snapshotStacksForSlides],
   );
 
   // Move several sections at once as a SINGLE undo entry (issue #16): a batch
@@ -539,6 +642,7 @@ export function useActions() {
       const beforeSlides = (await Promise.all(before.map((section) =>
         listSlidesForSectionRequest(section.id),
       ))).flat();
+      const beforeStacks = await snapshotStacksForSlides(beforeSlides);
       const targetOrder = SECTION_STAGE_ORDER[stageKey] ?? 0;
       if (stageKey === "stain_requested") {
         const incomplete = await Promise.all(before.map(async (section) => {
@@ -571,21 +675,28 @@ export function useActions() {
       const afterSlides = (await Promise.all(after.map((section) =>
         listSlidesForSectionRequest(section.id),
       ))).flat();
+      const afterStacks = await snapshotStacksForSlides(afterSlides);
+      const beforeIds = new Set(beforeStacks.map((s) => s.id));
+      const afterIds = new Set(afterStacks.map((s) => s.id));
       record({
         label: `Move ${before.length} sections → ${SECTION_STAGE_LABELS[stageKey] ?? stageKey}`,
         undo: async () => {
+          await ensureStacks(beforeStacks);
           for (const snapshot of before) await restoreSectionRequest(snapshot);
           for (const slide of beforeSlides) await restoreSlide(slide);
+          await pruneStacks(afterStacks, beforeIds);
           invalidate();
         },
         redo: async () => {
+          await ensureStacks(afterStacks);
           for (const snapshot of after) await restoreSectionRequest(snapshot);
           for (const slide of afterSlides) await restoreSlide(slide);
+          await pruneStacks(beforeStacks, afterIds);
           invalidate();
         },
       });
     },
-    [invalidate, moveSection, record],
+    [invalidate, moveSection, record, snapshotStacksForSlides, ensureStacks, pruneStacks],
   );
 
   const editSectionTimestamp = useCallback(
@@ -1013,6 +1124,8 @@ export function useActions() {
     moveSample,
     moveSamples,
     startProcessingBatch,
+    planProcessingBatch,
+    confirmProcessingBatchStart,
     moveProcessingBatch,
     editBatchStart,
     editTimestamp,

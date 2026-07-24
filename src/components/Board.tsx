@@ -107,6 +107,7 @@ export function Board({
   onRequestProcessingBatch,
   onMoveProcessingBatch,
   onSelectProcessingBatch,
+  onConfirmProcessingBatchStart,
   onToggleSamplePriority,
   readOnly = false,
 }: {
@@ -131,6 +132,7 @@ export function Board({
   onRequestProcessingBatch: (sampleIds: number[]) => void;
   onMoveProcessingBatch: (batchId: number, stageKey: string) => void;
   onSelectProcessingBatch: (batchId: number) => void;
+  onConfirmProcessingBatchStart: (batchId: number) => void;
   onToggleSamplePriority: (sampleId: number) => void;
   /** Viewer role: disable drag-to-move and the priority toggle. */
   readOnly?: boolean;
@@ -671,6 +673,7 @@ export function Board({
                           batch={batch}
                           selected={selectedBatch === batch.id}
                           onSelect={handleSelectBatch}
+                          onConfirmStart={onConfirmProcessingBatchStart}
                         />
                       ))}
                       {items.map((sample) => (

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.2 - 2026-07-24
+
+- **Schema change — every workstation and viewer must update to 0.3.2 together.**
+  Migration 0017 adds a planned processing-run lifecycle (additive, sync-safe).
+- Added planned processing runs: a run can be scheduled for a future start and
+  its tile now reads "PLANNED FOR HH:MM · <weekday>" instead of counting up a
+  misleading timer. At the planned time the technician confirms the actual start,
+  which stamps the real start, computes the ready time, and begins the countdown
+  (#4, #24).
+- Starting a processor run while another is already active is no longer blocked:
+  the batch-start dialog warns and lets the technician start a second run
+  simultaneously if they choose (#23).
+- Made the processing-batch start time editable from an always-visible "Edit
+  start time" button in the batch drawer instead of a hover-only pencil (#30).
+- Undoing "start assay workflow" now also removes the slide stack the transition
+  created, so tiles no longer linger in the assay stage after the fresh slides
+  return (#29).
+- Locked in, with a regression test, that a separately-stained extra reaching
+  Ready for Imaging merges onto the companion stack so every slide gets its own
+  imaging checkbox — the durable-stack rework already made this correct (#14).
+
 ## 0.3.1 - 2026-07-18
 
 - Corrected downstream stack identity to sample + physical cut depth + current
