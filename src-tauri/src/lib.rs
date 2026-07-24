@@ -129,6 +129,12 @@ pub fn run() {
             sql: include_str!("../migrations/0018_stain_racks_no_depth.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "preselected_stains",
+            sql: include_str!("../migrations/0019_preselected_stains.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

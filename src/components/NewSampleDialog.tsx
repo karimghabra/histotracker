@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, Select, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
+import { useAssayCatalog } from "../hooks/useData";
 import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
 import type { Project, ProcessingType } from "../lib/types";
@@ -24,6 +25,7 @@ export function NewSampleDialog({
   onClose: () => void;
 }) {
   const { createSamples } = useActions();
+  const { data: catalog = [] } = useAssayCatalog();
   const [saving, setSaving] = useState(false);
   const [previewCode, setPreviewCode] = useState("…");
   const [description, setDescription] = useState("");
@@ -31,7 +33,8 @@ export function NewSampleDialog({
   const [processing, setProcessing] = useState<ProcessingType>("Short");
   const [needsDecalc, setNeedsDecalc] = useState(false);
   const [quantity, setQuantity] = useState(1);
-  const [stains, setStains] = useState("");
+  // Agents ticked for this sample (issue #1). Keyed "type::name".
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
   const [overallNotes, setOverallNotes] = useState("");
@@ -42,6 +45,19 @@ export function NewSampleDialog({
 
   // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
   const previewLabel = codeRange(previewCode, quantity);
+
+  const preselectedStains = catalog
+    .filter((a) => picked.has(`${a.assay_type}::${a.name}`))
+    .map((a) => ({ assay_type: a.assay_type, assay_name: a.name }));
+
+  function toggle(key: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   async function save() {
     setSaving(true);
@@ -54,7 +70,8 @@ export function NewSampleDialog({
         needs_decalcification: needsDecalc,
         cut_notes: cutNotes,
         slide_notes: slideNotes,
-        stains,
+        stains: preselectedStains.map((a) => a.assay_name).join(", "),
+        preselected_stains: preselectedStains,
         overall_notes: overallNotes,
       },
       project.code,
@@ -120,8 +137,32 @@ export function NewSampleDialog({
         />
         Decalcification needed after fixation
       </label>
-      <Field label="Requested Stains / IHC">
-        <TextInput value={stains} onChange={(e) => setStains(e.target.value)} />
+      <Field label={`Stains / IHC${picked.size ? ` · ${picked.size} selected` : ""}`}>
+        {catalog.length === 0 ? (
+          <p className="text-xs text-ink-faint">No active agents in the catalog.</p>
+        ) : (
+          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
+            {catalog.map((a) => {
+              const key = `${a.assay_type}::${a.name}`;
+              return (
+                <label key={key} className="flex items-center gap-2 text-sm text-ink-soft">
+                  <input
+                    type="checkbox"
+                    checked={picked.has(key)}
+                    onChange={() => toggle(key)}
+                    className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+                  />
+                  <span className="flex-1">{a.name}</span>
+                  <span className="text-[10px] uppercase text-ink-faint">{a.assay_type}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <p className="mt-1 text-[11px] text-ink-faint">
+          Each ticked agent is preassigned a slide; the block auto-plans {Math.max(2, 4 - picked.size)} extra
+          {Math.max(2, 4 - picked.size) === 1 ? "" : "s"} at embedding.
+        </p>
       </Field>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />

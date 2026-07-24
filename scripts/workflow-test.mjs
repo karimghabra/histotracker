@@ -126,22 +126,30 @@ function makeApi(db) {
   function addSample(projectId, projectCode, description, opts = {}) {
     const number = nextSampleNumber(projectId);
     const code = `${projectCode.toUpperCase()}-${pad(number, 4)}`;
+    const preselected = (opts.preselectedStains ?? []).length ? JSON.stringify(opts.preselectedStains) : "";
     const r = run(
       `INSERT INTO samples (
          project_id, project_sample_number, sample_code, sample_description, date_added,
          processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-         stains, overall_notes, current_stage, stage_received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, '', 'received', ?)`,
+         stains, preselected_stains, overall_notes, current_stage, stage_received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, '', 'received', ?)`,
       [
         projectId, number, code, description, "2026-01-01",
         opts.processingType ?? "Short",
         opts.fixative ?? "PFA",
         opts.needsDecalc ? 1 : 0,
         opts.stains ?? "",
+        preselected,
         now(),
       ],
     );
     return { id: Number(r.lastInsertRowid), code };
+  }
+
+  // Port of buildAutoSectioningPlan() — src/lib/db.ts (issue #4).
+  function buildAutoSectioningPlan(preselected) {
+    const stains = preselected.map((a) => ({ duplicates: 1, stains: a.assay_name, assay_type: a.assay_type, assay_name: a.assay_name }));
+    return [...stains, { duplicates: Math.max(2, 4 - preselected.length), stains: "" }];
   }
 
   // Walk a block through preprocessing so it is batch-eligible.
@@ -274,6 +282,13 @@ function makeApi(db) {
 
   function markEmbedded(sampleId) {
     run(`UPDATE samples SET current_stage = 'embedded', stage_embedded_at = COALESCE(stage_embedded_at, ?) WHERE id = ?`, [now(), sampleId]);
+    // Mirror ensureAutoSectioningPlan(): every embedded block auto-plans (≥4
+    // slides, ≥2 extras); no preselected stains means four extras.
+    const row = get(`SELECT preselected_stains, sectioning_plan FROM samples WHERE id = ?`, [sampleId]);
+    if (row && !row.sectioning_plan) {
+      const preselected = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+      run(`UPDATE samples SET sectioning_plan = ? WHERE id = ?`, [JSON.stringify(buildAutoSectioningPlan(preselected)), sampleId]);
+    }
   }
 
   // Port of createSectionRequests() — src/lib/db.ts. No depth; per-sample slide
@@ -298,20 +313,30 @@ function makeApi(db) {
     ).n ?? 0) + 1;
     for (const g of groups) {
       const dup = Math.max(1, g.duplicates);
+      const preassigned = Boolean(g.assay_type && g.assay_name);
       const r = run(
         `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
          VALUES (?, ?, ?, 'needs_sectioning', ?)`,
-        [sampleId, dup, g.stains ?? "", ts],
+        [sampleId, dup, g.stains ?? (preassigned ? g.assay_name : "") ?? "", ts],
       );
       const sectionId = Number(r.lastInsertRowid);
       ids.push(sectionId);
       for (let ordinal = 1; ordinal <= dup; ordinal++) {
         const slideCode = `${parentCode}-${duplicateLabel(nextOrdinal).toUpperCase()}`;
-        run(
-          `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
-           VALUES (?, ?, ?, 'extra', 'extra')`,
-          [sectionId, ordinal, slideCode],
-        );
+        if (preassigned) {
+          run(
+            `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+               assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
+             VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
+            [sectionId, ordinal, slideCode, g.assay_name, g.assay_type, g.assay_name],
+          );
+        } else {
+          run(
+            `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
+             VALUES (?, ?, ?, 'extra', 'extra')`,
+            [sectionId, ordinal, slideCode],
+          );
+        }
         nextOrdinal++;
       }
     }
@@ -568,6 +593,54 @@ function stainOneSlide(api, sampleId, assayType, assayName) {
   api.startAssayWork(section);
   return api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id;
 }
+
+// The "needs staining" flag: preselected stains present and none yet in staining.
+function pendingFlag(api, sampleId) {
+  const row = api.get(
+    `SELECT preselected_stains,
+       (SELECT COUNT(*) FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+         WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.stage_stain_requested_at IS NOT NULL) AS inStaining
+      FROM samples WHERE id = ?`, [sampleId, sampleId]);
+  return row.preselected_stains !== "" && row.inStaining === 0 ? row.preselected_stains : "";
+}
+
+invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras (#1/#4)", () => {
+  for (const [n, expectedExtras] of [[0, 4], [1, 3], [2, 2], [3, 2], [4, 2]]) {
+    const api = makeApi(freshDb());
+    const p = api.seedProject();
+    const agents = Array.from({ length: n }, (_, i) => ({ assay_type: i % 2 ? "ihc" : "stain", assay_name: `A${i}` }));
+    const { id } = api.addSample(p, "EE", `n=${n}`, { preselectedStains: agents });
+    api.markEmbedded(id); // seeds the auto plan
+    const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [id]).sectioning_plan || "[]");
+    const total = plan.reduce((s, g) => s + g.duplicates, 0);
+    eq(total, n + expectedExtras, `n=${n}: total slides`);
+    // Sending the plan produces n preassigned stain slides + the extras.
+    const groups = plan; // one-click send of the whole prefilled plan
+    api.createSectionRequests(id, groups);
+    eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+                 WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assignment_saved = 1`, [id]).c, n,
+       `n=${n}: preassigned+saved stain slides`);
+    eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+                 WHERE sr.sample_id = ? AND sl.purpose = 'extra'`, [id]).c, expectedExtras,
+       `n=${n}: extra slides`);
+  }
+});
+
+invariant("the needs-staining flag clears once a stain enters staining (#1/#2)", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "flagged", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }],
+  });
+  api.markEmbedded(id);
+  assert(pendingFlag(api, id) !== "", "flag present at embedded inventory");
+  const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [id]).sectioning_plan);
+  const [section] = api.createSectionRequests(id, plan.filter((g) => g.assay_name));
+  assert(pendingFlag(api, id) !== "", "flag still present before staining");
+  api.sectionToAssignment(section);
+  api.startAssayWork(section); // stain enters the reagents
+  eq(pendingFlag(api, id), "", "flag clears once the stain enters staining");
+});
 
 invariant("same agent across different samples loads into ONE cross-sample rack", () => {
   const api = makeApi(freshDb());

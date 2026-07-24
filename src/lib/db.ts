@@ -222,12 +222,15 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
   const number = await nextSampleNumber(input.project_id);
   const code = `${projectCode.trim().toUpperCase()}-${String(number).padStart(4, "0")}`;
 
+  const preselected = input.preselected_stains?.length
+    ? JSON.stringify(input.preselected_stains)
+    : "";
   const res = await db.execute(
     `INSERT INTO samples (
         project_id, project_sample_number, sample_code, sample_description, date_added,
         processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-        stains, overall_notes, current_stage, stage_received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
+        stains, preselected_stains, overall_notes, current_stage, stage_received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
     [
       input.project_id,
       number,
@@ -240,6 +243,7 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
       input.cut_notes.trim(),
       input.slide_notes.trim(),
       input.stains.trim(),
+      preselected,
       input.overall_notes.trim(),
       timestamp,
     ],
@@ -251,16 +255,13 @@ export async function listOpenSamples(): Promise<Sample[]> {
   const db = await getDb();
   return db.select<Sample[]>(
     `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
-            COALESCE((
-              SELECT GROUP_CONCAT(name, ', ') FROM (
-                SELECT DISTINCT COALESCE(NULLIF(sl.assay_name, ''), sl.stain_name) AS name
-                  FROM section_requests sr
-                  JOIN slides sl ON sl.section_request_id = sr.id
-                 WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
-                   AND sl.stage_stain_requested_at IS NULL
-                 ORDER BY name
-              )
-            ), '') AS pending_stains
+            -- The flag stays on the tile until one of the sample's stains enters
+            -- the staining stage (issues #1, #2).
+            CASE WHEN s.preselected_stains != '' AND NOT EXISTS (
+              SELECT 1 FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+               WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
+                 AND sl.stage_stain_requested_at IS NOT NULL
+            ) THEN s.preselected_stains ELSE '' END AS pending_stains
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0
@@ -279,6 +280,26 @@ export async function updateSampleStage(sampleId: number, stageKey: string): Pro
       WHERE id = ?`,
     [stageKey, timestamp, sampleId],
   );
+  // On reaching Embedded Inventory, auto-fill the sectioning plan from the
+  // stains chosen at creation so the block is a one-click send (issues #1, #4).
+  if (stageKey === "embedded") await ensureAutoSectioningPlan(sampleId);
+}
+
+/** Seed the sectioning plan for an embedded sample from its preselected stains,
+ *  unless a plan already exists. */
+export async function ensureAutoSectioningPlan(sampleId: number): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ preselected_stains: string; sectioning_plan: string }>>(
+    `SELECT preselected_stains, sectioning_plan FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const row = rows[0];
+  if (!row || row.sectioning_plan) return;
+  // Every newly embedded block gets at least four slides with two extras
+  // (issue #4); with no preselected stains that is simply four extras.
+  const preselected = parsePreselectedStains(row.preselected_stains);
+  const plan = buildAutoSectioningPlan(preselected);
+  await db.execute(`UPDATE samples SET sectioning_plan = ? WHERE id = ?`, [JSON.stringify(plan), sampleId]);
 }
 
 /**
@@ -354,7 +375,7 @@ export async function getSample(sampleId: number): Promise<Sample | null> {
 const RESTORE_COLUMNS = [
   "project_sample_number", "sample_code", "sample_description", "date_added",
   "processing_type", "fixative_agent", "needs_decalcification", "cut_notes",
-  "slide_notes", "stains", "overall_notes", "sectioning_plan", "current_stage",
+  "slide_notes", "stains", "preselected_stains", "overall_notes", "sectioning_plan", "current_stage",
   "stage_received_at", "decalc_completed_at", "fixative_placed_at", "fixative_removed_at",
   "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",
   "stage_embedded_at", "stage_needs_sectioning_at", "stage_sectioned_at", "stage_stain_requested_at",
@@ -1157,10 +1178,14 @@ function slideCodeFor(parentCode: string, ordinal: number): string {
   return `${parentCode}-${duplicateLabel(ordinal).toUpperCase()}`;
 }
 
-/** Create section-request cut groups (no depth); each produces `duplicates` slides. */
+/**
+ * Create section-request cut groups (no depth); each produces `duplicates`
+ * slides. A group carrying an assay agent preassigns + saves its slides as that
+ * stain (0.3.3 preselected stains); otherwise the slides are saved extras.
+ */
 export async function createSectionRequests(
   sampleId: number,
-  groups: Array<{ duplicates: number; stains?: string }>,
+  groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>,
 ): Promise<number[]> {
   if (groups.length === 0) return [];
   const db = await getDb();
@@ -1186,26 +1211,73 @@ export async function createSectionRequests(
   let nextOrdinal = (countRow[0]?.n ?? 0) + 1;
   for (const g of groups) {
     const count = Math.max(1, g.duplicates);
+    const preassigned = Boolean(g.assay_type && g.assay_name);
     const res = await db.execute(
       `INSERT INTO section_requests
         (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
        VALUES (?, ?, ?, 'needs_sectioning', ?)`,
-      [sampleId, count, g.stains ?? "", timestamp],
+      [sampleId, count, g.stains ?? (preassigned ? g.assay_name : "") ?? "", timestamp],
     );
     if (res.lastInsertId == null) continue;
     const sectionId = res.lastInsertId;
     ids.push(sectionId);
     for (let ordinal = 1; ordinal <= count; ordinal += 1) {
-      await db.execute(
-        `INSERT INTO slides
-          (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
-         VALUES (?, ?, ?, 'extra', 'extra')`,
-        [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
-      );
+      if (preassigned) {
+        // Preselected stain: the slide is saved to that agent, ready for a
+        // one-click Start Assays (issues #1, #3).
+        await db.execute(
+          `INSERT INTO slides
+            (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
+           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name],
+        );
+      } else {
+        await db.execute(
+          `INSERT INTO slides
+            (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
+           VALUES (?, ?, ?, 'extra', 'extra')`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
+        );
+      }
       nextOrdinal += 1;
     }
   }
   return ids;
+}
+
+/**
+ * The auto-generated sectioning plan for an embedded sample with preselected
+ * stains (issue #4): one preassigned cut group per stain, plus enough extras to
+ * reach ≥4 slides with ≥2 extras — extras = max(2, 4 − stainCount).
+ */
+export function buildAutoSectioningPlan(
+  preselected: Array<{ assay_type: string; assay_name: string }>,
+): Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }> {
+  const stains = preselected.map((a) => ({
+    duplicates: 1,
+    stains: a.assay_name,
+    assay_type: a.assay_type,
+    assay_name: a.assay_name,
+  }));
+  const extras = Math.max(2, 4 - preselected.length);
+  return [...stains, { duplicates: extras, stains: "" }];
+}
+
+/** Parse a sample's stored preselected stains (JSON), tolerating empty/legacy. */
+export function parsePreselectedStains(
+  raw: string | null | undefined,
+): Array<{ assay_type: string; assay_name: string }> {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((a) => a && a.assay_name)
+      .map((a) => ({ assay_type: String(a.assay_type || "stain"), assay_name: String(a.assay_name) }));
+  } catch {
+    return [];
+  }
 }
 
 export async function listOpenSectionRequests(): Promise<SectionRequest[]> {

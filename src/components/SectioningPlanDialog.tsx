@@ -6,6 +6,8 @@ import type { Sample } from "../lib/types";
 interface Row {
   duplicates: number;
   stains: string;
+  assay_type?: string;
+  assay_name?: string;
   cut: boolean;
 }
 
@@ -17,7 +19,10 @@ function parsePlan(raw: string): Row[] {
     return parsed.map((r) => ({
       duplicates: Math.max(1, Number(r.duplicates) || 1),
       stains: typeof r.stains === "string" ? r.stains : "",
-      cut: false,
+      assay_type: r.assay_type || undefined,
+      assay_name: r.assay_name || undefined,
+      // Preassigned rows are pre-checked so the auto-plan is a one-click send.
+      cut: Boolean(r.assay_name),
     }));
   } catch {
     return [];
@@ -34,8 +39,8 @@ export function SectioningPlanDialog({
   sample: Sample;
   /** When > 1, the same plan is sent to that many selected embedded blocks (#8). */
   batchCount?: number;
-  onSave: (plan: Array<{ duplicates: number; stains?: string }>) => Promise<void>;
-  onSend: (groups: Array<{ duplicates: number; stains?: string }>) => Promise<void>;
+  onSave: (plan: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>) => Promise<void>;
+  onSend: (groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>) => Promise<void>;
   onClose: () => void;
 }) {
   const [rows, setRows] = useState<Row[]>(() => {
@@ -57,24 +62,26 @@ export function SectioningPlanDialog({
     setRows((rs) => rs.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
-  function planOnly(): Array<{ duplicates: number; stains?: string }> {
-    return rows.map((r) => ({
+  function toGroup(r: Row) {
+    return {
       duplicates: Math.max(1, Number(r.duplicates) || 1),
       stains: r.stains.trim(),
-    }));
+      assay_type: r.assay_type,
+      assay_name: r.assay_name,
+    };
   }
 
   async function savePlan() {
     setBusy(true);
-    await onSave(planOnly());
+    await onSave(rows.map(toGroup));
     setBusy(false);
     onClose();
   }
 
   async function sendSelected() {
     setBusy(true);
-    await onSave(planOnly()); // persist the plan too
-    await onSend(selected.map((r) => ({ duplicates: Math.max(1, r.duplicates), stains: r.stains.trim() })));
+    await onSave(rows.map(toGroup)); // persist the plan too
+    await onSend(selected.map(toGroup));
     setBusy(false);
     onClose();
   }

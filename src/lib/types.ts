@@ -64,8 +64,10 @@ export interface Sample {
   project_code?: string;
   project_name?: string;
   team_lead?: string;
-  /** Assay agents assigned to this sample's slides that haven't yet entered
-   *  staining — drives the "needs staining" flag (0.3.3). */
+  /** JSON array of {assay_type, assay_name} chosen at creation (0.3.3). */
+  preselected_stains: string;
+  /** Non-empty (the preselected_stains JSON) while stains are still awaited —
+   *  drives the "needs staining" flag; cleared once the sample enters staining. */
   pending_stains?: string;
 }
 
@@ -257,5 +259,7 @@ export interface NewSampleInput {
   cut_notes: string;
   slide_notes: string;
   stains: string;
+  /** Agents ticked at creation; preassigned + auto-planned at embed (0.3.3). */
+  preselected_stains: Array<{ assay_type: string; assay_name: string }>;
   overall_notes: string;
 }
