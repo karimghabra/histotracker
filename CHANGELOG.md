@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.3 - 2026-07-24
+
+- **Schema change — every workstation and viewer must update to 0.3.3 together.**
+  Migrations 0018/0019 remove section depth and reshape slide stacks (destructive
+  for depth data).
+- **Removed section depth entirely** (issue #5): the workflow no longer tracks
+  cut depth. Slide codes are now per-sample letters (EE-0001-A, -B, …).
+- **Cross-sample staining racks**: during staining, slides of the same agent
+  group into one cross-sample "rack" that moves through the reagents together
+  and never merges with a later rack; leaving staining, slides scatter back into
+  their own sample's imaging stack. Staining tiles now show the agent and how
+  many samples are in the rack — the groundwork for per-protocol timers.
+- **Stains chosen at sample creation** (issue #1): the New Sample screen has a
+  checkbox list of the agent catalog. A "needs stain" flag sits on the block
+  until each chosen stain enters staining.
+- **Auto-planned blocks** (issues #3, #4): a newly embedded block auto-fills its
+  sectioning plan — one preassigned slide per chosen stain plus enough extras to
+  reach at least four slides with two extras — with assignments pre-saved, so a
+  flagged block is a one-click Send to Sectioning → Start Assays. Dialogs still
+  open (prefilled, with a "preselected" note) for review.
+- **Request a stain** (issue #2): requesting a stain for a sample (from the
+  catalog) pulls it from an available extra slide first, or flags the block for
+  a fresh cut if none is free.
+
 ## 0.3.2 - 2026-07-24
 
 - **Schema change — every workstation and viewer must update to 0.3.2 together.**

@@ -22,11 +22,10 @@ function processingRemaining(sample: Sample): string | null {
 
 function sectioningPlanSummary(raw: string): string | null {
   try {
-    const plan = JSON.parse(raw) as Array<{ depth_um?: number; duplicates?: number }>;
-    const entries = plan
-      .filter((entry) => Number.isFinite(entry.depth_um) && Number(entry.duplicates) > 0)
-      .map((entry) => `${entry.depth_um}um x${entry.duplicates}`);
-    return entries.length > 0 ? entries.join(", ") : null;
+    const plan = JSON.parse(raw) as Array<{ duplicates?: number; stains?: string }>;
+    const slides = plan.reduce((n, entry) => n + Math.max(0, Number(entry.duplicates) || 0), 0);
+    if (slides <= 0) return null;
+    return `${slides} slide${slides === 1 ? "" : "s"} planned`;
   } catch {
     return null;
   }
