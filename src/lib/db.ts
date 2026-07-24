@@ -506,24 +506,6 @@ function formatLocalTimestamp(date: Date): string {
   )}:${pad(date.getMinutes())}`;
 }
 
-/**
- * Raised by startProcessingBatch when a run is already active and the caller
- * did not opt into concurrent runs. Carries the active run's ready time so the
- * dialog can show it (issue #23).
- */
-export class ProcessorBusyError extends Error {
-  readonly readyAt: string | null;
-  constructor(readyAt: string | null) {
-    super(
-      readyAt
-        ? `A run is already in the processor, ready around ${readyAt}.`
-        : "A run is already in the processor.",
-    );
-    this.name = "ProcessorBusyError";
-    this.readyAt = readyAt;
-  }
-}
-
 export async function startProcessingBatch(input: {
   sampleIds: number[];
   processingType: "Short" | "Long";
@@ -531,8 +513,6 @@ export async function startProcessingBatch(input: {
   startedAt: string;
   checklistLabels: string[];
   notes?: string;
-  /** Skip the "processor already busy" guard and run this batch concurrently. */
-  allowConcurrent?: boolean;
 }): Promise<number> {
   if (input.sampleIds.length === 0) throw new Error("Select at least one sample.");
   const db = await getDb();
@@ -576,30 +556,9 @@ export async function startProcessingBatch(input: {
     );
   }
 
-  // Running two batches at once is the technician's call (issue #23). If a run
-  // is already in the processor and this one would overlap it, we surface the
-  // conflict as a typed ProcessorBusyError so the batch-start dialog can offer
-  // "Start anyway"; passing allowConcurrent skips the check. "Busy" is judged
-  // from actual sample state — a run is only in the processor while its samples
-  // sit at 'processing_started' with a window that hasn't ended — NOT from the
-  // batch status column, which can go stale/orphaned. Timestamps are
-  // "YYYY-MM-DD HH:MM", so lexical comparison is chronological.
-  if (!input.allowConcurrent) {
-    const activeRun = await db.select<Array<{ id: number; ready_at: string | null }>>(
-      `SELECT pb.id, pb.ready_at
-         FROM processing_batches pb
-         JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
-         JOIN samples s ON s.id = pbm.sample_id
-        WHERE s.current_stage = 'processing_started'
-          AND (pb.ready_at IS NULL OR pb.ready_at > ?)
-        ORDER BY pb.ready_at DESC
-        LIMIT 1`,
-      [input.startedAt],
-    );
-    if (activeRun.length > 0) {
-      throw new ProcessorBusyError(activeRun[0].ready_at ?? null);
-    }
-  }
+  // Running two batches at once is entirely the technician's call (issue #23):
+  // there is no "processor busy" guard and no override prompt. A second (or
+  // planned) run may start whenever the user says so — the app never blocks it.
 
   const started = parseTimestamp(input.startedAt) ?? new Date();
   const readyAt = new Date(
@@ -825,6 +784,75 @@ export async function revertProcessingBatchToPlanned(batchId: number): Promise<v
     `UPDATE processing_batches SET status = 'planned', started_at = ?, ready_at = ? WHERE id = ?`,
     [batch.planned_start_at ?? formatLocalTimestamp(planned), formatLocalTimestamp(readyAt), batchId],
   );
+}
+
+/** Current member sample ids of a batch (for the planned-run editor, issue #32). */
+export async function getBatchMemberIds(batchId: number): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ sample_id: number }>>(
+    `SELECT sample_id FROM processing_batch_members WHERE batch_id = ? ORDER BY sample_id`,
+    [batchId],
+  );
+  return rows.map((r) => r.sample_id);
+}
+
+/**
+ * Replace a planned run's member samples (issue #32). Only planned runs are
+ * editable; the new set must share the protocol, have completed preprocessing,
+ * and not already be committed to a different open batch.
+ */
+export async function updatePlannedBatchMembers(
+  batchId: number,
+  sampleIds: number[],
+): Promise<void> {
+  if (sampleIds.length === 0) throw new Error("A planned run needs at least one sample.");
+  const db = await getDb();
+  const batchRows = await db.select<Array<{ status: string; processing_type: string }>>(
+    `SELECT status, processing_type FROM processing_batches WHERE id = ?`,
+    [batchId],
+  );
+  const batch = batchRows[0];
+  if (!batch) throw new Error("That processing batch no longer exists.");
+  if (batch.status !== "planned") throw new Error("Only a planned run's samples can be edited.");
+  const placeholders = sampleIds.map(() => "?").join(", ");
+  const samples = await db.select<Sample[]>(
+    `SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`,
+    sampleIds,
+  );
+  if (samples.length !== sampleIds.length) throw new Error("One or more samples no longer exist.");
+  const incompatible = samples.filter((s) => s.processing_type !== batch.processing_type);
+  if (incompatible.length > 0) {
+    throw new Error(`Not ${batch.processing_type} protocol: ${incompatible.map((s) => s.sample_code).join(", ")}`);
+  }
+  const notReady = samples.filter(
+    (s) =>
+      (s.needs_decalcification === 1 && !s.decalc_completed_at) ||
+      !s.fixative_placed_at ||
+      !s.fixative_removed_at ||
+      !s.ethanol_placed_at,
+  );
+  if (notReady.length > 0) {
+    throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
+  }
+  const conflict = await db.select<Array<{ sample_code: string }>>(
+    `SELECT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${placeholders}) AND pb.id != ?
+        AND pb.status IN ('planned', 'processing')`,
+    [...sampleIds, batchId],
+  );
+  if (conflict.length > 0) {
+    throw new Error(`Already committed to another batch: ${conflict.map((r) => r.sample_code).join(", ")}`);
+  }
+  await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+  for (const id of sampleIds) {
+    await db.execute(
+      `INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`,
+      [batchId, id],
+    );
+  }
 }
 
 type ProcessingBatchRow = Omit<ProcessingBatch, "member_ids" | "member_codes"> & {
@@ -1233,10 +1261,14 @@ export async function createSectionRequests(
           [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name],
         );
       } else {
+        // Extras are a deliberate, saved disposition chosen at cut time — no
+        // separate assignment step needed (issues #34, #38). They still stay out
+        // of the Extras inventory until the section leaves Needs Sectioning
+        // (issue #12), via listExtraSlides' stage filter.
         await db.execute(
           `INSERT INTO slides
-            (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
-           VALUES (?, ?, ?, 'extra', 'extra')`,
+            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
+           VALUES (?, ?, ?, 'extra', 1, 'extra')`,
           [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
         );
       }
@@ -1371,8 +1403,8 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   for (let ordinal = row.existing_count + 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
     await db.execute(
       `INSERT INTO slides
-        (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
-       VALUES (?, ?, ?, 'extra', 'extra')`,
+        (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
+       VALUES (?, ?, ?, 'extra', 1, 'extra')`,
       [id, ordinal, slideCodeFor(row.sample_code, nextLetter)],
     );
     nextLetter += 1;
@@ -1890,18 +1922,22 @@ export interface ExtraSlideAssignResult {
  * section request that records where the physical slide was cut.
  */
 /**
- * Route a newly-requested stain for a sample (issue #2). The agent is recorded
- * on the sample (driving the "needs staining" flag), then the request is pulled
- * from an available extra first — that extra is earmarked for the agent and
- * leaves the inventory, ready for a one-click Start Assays. If no extra is
- * available the flag rests on the block, which needs a fresh cut. The flag
- * clears once the earmarked stain enters staining.
+ * Route a newly-requested stain for a sample (issues #2, #39). The agent is
+ * recorded on the sample, then the request is pulled from an available extra
+ * first — that extra moves DIRECTLY into staining (joining the agent's rack) so
+ * it shows up in the Staining lane and leaves the inventory in one step. If no
+ * extra is free the flag rests on the block, which needs a fresh cut.
  */
 export async function requestStainForSample(input: {
   sampleId: number;
   assayType: "stain" | "ihc";
   assayName: string;
-}): Promise<{ target: "extra" | "block"; slideId: number | null }> {
+}): Promise<{
+  target: "extra" | "block";
+  slideId: number | null;
+  stackId: number | null;
+  createdStackId: number | null;
+}> {
   const db = await getDb();
   const assayName = input.assayName.trim();
   const rows = await db.select<Array<{ preselected_stains: string }>>(
@@ -1921,25 +1957,37 @@ export async function requestStainForSample(input: {
     [input.sampleId],
   );
   if (extras.length > 0) {
+    // The extra enters staining immediately (#39): join the cross-sample loading
+    // rack for its agent, creating it if none is open.
+    const openRack = await getOpenStainRack(input.assayType, assayName);
+    const stackId = openRack?.id ?? (await getOrCreateStainRack(input.assayType, assayName));
+    const timestamp = nowTimestamp();
     await db.execute(
       `UPDATE slides
-          SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+          SET stack_id = ?, purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
               assignment_saved = 1, slice_count = 2, control_agent = 'IgG',
-              current_stage = 'assigned'
+              current_stage = 'stain_requested',
+              stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
         WHERE id = ?`,
-      [input.assayType, assayName, assayName, extras[0].id],
+      [stackId, input.assayType, assayName, assayName, timestamp, extras[0].id],
     );
-    return { target: "extra", slideId: extras[0].id };
+    return {
+      target: "extra",
+      slideId: extras[0].id,
+      stackId,
+      createdStackId: openRack ? null : stackId,
+    };
   }
-  return { target: "block", slideId: null };
+  return { target: "block", slideId: null, stackId: null, createdStackId: null };
 }
 
-/** Undo of an earmark: return a slide to an inventory extra. */
+/** Undo of a stain request: return a slide to an inventory extra, unlinking it
+ *  from any rack it joined and clearing the staining timestamp (#39). */
 export async function revertSlideToExtra(slideId: number): Promise<void> {
   const db = await getDb();
   await db.execute(
     `UPDATE slides SET purpose = 'extra', assay_type = '', assay_name = '', stain_name = '',
-            current_stage = 'extra'
+            stack_id = NULL, current_stage = 'extra', stage_stain_requested_at = NULL
       WHERE id = ?`,
     [slideId],
   );
@@ -2142,6 +2190,12 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
     if ((rows[0]?.unassigned ?? 0) > 0) {
       throw new Error("Click Save All to confirm every slide assignment before starting assay work.");
     }
+    // Coming straight from Needs Sectioning (no assignment stop, #34/#38): record
+    // the physical cut on every slide now.
+    await db.execute(
+      `UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`,
+      [timestamp, id],
+    );
     const assayRows = await db.select<Array<{ total: number }>>(
       `SELECT COUNT(*) AS total FROM slides
         WHERE section_request_id = ? AND purpose = 'stain'`,

@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { ProcessorBusyError } from "../lib/db";
 import type { ProcessingType, Sample } from "../lib/types";
 import { nowTimestamp } from "../lib/utils";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -20,7 +19,6 @@ export function BatchStartDialog({
     startedAt: string;
     checklistLabels: string[];
     notes?: string;
-    allowConcurrent?: boolean;
   }) => Promise<void>;
   onPlan: (input: {
     sampleIds: number[];
@@ -40,12 +38,9 @@ export function BatchStartDialog({
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // When the processor is already busy we don't block — we warn and let the
-  // technician start a second run simultaneously if they choose (issue #23).
-  const [busyConflict, setBusyConflict] = useState<string | null>(null);
   const memberSummary = useMemo(() => samples.map((sample) => sample.sample_code).join(", "), [samples]);
 
-  async function start(allowConcurrent = false) {
+  async function start() {
     if (!activeOperator) {
       setError("Sign in before starting a processing batch.");
       return;
@@ -63,6 +58,7 @@ export function BatchStartDialog({
           notes: notes.trim(),
         });
       } else {
+        // Two runs may overlap freely — the technician decides (issue #23).
         await onStart({
           sampleIds: samples.map((sample) => sample.id),
           processingType,
@@ -72,16 +68,11 @@ export function BatchStartDialog({
           // load-time checklist is recorded here (see issue #3).
           checklistLabels: [],
           notes: notes.trim(),
-          allowConcurrent,
         });
       }
       onClose();
     } catch (reason) {
-      if (reason instanceof ProcessorBusyError) {
-        setBusyConflict(reason.message);
-      } else {
-        setError(String(reason));
-      }
+      setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -92,14 +83,14 @@ export function BatchStartDialog({
       <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-line bg-panel p-0.5 text-xs">
         <button
           type="button"
-          onClick={() => { setMode("now"); setBusyConflict(null); }}
+          onClick={() => setMode("now")}
           className={`rounded-md px-2 py-1.5 font-medium ${mode === "now" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
         >
           Start now
         </button>
         <button
           type="button"
-          onClick={() => { setMode("plan"); setBusyConflict(null); }}
+          onClick={() => setMode("plan")}
           className={`rounded-md px-2 py-1.5 font-medium ${mode === "plan" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
         >
           Plan for later
@@ -128,10 +119,7 @@ export function BatchStartDialog({
           <TextInput
             type="datetime-local"
             value={startedAt}
-            onChange={(event) => {
-              setStartedAt(event.target.value);
-              setBusyConflict(null);
-            }}
+            onChange={(event) => setStartedAt(event.target.value)}
           />
         </Field>
       </div>
@@ -141,11 +129,6 @@ export function BatchStartDialog({
       </Field>
 
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-      {busyConflict && (
-        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          {busyConflict} You can start this run simultaneously anyway.
-        </div>
-      )}
       {(!activeOperator || incompatible) && (
         <p className="mb-2 text-right text-xs text-amber-700">
           {incompatible
@@ -155,23 +138,13 @@ export function BatchStartDialog({
       )}
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        {busyConflict ? (
-          <Button
-            variant="primary"
-            onClick={() => start(true)}
-            disabled={busy || incompatible || !activeOperator}
-          >
-            Start anyway
-          </Button>
-        ) : (
-          <Button
-            variant="primary"
-            onClick={() => start(false)}
-            disabled={busy || incompatible || !activeOperator}
-          >
-            {mode === "plan" ? "Plan Batch" : "Start Batch"}
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          onClick={() => start()}
+          disabled={busy || incompatible || !activeOperator}
+        >
+          {mode === "plan" ? "Plan Batch" : "Start Batch"}
+        </Button>
       </div>
     </Modal>
   );

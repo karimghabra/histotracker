@@ -32,10 +32,12 @@ export function SectionCard({
   const isGrouped = grouped.length > 1;
   const visibleSlideCount = isDownstream
     ? grouped.reduce((count, item) => count + (item.assay_slide_count ?? 0), 0)
-    : (section.slide_count ?? 0);
+    : grouped.reduce((count, item) => count + (item.slide_count ?? 0), 0);
   const visibleSummary = isDownstream
     ? [...new Set(grouped.flatMap((item) => (item.assay_slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
-    : section.slide_summary;
+    : isGrouped
+      ? [...new Set(grouped.flatMap((item) => (item.slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
+      : section.slide_summary;
 
   return (
     <div
@@ -65,7 +67,9 @@ export function SectionCard({
         <span className="text-xs font-semibold text-ink">{section.parent_code}</span>
         {section.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}
         <span className="ml-auto text-[11px] font-medium text-ink-soft">
-          {isGrouped ? `${visibleSlideCount} assay slides` : `×${section.duplicates}`}
+          {isGrouped
+            ? `${visibleSlideCount} ${isDownstream ? "assay " : ""}slide${visibleSlideCount === 1 ? "" : "s"}`
+            : `×${section.duplicates}`}
         </span>
       </div>
       {visibleSummary ? (

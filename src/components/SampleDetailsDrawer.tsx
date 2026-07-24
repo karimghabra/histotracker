@@ -8,20 +8,6 @@ import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useSampleTimelineEvents } from "../hooks/useData";
 
-function planSummary(raw: string): string {
-  if (!raw) return "No plan yet";
-  try {
-    const plan = JSON.parse(raw) as Array<{ duplicates: number }>;
-    if (!Array.isArray(plan) || plan.length === 0) return "No plan yet";
-    const slides = plan.reduce((n, r) => n + Math.max(1, Number(r.duplicates) || 1), 0);
-    return `${plan.length} ${plan.length === 1 ? "section" : "sections"} · ${slides} ${
-      slides === 1 ? "slide" : "slides"
-    }`;
-  } catch {
-    return "No plan yet";
-  }
-}
-
 export function SampleDetailsDrawer({
   sample,
   selectedSamples = [sample],
@@ -134,14 +120,16 @@ export function SampleDetailsDrawer({
 
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
-            Sectioning Plan
+            Cutting
           </h3>
-          <div className="flex items-center justify-between rounded-lg border border-line bg-surface px-3 py-2">
-            <span className="text-sm text-ink-soft">{planSummary(sample.sectioning_plan)}</span>
-            <Button variant="subtle" className="px-2 py-1" onClick={() => setShowSectioning(true)}>
-              <Scissors size={13} /> Edit
-            </Button>
-          </div>
+          <Button variant="subtle" className="w-full justify-center" onClick={() => setShowSectioning(true)}>
+            <Scissors size={13} /> Send for Cutting
+          </Button>
+          {sample.pending_stains && (
+            <p className="mt-1 text-[11px] text-brand">
+              Stains preselected ({sample.pending_stains}) — the cut is prefilled and ready.
+            </p>
+          )}
         </div>
 
         <div className="mb-4">
@@ -171,7 +159,7 @@ export function SampleDetailsDrawer({
                 setRequestAgent("");
                 setRequestFlash(
                   result.target === "extra"
-                    ? `${assayName} pulled from an extra slide`
+                    ? `${assayName} pulled from an extra slide → now in Staining`
                     : `${assayName} flagged on the block — a new cut is needed`,
                 );
               }}
@@ -321,6 +309,7 @@ export function SampleDetailsDrawer({
       {showSectioning && (
         <SectioningPlanDialog
           sample={sample}
+          catalog={catalog}
           batchCount={selectedEmbedded.length > 1 ? selectedEmbedded.length : 1}
           onSave={(plan) => saveSectioningPlan(sample.id, plan)}
           onSend={async (groups) => {

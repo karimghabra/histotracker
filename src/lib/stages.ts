@@ -73,9 +73,11 @@ export const BOARD_QUEUES: QueueDef[] = [
   { key: "processing", title: "Processor", stages: ["processing_started", "processed"], entryStage: "processing_started", lane: 0 },
   { key: "needs_embedding", title: "Needs Embedding", stages: ["needs_embedding"], entryStage: "needs_embedding", lane: 0 },
   { key: "embedded_inventory", title: "Embedded Inventory", stages: ["embedded"], entryStage: "embedded", lane: 0 },
-  { key: "needs_sectioning", title: "Needs Sectioning", stages: ["needs_sectioning"], entryStage: "needs_sectioning", lane: 1 },
-  { key: "slide_assignment", title: "Assign Slides", stages: ["assignment_required"], entryStage: "assignment_required", lane: 1 },
-  { key: "staining", title: "Staining / IHC", stages: ["sectioned", "stain_requested", "stained", "deparaffinized", "ihc_complete"], entryStage: "stain_requested", lane: 1 },
+  { key: "needs_sectioning", title: "Needs Sectioning", stages: ["needs_sectioning", "sectioned", "assignment_required"], entryStage: "needs_sectioning", lane: 1 },
+  // Pre-assigned slides skip a separate assignment step (issues #34, #38): this
+  // column is now purely the Extras inventory. Key kept for board wiring.
+  { key: "slide_assignment", title: "Extras", stages: [], entryStage: "", lane: 1 },
+  { key: "staining", title: "Staining / IHC", stages: ["stain_requested", "stained", "deparaffinized", "ihc_complete"], entryStage: "stain_requested", lane: 1 },
   { key: "analysis_pending", title: "Ready for Imaging", stages: ["ready_for_imaging", "pictures_taken"], entryStage: "ready_for_imaging", lane: 1 },
 ];
 
@@ -135,11 +137,13 @@ export const SECTION_QUEUE_KEYS = new Set([
   "analysis_pending",
 ]);
 
-// Section stage -> board queue key.
+// Section stage -> board queue key. Pre-assigned slides skip assignment, so
+// sectioned/assignment_required no longer have their own column — any lingering
+// ones fall back into Needs Sectioning where they can be re-sent (issues #34/#38).
 export const SECTION_STAGE_TO_QUEUE: Record<string, string> = {
   needs_sectioning: "needs_sectioning",
-  sectioned: "slide_assignment",
-  assignment_required: "slide_assignment",
+  sectioned: "needs_sectioning",
+  assignment_required: "needs_sectioning",
   stain_requested: "staining",
   stained: "staining",
   deparaffinized: "staining",
@@ -151,10 +155,11 @@ export const SECTION_STAGE_TO_QUEUE: Record<string, string> = {
   pictures_taken: "analysis_pending",
 };
 
-// Stage assigned when a section card is dropped into a queue.
+// Stage assigned when a section card is dropped into a queue. A Needs Sectioning
+// card advances straight to staining (stain_requested), which auto-splits its
+// stain slides into racks and its extras into inventory — no assignment stop.
 export const SECTION_QUEUE_ENTRY: Record<string, string> = {
   needs_sectioning: "needs_sectioning",
-  slide_assignment: "assignment_required",
   staining: "stain_requested",
   analysis_pending: "ready_for_imaging",
 };

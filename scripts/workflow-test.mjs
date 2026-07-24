@@ -160,10 +160,9 @@ function makeApi(db) {
     run(`UPDATE samples SET ethanol_placed_at = ?, current_stage = 'in_ethanol' WHERE id = ?`, [now(), sampleId]);
   }
 
-  // Port of startProcessingBatch() — src/lib/db.ts. The processor-busy check is
-  // advisory: it throws unless the caller opts into a concurrent run via
-  // allowConcurrent (issue #23).
-  function startProcessingBatch({ sampleIds, processingType, startedAt, allowConcurrent = false }) {
+  // Port of startProcessingBatch() — src/lib/db.ts. There is no processor-busy
+  // guard: two runs may overlap freely, entirely the technician's call (#23).
+  function startProcessingBatch({ sampleIds, processingType, startedAt }) {
     if (sampleIds.length === 0) throw new Error("Select at least one sample.");
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
@@ -176,23 +175,6 @@ function makeApi(db) {
         !s.fixative_placed_at || !s.fixative_removed_at || !s.ethanol_placed_at,
     );
     if (notReady.length) throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
-
-    // Advisory concurrency guard, judged by actual sample state (not the batch
-    // status column, which can go stale/orphaned). The technician may override
-    // it to run two batches simultaneously (issue #23).
-    if (!allowConcurrent) {
-      const activeRun = all(
-        `SELECT pb.id
-           FROM processing_batches pb
-           JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
-           JOIN samples s ON s.id = pbm.sample_id
-          WHERE s.current_stage = 'processing_started'
-            AND (pb.ready_at IS NULL OR pb.ready_at > ?)
-          LIMIT 1`,
-        [startedAt],
-      );
-      if (activeRun.length) throw new Error("PROCESSOR_BUSY");
-    }
 
     const durH = processingType.toLowerCase() === "long" ? 52 : 18;
     const started = new Date(startedAt.replace(" ", "T"));
@@ -264,6 +246,26 @@ function makeApi(db) {
     return readyStr;
   }
 
+  // Port of updatePlannedBatchMembers() — src/lib/db.ts (issue #32).
+  function updatePlannedBatchMembers(batchId, sampleIds) {
+    if (!sampleIds.length) throw new Error("A planned run needs at least one sample.");
+    const batch = get(`SELECT status, processing_type FROM processing_batches WHERE id = ?`, [batchId]);
+    if (!batch) throw new Error("That processing batch no longer exists.");
+    if (batch.status !== "planned") throw new Error("Only a planned run's samples can be edited.");
+    const placeholders = sampleIds.map(() => "?").join(", ");
+    const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
+    if (samples.some((s) => s.processing_type !== batch.processing_type)) throw new Error("PROTOCOL_MISMATCH");
+    const conflict = all(
+      `SELECT s.sample_code FROM processing_batch_members pbm
+         JOIN processing_batches pb ON pb.id = pbm.batch_id
+         JOIN samples s ON s.id = pbm.sample_id
+        WHERE pbm.sample_id IN (${placeholders}) AND pb.id != ? AND pb.status IN ('planned', 'processing')`,
+      [...sampleIds, batchId]);
+    if (conflict.length) throw new Error("ALREADY_BATCHED");
+    run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+    for (const id of sampleIds) run(`INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`, [batchId, id]);
+  }
+
   function moveBatch(batchId, stageKey) {
     const ts = now();
     if (stageKey === "processed") {
@@ -331,9 +333,10 @@ function makeApi(db) {
             [sectionId, ordinal, slideCode, g.assay_name, g.assay_type, g.assay_name],
           );
         } else {
+          // Extras are a saved disposition chosen at cut time (issues #34/#38).
           run(
-            `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
-             VALUES (?, ?, ?, 'extra', 'extra')`,
+            `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
+             VALUES (?, ?, ?, 'extra', 1, 'extra')`,
             [sectionId, ordinal, slideCode],
           );
         }
@@ -457,6 +460,8 @@ function makeApi(db) {
     const unsaved = get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ? AND assignment_saved = 0`, [sectionId]);
     if (unsaved.c > 0) throw new Error("Click Save All to confirm every slide assignment before starting assay work.");
     const ts = now();
+    // Coming straight from Needs Sectioning (no assignment stop, #34/#38).
+    run(`UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`, [ts, sectionId]);
     run(`UPDATE slides SET current_stage = CASE WHEN purpose = 'stain' THEN 'stain_requested' ELSE purpose END,
            stage_stain_requested_at = CASE WHEN purpose = 'stain' THEN COALESCE(stage_stain_requested_at, ?) ELSE stage_stain_requested_at END
            WHERE section_request_id = ?`, [ts, sectionId]);
@@ -480,13 +485,22 @@ function makeApi(db) {
         WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
         ORDER BY sl.id LIMIT 1`, [sampleId]);
     if (extra) {
+      // The extra enters staining immediately (#39): join the agent's rack.
+      let rack = get(
+        `SELECT id FROM slide_stacks WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
+            AND current_stage = 'stain_requested' AND closed_at IS NULL`, [assayType, assayName]);
+      const createdStackId = rack ? null : Number(run(
+        `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+         VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`, [assayType, assayName, now()]).lastInsertRowid);
+      if (!rack) rack = { id: createdStackId };
       run(
-        `UPDATE slides SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
-                assignment_saved = 1, slice_count = 2, control_agent = 'IgG', current_stage = 'assigned'
-          WHERE id = ?`, [assayType, assayName, assayName, extra.id]);
-      return { target: "extra", slideId: extra.id };
+        `UPDATE slides SET stack_id = ?, purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+                assignment_saved = 1, slice_count = 2, control_agent = 'IgG', current_stage = 'stain_requested',
+                stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
+          WHERE id = ?`, [rack.id, assayType, assayName, assayName, now(), extra.id]);
+      return { target: "extra", slideId: extra.id, stackId: rack.id, createdStackId };
     }
-    return { target: "block", slideId: null };
+    return { target: "block", slideId: null, stackId: null, createdStackId: null };
   }
 
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
@@ -548,7 +562,7 @@ function makeApi(db) {
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack,
-    planProcessingBatch, confirmProcessingBatchStart,
+    planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
     requestStainForSample,
   };
 }
@@ -662,15 +676,67 @@ invariant("a requested stain pulls from an extra first, else flags the block (#2
   api.assignSlide(slides[1].id, "extra", "", "");
   api.run(`UPDATE section_requests SET current_stage = 'ready_for_imaging' WHERE id = ?`, [section]);
   eq(api.listExtraSlides().length, 2, "two extras available in inventory");
-  // First request pulls an extra and earmarks it for the agent.
+  // First request pulls an extra and moves it straight into staining (#39).
   const r1 = api.requestStainForSample(id, "stain", "SafO");
   eq(r1.target, "extra", "first request goes to an extra");
-  eq(api.get(`SELECT assay_name FROM slides WHERE id = ?`, [r1.slideId]).assay_name, "SafO", "extra earmarked for the agent");
-  eq(api.listExtraSlides().length, 1, "the earmarked extra leaves inventory");
-  assert(pendingFlag(api, id) !== "", "sample shows the needs-staining flag");
+  const s1 = api.get(`SELECT assay_name, current_stage, stack_id FROM slides WHERE id = ?`, [r1.slideId]);
+  eq(s1.assay_name, "SafO", "extra assigned to the agent");
+  eq(s1.current_stage, "stain_requested", "the pulled extra moves into staining (#39)");
+  assert(s1.stack_id != null, "the pulled extra joins a stain rack (#39)");
+  eq(api.listExtraSlides().length, 1, "the pulled extra leaves inventory");
   // Second request pulls the remaining extra; third has none → flags the block.
   eq(api.requestStainForSample(id, "ihc", "CD31").target, "extra", "second request pulls the last extra");
   eq(api.requestStainForSample(id, "stain", "PAS").target, "block", "no extras left → the block is flagged");
+});
+
+// #34/#38 — pre-assigned slides skip a separate assignment step: a section cut
+// straight from Needs Sectioning goes to staining (stains → racks) with its
+// extras surfacing in inventory, no Save-All/assignment stop in between.
+issue(38, "pre-assigned section goes straight from sectioning to staining", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "direct", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }],
+  });
+  api.markEmbedded(id);
+  const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [id]).sectioning_plan);
+  const ids = api.createSectionRequests(id, plan); // 1 H&E stain + 3 extras
+  // Move straight to staining — no sectionToAssignment() in between (#34/#38).
+  for (const sid of ids) api.startAssayWork(sid);
+  const staining = api.all(
+    `SELECT sl.* FROM slides sl WHERE sl.purpose = 'stain' AND sl.current_stage = 'stain_requested'
+       AND sl.section_request_id IN (${ids.map(() => "?").join(",")})`, ids);
+  assert(staining.length >= 1, "the H&E slide is in staining");
+  assert(staining.every((sl) => sl.stack_id != null), "each staining slide joined a rack");
+  eq(api.listExtraSlides().length, 3, "the three extras surface in inventory");
+});
+
+// #32 — a planned run's sample list is editable; a running one is not.
+issue(32, "planned run sample list is editable", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "A"); api.completePreprocessing(a.id);
+  const b = api.addSample(p, "EE", "B"); api.completePreprocessing(b.id);
+  const batchId = api.planProcessingBatch({ sampleIds: [a.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
+  api.updatePlannedBatchMembers(batchId, [a.id, b.id]);
+  eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 2,
+     "a second sample can be added to a planned run");
+  api.updatePlannedBatchMembers(batchId, [b.id]);
+  eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 1,
+     "a sample can be removed from a planned run");
+  api.confirmProcessingBatchStart(batchId);
+  let rejected = false;
+  try { api.updatePlannedBatchMembers(batchId, [a.id, b.id]); } catch { rejected = true; }
+  assert(rejected, "a running run's sample list is locked");
+});
+
+// #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
+// stack. The fix captures the resulting stacks from the moved slides' current
+// stack_id (a scattered rack is deleted, so its id can't be relied on).
+issue(31, "imaging-move undo captures the scattered stacks", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  assert(actions.includes("beforeSlides.map((slide) => getSlide(slide.id))") && actions.includes("afterStackIds"),
+    "moveSlideStacks must recompute after-stacks from where the moved slides landed");
 });
 
 invariant("the needs-staining flag clears once a stain enters staining (#1/#2)", () => {
@@ -851,10 +917,10 @@ issue(2, "Z-Fix leads FIXATIVE_OPTIONS (the New Sample dialog default)", () => {
   eq(first, "Z-Fix", "first fixative option / dialog default");
 });
 
-// #23 — Running two batches at once is the technician's call. Starting a second
-// overlapping run WITHOUT opting in must warn (throw ProcessorBusy) so the dialog
-// can offer "Start anyway"; WITH allowConcurrent it must succeed.
-issue(23, "an overlapping run warns by default but can be started concurrently", () => {
+// #23 — Running two batches at once is entirely the technician's call: a second
+// overlapping run starts freely, with no busy guard and no override prompt. The
+// UI must also carry no ProcessorBusy/"Start anyway" affordance any more.
+issue(23, "an overlapping run starts freely, no prompt", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const a = api.addSample(p, "EE", "batch A", { processingType: "Short" });
@@ -862,17 +928,16 @@ issue(23, "an overlapping run warns by default but can be started concurrently",
   api.completePreprocessing(a.id);
   api.completePreprocessing(b.id);
   api.startProcessingBatch({ sampleIds: [a.id], processingType: "Short", startedAt: now() });
-  let warned = false;
-  try { api.startProcessingBatch({ sampleIds: [b.id], processingType: "Long", startedAt: now() }); }
-  catch (err) { warned = err.message === "PROCESSOR_BUSY"; }
-  assert(warned, "overlapping run should warn when not opted in");
-  // The technician overrides and runs both simultaneously.
-  const second = api.startProcessingBatch({
-    sampleIds: [b.id], processingType: "Long", startedAt: now(), allowConcurrent: true,
-  });
-  assert(second > 0, "a concurrent run must start when allowConcurrent is set");
+  // A second overlapping run must just start — no throw, no opt-in.
+  const second = api.startProcessingBatch({ sampleIds: [b.id], processingType: "Long", startedAt: now() });
+  assert(second > 0, "the second run starts without any concurrency guard");
   eq(api.get(`SELECT current_stage FROM samples WHERE id = ?`, [b.id]).current_stage,
      "processing_started", "the concurrent run's sample entered the processor");
+  // The override prompt is gone from the UI (issue #23 comment).
+  const dbSource = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  const dialog = readFileSync(join(HERE, "..", "src", "components", "BatchStartDialog.tsx"), "utf8");
+  assert(!dbSource.includes("ProcessorBusyError"), "the ProcessorBusyError guard is removed");
+  assert(!dialog.includes("Start anyway"), "the 'Start anyway' override prompt is removed");
 });
 
 // #5 regression (reported in 0.2.3): a stale/orphaned batch row whose samples
@@ -1104,8 +1169,8 @@ issue(26, "batch assay start preflights every selected section", () => {
   const drawer = readFileSync(join(HERE, "..", "src", "components", "SectionDetailsDrawer.tsx"), "utf8");
   assert(actions.includes('stageKey === "stain_requested"') && actions.includes("incompleteIds.length > 0"),
     "batch action must reject incomplete assignments before its write loop");
-  assert(drawer.includes('moveSections(assignmentBatchIds, "stain_requested")'),
-    "drawer must start assays for the selected batch");
+  assert(drawer.includes('moveSections(sectioningBatchIds, "stain_requested")'),
+    "drawer must start assays for the selected batch (Mark Sectioned → staining)");
 });
 
 invariant("multi-stack protocols target only selected stacks with the matching assay type", () => {
@@ -1122,8 +1187,8 @@ invariant("multi-stack protocols target only selected stacks with the matching a
 
 issue(27, "Mark Sectioned advances the selected batch", () => {
   const drawer = readFileSync(join(HERE, "..", "src", "components", "SectionDetailsDrawer.tsx"), "utf8");
-  assert(drawer.includes('moveSections(sectioningBatchIds, "assignment_required")'),
-    "Mark Sectioned must use the selected section IDs");
+  assert(drawer.includes('moveSections(sectioningBatchIds, "stain_requested")'),
+    "Mark Sectioned must use the selected section IDs and go straight to staining");
 });
 
 issue(28, "section and imaging undo restore slide snapshots", () => {

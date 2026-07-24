@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.4 - 2026-07-24
+
+- **Sectioning reworked around a "Send for Cutting" step** (issues #35, #36): the
+  old editable "sectioning plan" is replaced by a Send for Cutting dialog that
+  asks only how many slides to cut and which carry a stain. Pre-selected stains
+  prefill it for a one-click send, and the misleading persistent "N slides
+  planned" tag is gone from the embedded tile.
+- **Pre-assigned slides skip slide assignment** (issues #34, #38): a cut whose
+  slides are already assigned goes straight from Needs Sectioning to Staining
+  (stains) and Extras (extras) — there is no separate assignment stop. The former
+  "Assign Slides" column is now the Extras inventory.
+- **Needs Sectioning groups by sample** (issue #33): each sample shows a single
+  card aggregating its not-yet-sectioned cut groups, and multi-select /
+  select-all work there (issue #37).
+- **Requesting a stain now moves the slide into Staining** (issue #39): pulling a
+  stain from an available extra sends that slide straight into the staining rack
+  instead of leaving it in limbo; it leaves the Extras inventory and appears in
+  the Staining lane immediately.
+- **Concurrent processor runs, no prompt** (issue #23): starting a second run
+  while one is active just works — the "processor busy / Start anyway" override
+  prompt is removed entirely.
+- **Editable planned-run sample list** (issue #32): a planned run's samples can
+  be added or removed from its drawer until it is confirmed.
+- Fixed undo/redo of a move into Ready for Imaging leaving a ghost "needs
+  imaging" tile behind; the scattered per-sample stacks are now cleaned up on
+  undo and recreated on redo (issue #31).
+- Verified and locked in the planned processing-run lifecycle end to end with
+  new regression gates (issues #4, #24).
+
 ## 0.3.3 - 2026-07-24
 
 - **Schema change — every workstation and viewer must update to 0.3.3 together.**

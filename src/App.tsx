@@ -36,7 +36,7 @@ export default function App() {
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editPlannedBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -174,6 +174,24 @@ export default function App() {
     () => batches.find((batch) => batch.id === selectedBatchId) ?? null,
     [batches, selectedBatchId],
   );
+  // Samples that could be added to the selected planned run (issue #32): same
+  // protocol, preprocessing complete, and not already committed to a batch.
+  const plannedBatchCandidates = useMemo(() => {
+    if (!selectedBatch || selectedBatch.status !== "planned") return [];
+    const committed = new Set(
+      batches.filter((batch) => batch.id !== selectedBatch.id).flatMap((batch) => batch.member_ids),
+    );
+    return samples.filter(
+      (s) =>
+        s.processing_type === selectedBatch.processing_type &&
+        !committed.has(s.id) &&
+        !selectedBatch.member_ids.includes(s.id) &&
+        (s.needs_decalcification !== 1 || Boolean(s.decalc_completed_at)) &&
+        Boolean(s.fixative_placed_at) &&
+        Boolean(s.fixative_removed_at) &&
+        Boolean(s.ethanol_placed_at),
+    );
+  }, [selectedBatch, batches, samples]);
   const selectedExtraSlides = useMemo(
     () => extraSlides.filter((slide) => slide.sample_id === selectedExtraSampleId),
     [extraSlides, selectedExtraSampleId],
@@ -292,6 +310,10 @@ export default function App() {
     <ProcessingBatchDetailsDrawer
       batch={selectedBatch}
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
+      candidates={plannedBatchCandidates}
+      onEditMembers={(batchId, sampleIds) =>
+        void editPlannedBatchMembers(batchId, sampleIds).catch((error) => flash(String(error)))
+      }
       onMove={moveBatchWithConfirmation}
       onEditStart={(batchId, startedAt) =>
         void editBatchStart(batchId, startedAt).catch((error) => flash(String(error)))

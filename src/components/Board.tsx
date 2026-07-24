@@ -146,11 +146,10 @@ export function Board({
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [selectedExtraSample, setSelectedExtraSample] = useState<number | null>(null);
   const blockAnchor = useRef<number | null>(null);
-  const sectionAnchor = useRef<number | null>(null);
+  const sectionGroupAnchor = useRef<number | null>(null);
   const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
   const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
-  const [assignmentView, setAssignmentView] = useState<"fresh" | "inventory">("fresh");
   const [extraSlidesFilter, setExtraSlidesFilter] = useState<string>("all");
   const [extraSlidesSort, setExtraSlidesSort] = useState<ExtraSlidesSort>("sample_id");
   const [topLaneHeight, setTopLaneHeight] = useState(
@@ -205,7 +204,6 @@ export function Board({
     () => samples.filter((sample) => !batchMemberIds.has(sample.id)).map((sample) => sample.id),
     [batchMemberIds, samples],
   );
-  const visibleSectionOrder = useMemo(() => sections.map((section) => section.id), [sections]);
   const visibleStackOrder = useMemo(() => stacks.map((stack) => stack.id), [stacks]);
 
   const blocksByQueue = useMemo(() => {
@@ -244,6 +242,23 @@ export function Board({
     }
     return map;
   }, [stacks]);
+
+  // Needs Sectioning shows ONE card per sample (issue #33): all of a sample's
+  // not-yet-sectioned cut groups aggregate into a single card that marks
+  // sectioned as a unit.
+  const needsSectioningGroups = useMemo(() => {
+    const bySample = new Map<number, SectionRequest[]>();
+    for (const section of sectionsByQueue.needs_sectioning ?? []) {
+      const arr = bySample.get(section.sample_id) ?? [];
+      arr.push(section);
+      bySample.set(section.sample_id, arr);
+    }
+    return [...bySample.values()];
+  }, [sectionsByQueue]);
+  const sectionGroupOrder = useMemo(
+    () => needsSectioningGroups.map((group) => group[0].id),
+    [needsSectioningGroups],
+  );
 
   const projectsInEmbedded = useMemo(() => {
     const seen = new Map<number, string>();
@@ -360,24 +375,35 @@ export function Board({
     onSelectSample(id);
   }
 
-  function selectSection(id: number, event: MouseEvent<HTMLDivElement>) {
+  // Select a whole sample's Needs Sectioning group (issue #37): plain click
+  // replaces, ctrl toggles the group, shift ranges across sample groups.
+  function selectSectionGroup(group: SectionRequest[], event: MouseEvent<HTMLDivElement>) {
     setSelectedBlocks(new Set());
     setSelectedStacks(new Set());
+    const ids = group.map((section) => section.id);
+    const repId = group[0].id;
     if (event.shiftKey) {
-      setSelectedSections(new Set(rangeSelection(visibleSectionOrder, sectionAnchor.current, id)));
+      const range = rangeSelection(sectionGroupOrder, sectionGroupAnchor.current, repId);
+      const rangeIds = range.flatMap(
+        (rep) => needsSectioningGroups.find((g) => g[0].id === rep)?.map((section) => section.id) ?? [],
+      );
+      setSelectedSections(new Set(rangeIds));
     } else if (event.ctrlKey || event.metaKey) {
       setSelectedSections((current) => {
         const next = new Set(current);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
+        const allSelected = ids.every((id) => next.has(id));
+        for (const id of ids) {
+          if (allSelected) next.delete(id);
+          else next.add(id);
+        }
         return next;
       });
-      sectionAnchor.current = id;
+      sectionGroupAnchor.current = repId;
     } else {
-      setSelectedSections(new Set([id]));
-      sectionAnchor.current = id;
+      setSelectedSections(new Set(ids));
+      sectionGroupAnchor.current = repId;
     }
-    onSelectSection(id);
+    onSelectSection(repId);
   }
 
   function selectStack(id: number, event: MouseEvent<HTMLDivElement>) {
@@ -461,19 +487,19 @@ export function Board({
       onMoveStacks(ids, targetStage);
       setSelectedStacks(new Set());
     } else {
-      if (!SECTION_QUEUE_KEYS.has(overId)) return;
+      // Section cards live only in Needs Sectioning now. Their single forward
+      // move is "mark sectioned" → Staining, which the data layer splits into
+      // stain racks + extras inventory (issues #34/#38). Dropping elsewhere is
+      // a no-op.
+      if (overId !== "staining") return;
       const ids = selectedSections.has(data.section.id)
         ? [...selectedSections]
         : [data.section.id];
       const selected = sections.filter((section) => ids.includes(section.id));
-      if (selected.every((section) => SECTION_STAGE_TO_QUEUE[section.current_stage] === overId)) {
+      if (selected.some((section) => SECTION_STAGE_TO_QUEUE[section.current_stage] !== "needs_sectioning")) {
         return;
       }
-      const targetStage = SECTION_QUEUE_ENTRY[overId];
-      if (selected.some((section) => (SECTION_STAGE_ORDER[targetStage] ?? -1) - (SECTION_STAGE_ORDER[section.current_stage] ?? -1) !== 1)) {
-        return;
-      }
-      onMoveSections(ids, targetStage);
+      onMoveSections(ids, "stain_requested");
       setSelectedSections(new Set());
     }
   }
@@ -518,96 +544,104 @@ export function Board({
                   const queue = QUEUE_BY_KEY[queueKey];
 
                   if (SECTION_QUEUE_KEYS.has(queueKey)) {
-                    const items = sectionsByQueue[queueKey] ?? [];
                     const stackItems = stacksByQueue[queueKey] ?? [];
                     const isDownstream = queueKey === "staining" || queueKey === "analysis_pending";
-                    const isAssignment = queueKey === "slide_assignment";
-                    const showingInventory = isAssignment && assignmentView === "inventory";
-                    const selectedCount = isDownstream
-                      ? stackItems.filter((stack) => selectedStacks.has(stack.id)).length
-                      : items.filter((item) => selectedSections.has(item.id)).length;
-                    return (
-                      <QueueColumn
-                        key={queueKey}
-                        queue={queue}
-                        count={showingInventory ? displayedExtraSlideGroups.length : isDownstream ? stackItems.length : items.length}
-                        selectedCount={selectedCount}
-                        onToggleAll={
-                          !showingInventory && (isDownstream ? stackItems.length > 0 : items.length > 0)
-                            ? () => {
-                                setSelectedBlocks(new Set());
-                                if (isDownstream) {
-                                  setSelectedSections(new Set());
-                                  setSelectedStacks(selectedCount === stackItems.length ? new Set() : new Set(stackItems.map((stack) => stack.id)));
-                                } else {
-                                  setSelectedStacks(new Set());
-                                  setSelectedSections(selectedCount === items.length ? new Set() : new Set(items.map((item) => item.id)));
-                                }
-                              }
-                            : undefined
-                        }
-                        headerExtra={isAssignment ? (
-                          <div className="space-y-1">
-                            <div className="grid grid-cols-2 rounded-md border border-line bg-panel p-0.5 text-[10px]">
-                              <button
-                                onClick={() => setAssignmentView("fresh")}
-                                className={`rounded px-1 py-1 ${assignmentView === "fresh" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+                    // The former "Assign Slides" column is now the Extras
+                    // inventory only (issues #34/#38): pre-assigned slides skip it.
+                    const isExtras = queueKey === "slide_assignment";
+
+                    if (isExtras) {
+                      return (
+                        <QueueColumn
+                          key={queueKey}
+                          queue={queue}
+                          count={displayedExtraSlideGroups.length}
+                          headerExtra={
+                            <div className="flex gap-1">
+                              <select
+                                className={selectClass}
+                                value={extraSlidesFilter}
+                                onChange={(event) => setExtraSlidesFilter(event.target.value)}
                               >
-                                Fresh ({items.length})
-                              </button>
-                              <button
-                                onClick={() => setAssignmentView("inventory")}
-                                className={`rounded px-1 py-1 ${assignmentView === "inventory" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
+                                <option value="all">All Projects</option>
+                                {projectsInExtraSlides.map((code) => (
+                                  <option key={code} value={code}>{code}</option>
+                                ))}
+                              </select>
+                              <select
+                                className={selectClass}
+                                value={extraSlidesSort}
+                                onChange={(event) => setExtraSlidesSort(event.target.value as ExtraSlidesSort)}
                               >
-                                Extras ({extraSlides.length})
-                              </button>
+                                <option value="sample_id">Sample ID</option>
+                                <option value="name">Name</option>
+                              </select>
                             </div>
-                            {showingInventory && (
-                              <div className="flex gap-1">
-                                <select
-                                  className={selectClass}
-                                  value={extraSlidesFilter}
-                                  onChange={(event) => setExtraSlidesFilter(event.target.value)}
-                                >
-                                  <option value="all">All Projects</option>
-                                  {projectsInExtraSlides.map((code) => (
-                                    <option key={code} value={code}>{code}</option>
-                                  ))}
-                                </select>
-                                <select
-                                  className={selectClass}
-                                  value={extraSlidesSort}
-                                  onChange={(event) => setExtraSlidesSort(event.target.value as ExtraSlidesSort)}
-                                >
-                                  <option value="sample_id">Sample ID</option>
-                                  <option value="name">Name</option>
-                                </select>
-                              </div>
-                            )}
-                          </div>
-                        ) : undefined}
-                      >
-                        {showingInventory ? (
+                          }
+                        >
                           <ExtraSlideInventory
                             slides={displayedExtraSlides}
                             onSelectSample={handleSelectExtraSample}
                             selectedSampleId={selectedExtraSample}
                           />
-                        ) : isDownstream ? stackItems.map((stack) => (
-                          <StackCard
-                            key={stack.id}
-                            stack={stack}
-                            selected={selectedStacks.has(stack.id)}
-                            onSelect={selectStack}
-                          />
-                        )) : items.map((item) => (
-                          <SectionCard
-                            key={item.id}
-                            section={item}
-                            selected={selectedSections.has(item.id)}
-                            onSelect={selectSection}
-                          />
-                        ))}
+                        </QueueColumn>
+                      );
+                    }
+
+                    const groups = queueKey === "needs_sectioning" ? needsSectioningGroups : [];
+                    const groupSelectedCount = groups.filter((group) =>
+                      group.every((section) => selectedSections.has(section.id)),
+                    ).length;
+                    const selectedCount = isDownstream
+                      ? stackItems.filter((stack) => selectedStacks.has(stack.id)).length
+                      : groupSelectedCount;
+                    return (
+                      <QueueColumn
+                        key={queueKey}
+                        queue={queue}
+                        count={isDownstream ? stackItems.length : groups.length}
+                        selectedCount={selectedCount}
+                        onToggleAll={
+                          isDownstream
+                            ? stackItems.length > 0
+                              ? () => {
+                                  setSelectedBlocks(new Set());
+                                  setSelectedSections(new Set());
+                                  setSelectedStacks(selectedCount === stackItems.length ? new Set() : new Set(stackItems.map((stack) => stack.id)));
+                                }
+                              : undefined
+                            : groups.length > 0
+                              ? () => {
+                                  setSelectedBlocks(new Set());
+                                  setSelectedStacks(new Set());
+                                  setSelectedSections(
+                                    groupSelectedCount === groups.length
+                                      ? new Set()
+                                      : new Set(groups.flatMap((group) => group.map((section) => section.id))),
+                                  );
+                                }
+                              : undefined
+                        }
+                      >
+                        {isDownstream
+                          ? stackItems.map((stack) => (
+                              <StackCard
+                                key={stack.id}
+                                stack={stack}
+                                selected={selectedStacks.has(stack.id)}
+                                onSelect={selectStack}
+                              />
+                            ))
+                          : groups.map((group) => (
+                              <SectionCard
+                                key={group[0].id}
+                                section={group[0]}
+                                groupedSections={group}
+                                selected={group.every((section) => selectedSections.has(section.id))}
+                                onSelect={(_, event) => selectSectionGroup(group, event)}
+                                onSelectGroup={(_, event) => selectSectionGroup(group, event)}
+                              />
+                            ))}
                       </QueueColumn>
                     );
                   }

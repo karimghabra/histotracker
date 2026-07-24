@@ -26,6 +26,8 @@ import {
   moveProcessingBatch as moveProcessingBatchDb,
   planProcessingBatch as planProcessingBatchDb,
   confirmProcessingBatchStart as confirmProcessingBatchStartDb,
+  getBatchMemberIds,
+  updatePlannedBatchMembers,
   revertProcessingBatchToPlanned,
   requestStainForSample as requestStainForSampleDb,
   revertSlideToExtra,
@@ -266,7 +268,6 @@ export function useActions() {
       startedAt: string;
       checklistLabels: string[];
       notes?: string;
-      allowConcurrent?: boolean;
     }) => {
       const before = (await Promise.all(input.sampleIds.map(getSample))).filter(
         (s): s is Sample => s !== null,
@@ -341,6 +342,27 @@ export function useActions() {
         redo: async () => {
           await confirmProcessingBatchStartDb(batchId, actualStartedAt);
           for (const snapshot of after) await restoreSample(snapshot);
+          invalidate();
+        },
+      });
+    },
+    [invalidate, record],
+  );
+
+  // Edit a planned run's sample list (issue #32). Undo restores the prior set.
+  const editPlannedBatchMembers = useCallback(
+    async (batchId: number, sampleIds: number[]) => {
+      const before = await getBatchMemberIds(batchId);
+      await updatePlannedBatchMembers(batchId, sampleIds);
+      invalidate();
+      record({
+        label: "Edit planned run samples",
+        undo: async () => {
+          await updatePlannedBatchMembers(batchId, before);
+          invalidate();
+        },
+        redo: async () => {
+          await updatePlannedBatchMembers(batchId, sampleIds);
           invalidate();
         },
       });
@@ -784,23 +806,31 @@ export function useActions() {
     [invalidate, record],
   );
 
-  // Request a new stain for a sample (issue #2): pull from an extra first, else
-  // flag the block. Undo restores the sample flag and any earmarked extra.
+  // Request a new stain for a sample (issues #2, #39): pull from an extra first —
+  // which moves that slide straight into the staining rack — else flag the block.
+  // Undo restores the sample flag, returns the slide to inventory, and drops any
+  // rack the request created; redo replays via snapshots (deterministic).
   const requestStain = useCallback(
     async (sampleId: number, assayType: "stain" | "ihc", assayName: string) => {
       const before = await getSample(sampleId);
-      if (!before) return { target: "block" as const, slideId: null };
+      if (!before) return { target: "block" as const, slideId: null, stackId: null, createdStackId: null };
       const result = await requestStainForSampleDb({ sampleId, assayType, assayName });
       invalidate();
+      const afterSample = await getSample(sampleId);
+      const slideAfter = result.slideId != null ? await getSlide(result.slideId) : null;
+      const stackAfter = result.stackId != null ? await getSlideStack(result.stackId) : null;
       record({
         label: `Request ${assayName}`,
         undo: async () => {
           await restoreSample(before);
           if (result.slideId != null) await revertSlideToExtra(result.slideId);
+          if (result.createdStackId != null) await deleteSlideStackIfEmpty(result.createdStackId);
           invalidate();
         },
         redo: async () => {
-          await requestStainForSampleDb({ sampleId, assayType, assayName });
+          if (afterSample) await restoreSample(afterSample);
+          if (result.createdStackId != null && stackAfter) await reinsertSlideStack(stackAfter);
+          if (slideAfter) await restoreSlide(slideAfter);
           invalidate();
         },
       });
@@ -921,9 +951,20 @@ export function useActions() {
         before.map((stack) => listChecklistRunsForScope("slide_stack", stack.id)),
       )).flat();
 
-      const resultIds: number[] = [];
-      for (const stack of sources) resultIds.push(await updateSlideStackStage(stack.id, stageKey));
-      const after = (await Promise.all([...new Set(resultIds)].map(getSlideStack))).filter(
+      for (const stack of sources) await updateSlideStackStage(stack.id, stageKey);
+      // Capture the resulting stacks from where the moved slides actually landed
+      // rather than from updateSlideStackStage's return: a stain rack scattering
+      // to Ready for Imaging is deleted and mints fresh per-sample stacks, whose
+      // ids the return value doesn't carry. Re-reading the moved slides' current
+      // stack_id captures those scattered stacks so undo can remove them (and
+      // redo recreate them) — otherwise the Needs Imaging tile lingers (#31).
+      const movedSlidesAfter = (await Promise.all(beforeSlides.map((slide) => getSlide(slide.id)))).filter(
+        (slide): slide is Slide => slide !== null,
+      );
+      const afterStackIds = [
+        ...new Set(movedSlidesAfter.map((slide) => slide.stack_id).filter((id): id is number => id != null)),
+      ];
+      const after = (await Promise.all(afterStackIds.map(getSlideStack))).filter(
         (stack): stack is SlideStack => stack !== null,
       );
       const afterSlides = (await Promise.all(after.map((stack) => listSlidesForStack(stack.id)))).flat();
@@ -1162,6 +1203,7 @@ export function useActions() {
     startProcessingBatch,
     planProcessingBatch,
     confirmProcessingBatchStart,
+    editPlannedBatchMembers,
     moveProcessingBatch,
     editBatchStart,
     editTimestamp,

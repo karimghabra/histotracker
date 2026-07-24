@@ -1,141 +1,154 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Plus, Scissors, X } from "lucide-react";
 import { Button, Modal } from "./ui";
 import type { Sample } from "../lib/types";
 
-interface Row {
+// A single slide the technician plans to cut: either a plain Extra or a slide
+// carrying one stain/IHC agent. Encoded as "extra" or "<type>::<name>".
+type SlideRow = { key: number; value: string };
+
+interface Group {
   duplicates: number;
-  stains: string;
+  stains?: string;
   assay_type?: string;
   assay_name?: string;
-  cut: boolean;
 }
 
-function parsePlan(raw: string): Row[] {
-  if (!raw) return [];
+/** Expand a saved sectioning plan (grouped) into one row per slide. */
+function planToRows(raw: string): SlideRow[] {
+  let key = 0;
+  const rows: SlideRow[] = [];
   try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((r) => ({
-      duplicates: Math.max(1, Number(r.duplicates) || 1),
-      stains: typeof r.stains === "string" ? r.stains : "",
-      assay_type: r.assay_type || undefined,
-      assay_name: r.assay_name || undefined,
-      // Preassigned rows are pre-checked so the auto-plan is a one-click send.
-      cut: Boolean(r.assay_name),
-    }));
+    const plan = JSON.parse(raw) as Group[];
+    if (Array.isArray(plan)) {
+      for (const g of plan) {
+        const n = Math.max(1, Number(g.duplicates) || 1);
+        const value = g.assay_name ? `${g.assay_type || "stain"}::${g.assay_name}` : "extra";
+        for (let i = 0; i < n; i += 1) rows.push({ key: key++, value });
+      }
+    }
   } catch {
-    return [];
+    /* fall through to default below */
   }
+  return rows;
+}
+
+/** Aggregate per-slide rows back into homogeneous cut groups. */
+function rowsToGroups(rows: SlideRow[]): Group[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.value, (counts.get(row.value) ?? 0) + 1);
+  const groups: Group[] = [];
+  // Stains first, then a single extras group — mirrors the auto-plan shape.
+  for (const [value, n] of counts) {
+    if (value === "extra") continue;
+    const [assay_type, assay_name] = value.split("::");
+    groups.push({ duplicates: n, stains: assay_name, assay_type, assay_name });
+  }
+  const extras = counts.get("extra") ?? 0;
+  if (extras > 0) groups.push({ duplicates: extras, stains: "" });
+  return groups;
 }
 
 export function SectioningPlanDialog({
   sample,
+  catalog = [],
   batchCount = 1,
   onSave,
   onSend,
   onClose,
 }: {
   sample: Sample;
+  /** Stain/IHC agents the technician can attach to a slide. */
+  catalog?: Array<{ assay_type: string; name: string }>;
   /** When > 1, the same plan is sent to that many selected embedded blocks (#8). */
   batchCount?: number;
-  onSave: (plan: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>) => Promise<void>;
-  onSend: (groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>) => Promise<void>;
+  onSave: (plan: Group[]) => Promise<void>;
+  onSend: (groups: Group[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const [rows, setRows] = useState<Row[]>(() => {
-    const existing = parsePlan(sample.sectioning_plan);
-    return existing.length ? existing : [{ duplicates: 4, stains: "", cut: false }];
+  const [rows, setRows] = useState<SlideRow[]>(() => {
+    const existing = planToRows(sample.sectioning_plan);
+    // Default cut: four extras (issue #4 — at least four slides, two extra).
+    return existing.length
+      ? existing
+      : [0, 1, 2, 3].map((key) => ({ key, value: "extra" }));
   });
   const [busy, setBusy] = useState(false);
+  const nextKey = useRef(1000);
 
-  const selected = rows.filter((r) => r.cut);
-  const totalSlides = rows.reduce((sum, r) => sum + Math.max(1, r.duplicates), 0);
-  // Cutting is only allowed once the block is embedded (issue #7). Planning
-  // ahead (Save Plan) stays available at any stage.
+  const stainCount = rows.filter((r) => r.value !== "extra").length;
+  const extraCount = rows.length - stainCount;
+  // Cutting is only allowed once the block is embedded (issue #7).
   const canSend = sample.current_stage === "embedded";
-  // When stains were preselected at sample creation the plan is prefilled and
-  // saved, so the technician only has to confirm (0.3.3).
   const preselected = Boolean(sample.pending_stains);
 
-  function update(index: number, patch: Partial<Row>) {
-    setRows((rs) => rs.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  function setRow(key: number, value: string) {
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, value } : r)));
   }
-
-  function toGroup(r: Row) {
-    return {
-      duplicates: Math.max(1, Number(r.duplicates) || 1),
-      stains: r.stains.trim(),
-      assay_type: r.assay_type,
-      assay_name: r.assay_name,
-    };
+  function addRow() {
+    setRows((rs) => [...rs, { key: (nextKey.current += 1), value: "extra" }]);
+  }
+  function removeRow(key: number) {
+    setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : rs));
   }
 
   async function savePlan() {
     setBusy(true);
-    await onSave(rows.map(toGroup));
+    await onSave(rowsToGroups(rows));
     setBusy(false);
     onClose();
   }
 
-  async function sendSelected() {
+  async function sendForCutting() {
     setBusy(true);
-    await onSave(rows.map(toGroup)); // persist the plan too
-    await onSend(selected.map(toGroup));
+    const groups = rowsToGroups(rows);
+    await onSave(groups); // keep the plan in sync
+    await onSend(groups);
     setBusy(false);
     onClose();
   }
 
   return (
-    <Modal title={`Sectioning Plan · ${sample.sample_code}`} onClose={onClose}>
+    <Modal title={`Send for Cutting · ${sample.sample_code}`} onClose={onClose}>
       <p className="mb-3 text-xs text-ink-faint">
-        {sample.sample_description ? `${sample.sample_description}` : "Plan the slides to cut for this block."}
+        How many slides to cut, and which carry a stain? Everything else is an extra.
       </p>
 
       {preselected && (
         <p className="mb-3 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          Preselected — the stains for this block are already requested ({sample.pending_stains}). Just confirm the cut.
+          Prefilled from this block's preselected stains ({sample.pending_stains}). Adjust if needed, then send.
         </p>
       )}
 
-      <div className="mb-1 grid grid-cols-[1.5rem_1.25rem_auto_1fr_1.25rem] items-center gap-2 px-1 text-[11px] font-medium text-ink-faint">
-        <span title="Cut this group">Cut</span>
+      <div className="mb-1 grid grid-cols-[1.5rem_auto_1.25rem] items-center gap-2 px-1 text-[11px] font-medium text-ink-faint">
         <span>#</span>
-        <span>Dupes</span>
-        <span>Stains (optional)</span>
+        <span>Slide</span>
         <span />
       </div>
 
-      <div className="space-y-2">
+      <div className="max-h-72 space-y-2 overflow-y-auto thin-scroll">
         {rows.map((row, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-[1.5rem_1.25rem_auto_1fr_1.25rem] items-center gap-2"
-          >
-            <input
-              type="checkbox"
-              checked={row.cut}
-              onChange={(e) => update(i, { cut: e.target.checked })}
-              className="h-4 w-4 accent-[var(--color-brand)]"
-            />
+          <div key={row.key} className="grid grid-cols-[1.5rem_auto_1.25rem] items-center gap-2">
             <span className="text-sm text-ink-faint">{i + 1}.</span>
-            <input
-              type="number"
-              value={row.duplicates}
-              min={1}
-              max={99}
-              onChange={(e) => update(i, { duplicates: Number(e.target.value) })}
-              className="w-16 rounded-lg border border-line bg-white px-3 py-1.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
-            <input
-              type="text"
-              value={row.stains}
-              placeholder="e.g. H&E, SafO"
-              onChange={(e) => update(i, { stains: e.target.value })}
-              className="w-full rounded-lg border border-line bg-white px-3 py-1.5 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-            />
+            <select
+              value={row.value}
+              onChange={(e) => setRow(row.key, e.target.value)}
+              className="w-full rounded-lg border border-line bg-white px-3 py-1.5 text-sm text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+            >
+              <option value="extra">Extra (no stain)</option>
+              <optgroup label="Stains">
+                {catalog.filter((c) => c.assay_type === "stain").map((c) => (
+                  <option key={`stain-${c.name}`} value={`stain::${c.name}`}>{c.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="IHC">
+                {catalog.filter((c) => c.assay_type === "ihc").map((c) => (
+                  <option key={`ihc-${c.name}`} value={`ihc::${c.name}`}>{c.name}</option>
+                ))}
+              </optgroup>
+            </select>
             <button
-              onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+              onClick={() => removeRow(row.key)}
               disabled={rows.length === 1}
               className="rounded-md p-1 text-ink-faint hover:bg-black/5 hover:text-ink disabled:opacity-30"
             >
@@ -145,25 +158,18 @@ export function SectioningPlanDialog({
         ))}
       </div>
 
-      <Button
-        variant="ghost"
-        className="mt-3"
-        onClick={() => setRows((rs) => [...rs, { duplicates: 1, stains: "", cut: false }])}
-      >
-        <Plus size={15} /> Add Section
+      <Button variant="ghost" className="mt-3" onClick={addRow}>
+        <Plus size={15} /> Add Slide
       </Button>
 
       <p className="mt-3 text-xs text-ink-soft">
-        {rows.length} {rows.length === 1 ? "section" : "sections"} · {totalSlides} planned{" "}
-        {totalSlides === 1 ? "slide" : "slides"}
-        {selected.length > 0 && (
-          <span className="text-brand"> · {selected.length} selected to cut</span>
-        )}
+        {rows.length} {rows.length === 1 ? "slide" : "slides"} · {stainCount} stained ·{" "}
+        {extraCount} extra
       </p>
 
       {batchCount > 1 && (
         <p className="mt-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          This plan will be sent to all {batchCount} selected embedded blocks.
+          This cut will be sent to all {batchCount} selected embedded blocks.
         </p>
       )}
       {!canSend && (
@@ -181,11 +187,11 @@ export function SectioningPlanDialog({
         </Button>
         <Button
           variant="primary"
-          onClick={sendSelected}
-          disabled={busy || selected.length === 0 || !canSend}
+          onClick={sendForCutting}
+          disabled={busy || rows.length === 0 || !canSend}
           title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
         >
-          <Scissors size={14} /> Send {selected.length || ""} to Sectioning
+          <Scissors size={14} /> Send for Cutting
           {batchCount > 1 ? ` · ${batchCount} blocks` : ""}
         </Button>
       </div>

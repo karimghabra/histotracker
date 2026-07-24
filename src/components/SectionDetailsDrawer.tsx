@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronRight, Pencil, Scissors, Trash2, X } from "lucide-react";
+import { CheckCircle2, Pencil, Scissors, Trash2, X } from "lucide-react";
 import type { SectionRequest, Slide, SlidePurpose } from "../lib/types";
 import { SECTION_STAGES } from "../lib/stages";
 import { Button } from "./ui";
@@ -120,25 +120,18 @@ export function SectionDetailsDrawer({
   const showAssignments = ["sectioned", "assignment_required"].includes(section.current_stage);
   const allAssigned = slides.length > 0 && slides.every((slide) => slide.assignment_saved === 1);
   const hasAssaySlides = slides.some((slide) => slide.purpose === "stain");
-  const hasExtras = slides.some((slide) => slide.purpose === "extra");
-  // Button label reflects what the move actually does for this stack (issue #13):
-  // start stain/IHC work, push extras to inventory, or both.
-  const startActionLabel = hasAssaySlides
-    ? hasExtras
-      ? "Start Assays / Move to Extras"
-      : "Start Assay Workflow"
-    : "Move to Extras";
   const assaySlides = slides.filter((slide) => slide.purpose === "stain");
   const showImagingChecklist = ["ready_for_imaging", "pictures_taken"].includes(section.current_stage);
   const activeSelection = selectedSections.length > 0 ? selectedSections : [section];
   const stainingBatchIds = activeSelection
     .filter((candidate) => candidate.current_stage === "stain_requested")
     .map((candidate) => candidate.id);
+  // Pre-assigned slides skip a separate assignment step (issues #34/#38), so
+  // "Mark Sectioned" advances every pre-staining section straight to staining.
   const sectioningBatchIds = activeSelection
-    .filter((candidate) => candidate.current_stage === "needs_sectioning")
-    .map((candidate) => candidate.id);
-  const assignmentBatchIds = activeSelection
-    .filter((candidate) => ["sectioned", "assignment_required"].includes(candidate.current_stage))
+    .filter((candidate) =>
+      ["needs_sectioning", "sectioned", "assignment_required"].includes(candidate.current_stage),
+    )
     .map((candidate) => candidate.id);
   const imagingBatchIds = activeSelection
     .filter((candidate) => ["ready_for_imaging", "pictures_taken"].includes(candidate.current_stage))
@@ -431,23 +424,15 @@ export function SectionDetailsDrawer({
           </p>
         )}
         <div className="flex items-center gap-2">
-        {section.current_stage === "needs_sectioning" ? (
+        {["needs_sectioning", "sectioned", "assignment_required"].includes(section.current_stage) ? (
           <Button
             variant="primary"
             className="flex-1"
-            onClick={() => run(() => moveSections(sectioningBatchIds, "assignment_required"))}
+            disabled={!allAssigned && dirtyCount === 0 && showAssignments}
+            title="Mark sectioned — stains go to Staining, extras to inventory."
+            onClick={() => run(() => moveSections(sectioningBatchIds, "stain_requested"))}
           >
             <Scissors size={15} /> {sectioningBatchIds.length > 1 ? `Mark Sectioned (${sectioningBatchIds.length})` : "Mark Sectioned"}
-          </Button>
-        ) : section.current_stage === "assignment_required" || section.current_stage === "sectioned" ? (
-          <Button
-            variant="primary"
-            className="flex-1"
-            disabled={!allAssigned || dirtyCount > 0}
-            title={dirtyCount > 0 || !allAssigned ? "Click Save All to confirm every slide assignment first." : "Start stain/IHC workflow and move any extras to inventory."}
-            onClick={() => run(() => moveSections(assignmentBatchIds, "stain_requested"))}
-          >
-            {startActionLabel} <ChevronRight size={15} />
           </Button>
         ) : section.current_stage === "stain_requested" ? (
           <Button

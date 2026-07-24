@@ -20,17 +20,6 @@ function processingRemaining(sample: Sample): string | null {
   return hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
 }
 
-function sectioningPlanSummary(raw: string): string | null {
-  try {
-    const plan = JSON.parse(raw) as Array<{ duplicates?: number; stains?: string }>;
-    const slides = plan.reduce((n, entry) => n + Math.max(0, Number(entry.duplicates) || 0), 0);
-    if (slides <= 0) return null;
-    return `${slides} slide${slides === 1 ? "" : "s"} planned`;
-  } catch {
-    return null;
-  }
-}
-
 const PREPROCESSING_STAGES = new Set([
   "received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol",
 ]);
@@ -87,7 +76,6 @@ export function SampleCard({
   });
 
   const remaining = processingRemaining(sample);
-  const planSummary = sectioningPlanSummary(sample.sectioning_plan);
   const pendingStainNames = parsePreselectedStains(sample.pending_stains)
     .map((a) => a.assay_name)
     .join(", ");
@@ -128,14 +116,6 @@ export function SampleCard({
             title={`Awaiting staining: ${pendingStainNames}`}
           >
             ⚑ needs stain
-          </span>
-        )}
-        {planSummary && (
-          <span
-            className="shrink-0 text-[10px] text-ink-faint"
-            title={`Sectioning plan: ${planSummary}`}
-          >
-            {planSummary}
           </span>
         )}
         <button
