@@ -123,6 +123,12 @@ pub fn run() {
             sql: include_str!("../migrations/0017_planned_processing_runs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 18,
+            description: "stain_racks_no_depth",
+            sql: include_str!("../migrations/0018_stain_racks_no_depth.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
