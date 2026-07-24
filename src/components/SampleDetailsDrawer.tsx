@@ -6,7 +6,7 @@ import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
-import { useSampleTimelineEvents } from "../hooks/useData";
+import { useAssayCatalog, useSampleTimelineEvents } from "../hooks/useData";
 
 function planSummary(raw: string): string {
   if (!raw) return "No plan yet";
@@ -44,11 +44,15 @@ export function SampleDetailsDrawer({
     setExhausted,
     setExhaustedSamples,
     editTimestamp,
+    requestStain,
   } = useActions();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
+  const { data: catalog = [] } = useAssayCatalog();
   const [showSectioning, setShowSectioning] = useState(false);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [requestAgent, setRequestAgent] = useState("");
+  const [requestFlash, setRequestFlash] = useState<string | null>(null);
 
   const showPreprocessing =
     (STAGE_ORDER[sample.current_stage] ?? 99) <= STAGE_ORDER["processing_started"];
@@ -138,6 +142,44 @@ export function SampleDetailsDrawer({
               <Scissors size={13} /> Edit
             </Button>
           </div>
+        </div>
+
+        <div className="mb-4">
+          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+            Request a Stain
+          </h3>
+          <div className="flex items-center gap-2">
+            <select
+              value={requestAgent}
+              onChange={(e) => setRequestAgent(e.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-brand"
+            >
+              <option value="">Choose an agent…</option>
+              {catalog.map((a) => (
+                <option key={`${a.assay_type}::${a.name}`} value={`${a.assay_type}::${a.name}`}>
+                  {a.name} ({a.assay_type})
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="subtle"
+              className="px-2 py-1"
+              disabled={!requestAgent}
+              onClick={async () => {
+                const [assayType, assayName] = requestAgent.split("::");
+                const result = await requestStain(sample.id, assayType as "stain" | "ihc", assayName);
+                setRequestAgent("");
+                setRequestFlash(
+                  result.target === "extra"
+                    ? `${assayName} pulled from an extra slide`
+                    : `${assayName} flagged on the block — a new cut is needed`,
+                );
+              }}
+            >
+              Request
+            </Button>
+          </div>
+          {requestFlash && <p className="mt-1 text-[11px] text-brand">{requestFlash}</p>}
         </div>
 
         <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-ink-faint">

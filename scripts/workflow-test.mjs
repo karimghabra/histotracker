@@ -466,6 +466,29 @@ function makeApi(db) {
 
   // Port of assignExtraSlideToAssay() — src/lib/db.ts. Stack membership owns
   // downstream grouping; the original section remains immutable cut provenance.
+  // Port of requestStainForSample() — src/lib/db.ts (issue #2). Extra first,
+  // else flag the block; the agent is recorded on the sample for the flag.
+  function requestStainForSample(sampleId, assayType, assayName) {
+    const row = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
+    const current = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+    if (!current.some((a) => a.assay_type === assayType && a.assay_name.toLowerCase() === assayName.toLowerCase())) {
+      current.push({ assay_type: assayType, assay_name: assayName });
+      run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [JSON.stringify(current), sampleId]);
+    }
+    const extra = get(
+      `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+        ORDER BY sl.id LIMIT 1`, [sampleId]);
+    if (extra) {
+      run(
+        `UPDATE slides SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+                assignment_saved = 1, slice_count = 2, control_agent = 'IgG', current_stage = 'assigned'
+          WHERE id = ?`, [assayType, assayName, assayName, extra.id]);
+      return { target: "extra", slideId: extra.id };
+    }
+    return { target: "block", slideId: null };
+  }
+
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
     const ts = now();
     const slide = get(
@@ -526,6 +549,7 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack,
     planProcessingBatch, confirmProcessingBatchStart,
+    requestStainForSample,
   };
 }
 
@@ -624,6 +648,29 @@ invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras 
                  WHERE sr.sample_id = ? AND sl.purpose = 'extra'`, [id]).c, expectedExtras,
        `n=${n}: extra slides`);
   }
+});
+
+invariant("a requested stain pulls from an extra first, else flags the block (#2)", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "request");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  api.sectionToAssignment(section);
+  const slides = api.all(`SELECT * FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`, [section]);
+  api.assignSlide(slides[0].id, "extra", "", "");
+  api.assignSlide(slides[1].id, "extra", "", "");
+  api.run(`UPDATE section_requests SET current_stage = 'ready_for_imaging' WHERE id = ?`, [section]);
+  eq(api.listExtraSlides().length, 2, "two extras available in inventory");
+  // First request pulls an extra and earmarks it for the agent.
+  const r1 = api.requestStainForSample(id, "stain", "SafO");
+  eq(r1.target, "extra", "first request goes to an extra");
+  eq(api.get(`SELECT assay_name FROM slides WHERE id = ?`, [r1.slideId]).assay_name, "SafO", "extra earmarked for the agent");
+  eq(api.listExtraSlides().length, 1, "the earmarked extra leaves inventory");
+  assert(pendingFlag(api, id) !== "", "sample shows the needs-staining flag");
+  // Second request pulls the remaining extra; third has none → flags the block.
+  eq(api.requestStainForSample(id, "ihc", "CD31").target, "extra", "second request pulls the last extra");
+  eq(api.requestStainForSample(id, "stain", "PAS").target, "block", "no extras left → the block is flagged");
 });
 
 invariant("the needs-staining flag clears once a stain enters staining (#1/#2)", () => {

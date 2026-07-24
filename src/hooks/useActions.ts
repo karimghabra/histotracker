@@ -27,6 +27,8 @@ import {
   planProcessingBatch as planProcessingBatchDb,
   confirmProcessingBatchStart as confirmProcessingBatchStartDb,
   revertProcessingBatchToPlanned,
+  requestStainForSample as requestStainForSampleDb,
+  revertSlideToExtra,
   reinsertSample,
   reinsertSectionRequest,
   reinsertSlide,
@@ -782,6 +784,31 @@ export function useActions() {
     [invalidate, record],
   );
 
+  // Request a new stain for a sample (issue #2): pull from an extra first, else
+  // flag the block. Undo restores the sample flag and any earmarked extra.
+  const requestStain = useCallback(
+    async (sampleId: number, assayType: "stain" | "ihc", assayName: string) => {
+      const before = await getSample(sampleId);
+      if (!before) return { target: "block" as const, slideId: null };
+      const result = await requestStainForSampleDb({ sampleId, assayType, assayName });
+      invalidate();
+      record({
+        label: `Request ${assayName}`,
+        undo: async () => {
+          await restoreSample(before);
+          if (result.slideId != null) await revertSlideToExtra(result.slideId);
+          invalidate();
+        },
+        redo: async () => {
+          await requestStainForSampleDb({ sampleId, assayType, assayName });
+          invalidate();
+        },
+      });
+      return result;
+    },
+    [invalidate, record],
+  );
+
   const setSlidePicturesTaken = useCallback(
     async (slideId: number, complete: boolean) => {
       const before = await getSlide(slideId);
@@ -1151,6 +1178,7 @@ export function useActions() {
     moveSections,
     assignSlide,
     assignExtraSlide,
+    requestStain,
     setSlidePicturesTaken,
     completeSectionImaging,
     moveSlideStacks,

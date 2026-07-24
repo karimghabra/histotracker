@@ -3,6 +3,7 @@ import { Clock, Star } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { Sample } from "../lib/types";
 import { processingDurationHours } from "../lib/stages";
+import { parsePreselectedStains } from "../lib/db";
 import { cn, parseTimestamp } from "../lib/utils";
 
 function processingRemaining(sample: Sample): string | null {
@@ -88,6 +89,9 @@ export function SampleCard({
 
   const remaining = processingRemaining(sample);
   const planSummary = sectioningPlanSummary(sample.sectioning_plan);
+  const pendingStainNames = parsePreselectedStains(sample.pending_stains)
+    .map((a) => a.assay_name)
+    .join(", ");
 
   const base = cn(
     "group touch-none rounded-md border bg-white transition select-none",
@@ -119,10 +123,10 @@ export function SampleCard({
         <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
           {sample.sample_description || "—"}
         </span>
-        {sample.pending_stains && (
+        {pendingStainNames && (
           <span
             className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
-            title={`Awaiting staining: ${sample.pending_stains}`}
+            title={`Awaiting staining: ${pendingStainNames}`}
           >
             ⚑ needs stain
           </span>

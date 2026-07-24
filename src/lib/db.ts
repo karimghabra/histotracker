@@ -1889,6 +1889,62 @@ export interface ExtraSlideAssignResult {
  * Send an inventory extra into the sample's open stack while preserving the
  * section request that records where the physical slide was cut.
  */
+/**
+ * Route a newly-requested stain for a sample (issue #2). The agent is recorded
+ * on the sample (driving the "needs staining" flag), then the request is pulled
+ * from an available extra first — that extra is earmarked for the agent and
+ * leaves the inventory, ready for a one-click Start Assays. If no extra is
+ * available the flag rests on the block, which needs a fresh cut. The flag
+ * clears once the earmarked stain enters staining.
+ */
+export async function requestStainForSample(input: {
+  sampleId: number;
+  assayType: "stain" | "ihc";
+  assayName: string;
+}): Promise<{ target: "extra" | "block"; slideId: number | null }> {
+  const db = await getDb();
+  const assayName = input.assayName.trim();
+  const rows = await db.select<Array<{ preselected_stains: string }>>(
+    `SELECT preselected_stains FROM samples WHERE id = ?`,
+    [input.sampleId],
+  );
+  const current = parsePreselectedStains(rows[0]?.preselected_stains);
+  if (!current.some((a) => a.assay_type === input.assayType && a.assay_name.toLowerCase() === assayName.toLowerCase())) {
+    current.push({ assay_type: input.assayType, assay_name: assayName });
+    await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [JSON.stringify(current), input.sampleId]);
+  }
+  // Pull from an available extra first.
+  const extras = await db.select<Array<{ id: number }>>(
+    `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+      ORDER BY sl.id LIMIT 1`,
+    [input.sampleId],
+  );
+  if (extras.length > 0) {
+    await db.execute(
+      `UPDATE slides
+          SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+              assignment_saved = 1, slice_count = 2, control_agent = 'IgG',
+              current_stage = 'assigned'
+        WHERE id = ?`,
+      [input.assayType, assayName, assayName, extras[0].id],
+    );
+    return { target: "extra", slideId: extras[0].id };
+  }
+  return { target: "block", slideId: null };
+}
+
+/** Undo of an earmark: return a slide to an inventory extra. */
+export async function revertSlideToExtra(slideId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE slides SET purpose = 'extra', assay_type = '', assay_name = '', stain_name = '',
+            current_stage = 'extra'
+      WHERE id = ?`,
+    [slideId],
+  );
+}
+
 export async function assignExtraSlideToAssay(input: {
   slideId: number;
   assayType: "stain" | "ihc";
