@@ -252,14 +252,15 @@ export async function listOpenSamples(): Promise<Sample[]> {
   return db.select<Sample[]>(
     `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
             COALESCE((
-              SELECT GROUP_CONCAT(depth_um || 'µm', ' ')
-                FROM (
-                  SELECT DISTINCT sr.depth_um
-                    FROM section_requests sr
-                   WHERE sr.sample_id = s.id AND sr.stage_sectioned_at IS NOT NULL
-                   ORDER BY sr.depth_um
-                )
-            ), '') AS sectioned_depths
+              SELECT GROUP_CONCAT(name, ', ') FROM (
+                SELECT DISTINCT COALESCE(NULLIF(sl.assay_name, ''), sl.stain_name) AS name
+                  FROM section_requests sr
+                  JOIN slides sl ON sl.section_request_id = sr.id
+                 WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
+                   AND sl.stage_stain_requested_at IS NULL
+                 ORDER BY name
+              )
+            ), '') AS pending_stains
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0
@@ -358,7 +359,7 @@ const RESTORE_COLUMNS = [
   "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",
   "stage_embedded_at", "stage_needs_sectioning_at", "stage_sectioned_at", "stage_stain_requested_at",
   "stage_stained_at", "stage_deparaffinized_at", "stage_ihc_at", "stage_pictures_taken_at",
-  "stage_analyzed_at", "stage_picked_up_at", "max_cut_depth_um", "block_exhausted",
+  "stage_analyzed_at", "stage_picked_up_at", "block_exhausted",
   "is_priority", "prioritized_at",
 ] as const;
 
@@ -391,7 +392,7 @@ export async function reinsertSample(snapshot: Sample): Promise<void> {
 
 export async function updateSectioningPlan(
   sampleId: number,
-  plan: Array<{ depth_um: number; duplicates: number }>,
+  plan: Array<{ duplicates: number; stains?: string }>,
 ): Promise<void> {
   const db = await getDb();
   const existing = await db.select<Array<{ sectioning_plan: string }>>(
@@ -407,7 +408,7 @@ export async function updateSectioningPlan(
   ]);
   const summary = plan.length
     ? `Sectioning plan ${previous ? "updated" : "created"}: ${plan
-        .map((row) => `${row.depth_um}µm ×${row.duplicates}`)
+        .map((row) => `×${row.duplicates}${row.stains ? ` (${row.stains})` : ""}`)
         .join(", ")}`
     : "Sectioning plan cleared";
   await db.execute(
@@ -450,20 +451,20 @@ export async function listAllSectionRequests(): Promise<SectionRequest[]> {
        FROM section_requests sr
        JOIN samples s ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
-      ORDER BY p.code, s.project_sample_number, sr.depth_um, sr.id`,
+      ORDER BY p.code, s.project_sample_number, sr.id`,
   );
 }
 
 export async function listAllSlides(): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(
-    `SELECT sl.*, sr.depth_um AS depth_um, s.sample_code AS parent_code,
+    `SELECT sl.*, s.sample_code AS parent_code,
             p.code AS project_code
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
-      ORDER BY p.code, s.project_sample_number, sr.depth_um, sl.slide_ordinal`,
+      ORDER BY p.code, s.project_sample_number, sl.slide_ordinal`,
   );
 }
 
@@ -1144,89 +1145,66 @@ export async function syncAssayWorkflowStep(
 // ---- Section requests (children of embedded blocks) -------------------------
 
 const SECTION_RESTORE_COLUMNS = [
-  "depth_um", "depth_index", "duplicates", "stains", "notes", "current_stage",
+  "duplicates", "stains", "notes", "current_stage",
   ...SECTION_STAGES.map((s) => s.column),
 ] as const;
 
 const SECTION_COLUMN_SET = new Set(Object.values(SECTION_STAGE_COLUMNS));
 
-/** Create section-request cards from selected plan groups, and bump the block's max cut depth. */
+// Per-sample slide code: EE-0001-A, -B, … (no depth, 0.3.3). Letters continue
+// across successive cuts of the same block.
+function slideCodeFor(parentCode: string, ordinal: number): string {
+  return `${parentCode}-${duplicateLabel(ordinal).toUpperCase()}`;
+}
+
+/** Create section-request cut groups (no depth); each produces `duplicates` slides. */
 export async function createSectionRequests(
   sampleId: number,
-  groups: Array<{ depth_um: number; duplicates: number; stains?: string }>,
+  groups: Array<{ duplicates: number; stains?: string }>,
 ): Promise<number[]> {
   if (groups.length === 0) return [];
   const db = await getDb();
   // A block can only be cut once it has reached Embedded Inventory (issue #7).
-  const sampleRows = await db.select<Array<{ current_stage: string }>>(
-    `SELECT current_stage FROM samples WHERE id = ?`,
+  const sampleRows = await db.select<Array<{ current_stage: string; sample_code: string }>>(
+    `SELECT current_stage, sample_code FROM samples WHERE id = ?`,
     [sampleId],
   );
   const stage = sampleRows[0]?.current_stage;
   if (!stage || (STAGE_ORDER[stage] ?? -1) < STAGE_ORDER.embedded) {
     throw new Error("This block must be embedded before it can be sent to sectioning.");
   }
+  const parentCode = sampleRows[0]?.sample_code ?? `BLOCK-${sampleId}`;
   const timestamp = nowTimestamp();
   const ids: number[] = [];
-  const existingDepths = await db.select<Array<{ depth_um: number; depth_index: number }>>(
-    `SELECT depth_um, MIN(depth_index) AS depth_index
-       FROM section_requests WHERE sample_id = ? AND depth_index IS NOT NULL
-      GROUP BY depth_um ORDER BY depth_index`,
+  // Slide letters run per sample across all its slides.
+  const countRow = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(sl.id) AS n
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ?`,
     [sampleId],
   );
-  const depthIndexes = new Map(existingDepths.map((row) => [row.depth_um, row.depth_index]));
-  const existingSlideOrdinals = await db.select<Array<{ depth_um: number; max_ordinal: number }>>(
-    `SELECT sr.depth_um, COALESCE(MAX(sl.depth_duplicate_ordinal), 0) AS max_ordinal
-       FROM section_requests sr LEFT JOIN slides sl ON sl.section_request_id = sr.id
-      WHERE sr.sample_id = ? GROUP BY sr.depth_um`,
-    [sampleId],
-  );
-  const nextSlideOrdinal = new Map(
-    existingSlideOrdinals.map((row) => [row.depth_um, row.max_ordinal + 1]),
-  );
-  let nextDepthIndex = Math.max(0, ...existingDepths.map((row) => row.depth_index)) + 1;
+  let nextOrdinal = (countRow[0]?.n ?? 0) + 1;
   for (const g of groups) {
-    let depthIndex = depthIndexes.get(g.depth_um);
-    if (depthIndex === undefined) {
-      depthIndex = nextDepthIndex;
-      nextDepthIndex += 1;
-      depthIndexes.set(g.depth_um, depthIndex);
-    }
+    const count = Math.max(1, g.duplicates);
     const res = await db.execute(
       `INSERT INTO section_requests
-        (sample_id, depth_um, depth_index, duplicates, stains, current_stage, stage_needs_sectioning_at)
-       VALUES (?, ?, ?, ?, ?, 'needs_sectioning', ?)`,
-      [sampleId, g.depth_um, depthIndex, Math.max(1, g.duplicates), g.stains ?? "", timestamp],
+        (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
+       VALUES (?, ?, ?, 'needs_sectioning', ?)`,
+      [sampleId, count, g.stains ?? "", timestamp],
     );
-    if (res.lastInsertId != null) {
-      const sectionId = res.lastInsertId;
-      ids.push(sectionId);
-      const sampleRows = await db.select<Array<{ sample_code: string }>>(
-        `SELECT sample_code FROM samples WHERE id = ?`,
-        [sampleId],
+    if (res.lastInsertId == null) continue;
+    const sectionId = res.lastInsertId;
+    ids.push(sectionId);
+    for (let ordinal = 1; ordinal <= count; ordinal += 1) {
+      await db.execute(
+        `INSERT INTO slides
+          (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
+         VALUES (?, ?, ?, 'extra', 'extra')`,
+        [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
       );
-      const parentCode = sampleRows[0]?.sample_code ?? `BLOCK-${sampleId}`;
-      for (let ordinal = 1; ordinal <= Math.max(1, g.duplicates); ordinal += 1) {
-        const depthOrdinal = (nextSlideOrdinal.get(g.depth_um) ?? 1) + ordinal - 1;
-        const slideCode = `${parentCode}-D${String(depthIndex).padStart(2, "0")}-${duplicateLabel(depthOrdinal)}`;
-        await db.execute(
-          `INSERT INTO slides
-            (section_request_id, slide_ordinal, depth_duplicate_ordinal, slide_code, purpose, current_stage)
-           VALUES (?, ?, ?, ?, 'extra', 'extra')`,
-          [sectionId, ordinal, depthOrdinal, slideCode],
-        );
-      }
-      nextSlideOrdinal.set(
-        g.depth_um,
-        (nextSlideOrdinal.get(g.depth_um) ?? 1) + Math.max(1, g.duplicates),
-      );
+      nextOrdinal += 1;
     }
   }
-  const deepest = Math.max(...groups.map((g) => g.depth_um));
-  await db.execute(
-    `UPDATE samples SET max_cut_depth_um = MAX(COALESCE(max_cut_depth_um, 0), ?) WHERE id = ?`,
-    [deepest, sampleId],
-  );
   return ids;
 }
 
@@ -1282,7 +1260,7 @@ export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
         sr.current_stage = 'ready_for_imaging'
         AND COALESCE(SUM(CASE WHEN sl.purpose = 'stain' THEN 1 ELSE 0 END), 0) = 0
       )
-      ORDER BY s.is_priority DESC, s.prioritized_at DESC, sr.depth_um ASC, sr.id ASC`,
+      ORDER BY s.is_priority DESC, s.prioritized_at DESC, sr.id ASC`,
   );
 }
 
@@ -1298,14 +1276,9 @@ export async function getSectionRequest(id: number): Promise<SectionRequest | nu
 async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   const db = await getDb();
   const rows = await db.select<
-    Array<{ duplicates: number; sample_code: string; depth_index: number; existing_count: number; max_depth_ordinal: number }>
+    Array<{ duplicates: number; sample_id: number; sample_code: string; existing_count: number }>
   >(
-    `SELECT sr.duplicates, sr.depth_index, s.sample_code, COUNT(sl.id) AS existing_count,
-            COALESCE((
-              SELECT MAX(sl2.depth_duplicate_ordinal)
-                FROM slides sl2 JOIN section_requests sr2 ON sr2.id = sl2.section_request_id
-               WHERE sr2.sample_id = sr.sample_id AND sr2.depth_index = sr.depth_index
-            ), 0) AS max_depth_ordinal
+    `SELECT sr.duplicates, sr.sample_id, s.sample_code, COUNT(sl.id) AS existing_count
        FROM section_requests sr
        JOIN samples s ON s.id = sr.sample_id
        LEFT JOIN slides sl ON sl.section_request_id = sr.id
@@ -1315,15 +1288,22 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   );
   const row = rows[0];
   if (!row) return;
+  // New slides continue the sample's letter sequence (A, B, …).
+  const countRow = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(sl.id) AS n
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ?`,
+    [row.sample_id],
+  );
+  let nextLetter = (countRow[0]?.n ?? 0) + 1;
   for (let ordinal = row.existing_count + 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
-    const depthOrdinal = row.max_depth_ordinal + ordinal - row.existing_count;
-    const slideCode = `${row.sample_code}-D${String(row.depth_index ?? 1).padStart(2, "0")}-${duplicateLabel(depthOrdinal)}`;
     await db.execute(
       `INSERT INTO slides
-        (section_request_id, slide_ordinal, depth_duplicate_ordinal, slide_code, purpose, current_stage)
-       VALUES (?, ?, ?, ?, 'extra', 'extra')`,
-      [id, ordinal, depthOrdinal, slideCode],
+        (section_request_id, slide_ordinal, slide_code, purpose, current_stage)
+       VALUES (?, ?, ?, 'extra', 'extra')`,
+      [id, ordinal, slideCodeFor(row.sample_code, nextLetter)],
     );
+    nextLetter += 1;
   }
 }
 
@@ -1339,7 +1319,7 @@ export async function listSlidesForSectionRequest(id: number): Promise<Slide[]> 
 export async function listExtraSlides(): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(
-    `SELECT sl.*, sr.depth_um, sr.depth_index, s.id AS sample_id, s.sample_code AS parent_code,
+    `SELECT sl.*, s.id AS sample_id, s.sample_code AS parent_code,
             s.sample_description, s.is_priority, p.code AS project_code, p.name AS project_name
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
@@ -1351,8 +1331,7 @@ export async function listExtraSlides(): Promise<Slide[]> {
         -- a slide saved as 'extra' during assignment must not surface in the
         -- inventory until its section is dispositioned onward.
         AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
-      ORDER BY s.is_priority DESC, p.code COLLATE NOCASE, s.project_sample_number,
-               sr.depth_index, sl.depth_duplicate_ordinal, sl.id`,
+      ORDER BY s.is_priority DESC, p.code COLLATE NOCASE, s.project_sample_number, sl.id`,
   );
 }
 
@@ -1367,29 +1346,57 @@ export async function listStainSlidesForSections(sectionIds: number[]): Promise<
   const db = await getDb();
   const placeholders = sectionIds.map(() => "?").join(", ");
   return db.select<Slide[]>(
-    `SELECT sl.*, sr.depth_um, sr.depth_index, s.sample_code AS parent_code
+    `SELECT sl.*, s.sample_code AS parent_code
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
       WHERE sl.section_request_id IN (${placeholders}) AND sl.purpose = 'stain'
-      ORDER BY sr.depth_index, sl.slide_ordinal, sl.id`,
+      ORDER BY sl.slide_ordinal, sl.id`,
     sectionIds,
   );
 }
 
-export async function getOpenSlideStack(
+// The substages a cross-sample stain rack occupies while it moves through the
+// reagents. Downstream stages (ready_for_imaging onward) are per-sample.
+const STAIN_RACK_STAGES = [
+  "stain_requested", "stained", "deparaffinized", "ihc_complete",
+  "refrax_complete", "coverslipped", "dried",
+];
+
+/** The one open per-sample downstream stack for (sample, stage), if any. */
+export async function getOpenSampleStack(
   sampleId: number,
-  depthUm: number,
-  stageKey = "stain_requested",
+  stageKey: string,
   excludeId?: number,
 ): Promise<SlideStack | null> {
   const db = await getDb();
   const rows = await db.select<SlideStack[]>(
     `SELECT * FROM slide_stacks
-      WHERE sample_id = ? AND depth_um = ? AND current_stage = ?
+      WHERE kind = 'sample' AND sample_id = ? AND current_stage = ?
         AND closed_at IS NULL AND (? IS NULL OR id != ?)
       ORDER BY id ASC LIMIT 1`,
-    [sampleId, depthUm, stageKey, excludeId ?? null, excludeId ?? null],
+    [sampleId, stageKey, excludeId ?? null, excludeId ?? null],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * The open "loading" rack for an assay agent — the cross-sample stain stack
+ * still at stain_requested that newly-staining slides of this agent join. Racks
+ * that have advanced never accept new members (they scatter at imaging), so
+ * there is at most one loading rack per agent.
+ */
+export async function getOpenStainRack(
+  assayType: string,
+  assayName: string,
+): Promise<SlideStack | null> {
+  const db = await getDb();
+  const rows = await db.select<SlideStack[]>(
+    `SELECT * FROM slide_stacks
+      WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
+        AND current_stage = 'stain_requested' AND closed_at IS NULL
+      ORDER BY id ASC LIMIT 1`,
+    [assayType, assayName],
   );
   return rows[0] ?? null;
 }
@@ -1442,8 +1449,8 @@ export async function deleteSlideStackIfEmpty(id: number): Promise<boolean> {
 export async function reinsertSlideStack(snapshot: SlideStack): Promise<void> {
   const db = await getDb();
   const columns = [
-    "id", "sample_id", "depth_um", "depth_index", "current_stage", ...Object.values(STACK_STAGE_COLUMNS),
-    "closed_at", "created_at",
+    "id", "kind", "assay_type", "assay_name", "sample_id", "current_stage",
+    ...Object.values(STACK_STAGE_COLUMNS), "closed_at", "created_at",
   ];
   const values = columns.map((column) => (snapshot as unknown as Record<string, unknown>)[column]);
   await db.execute(
@@ -1505,52 +1512,44 @@ export async function reinsertChecklistRuns(snapshots: ChecklistRunSnapshot[]): 
   }
 }
 
-async function getOrCreateOpenSlideStack(
-  sampleId: number,
-  depthUm: number,
-  depthIndex: number,
-): Promise<number> {
-  const existing = await getOpenSlideStack(sampleId, depthUm, "stain_requested");
+/** The loading rack for an agent, creating it if none is open. */
+async function getOrCreateStainRack(assayType: string, assayName: string): Promise<number> {
+  const existing = await getOpenStainRack(assayType, assayName);
   if (existing) return existing.id;
   const db = await getDb();
   const timestamp = nowTimestamp();
   const result = await db.execute(
     `INSERT INTO slide_stacks
-      (sample_id, depth_um, depth_index, current_stage, stage_stain_requested_at)
-     VALUES (?, ?, ?, 'stain_requested', ?)`,
-    [sampleId, depthUm, depthIndex, timestamp],
+      (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+     VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+    [assayType, assayName, timestamp],
   );
-  if (result.lastInsertId == null) throw new Error("Could not create the slide stack.");
+  if (result.lastInsertId == null) throw new Error("Could not create the stain rack.");
   return result.lastInsertId;
 }
 
-async function attachSectionStainSlidesToOpenStack(sectionId: number): Promise<number | null> {
+/**
+ * Load a section's stain slides into their agents' racks. A section can carry
+ * several agents (H&E + SafO + CD31), so each slide joins the cross-sample
+ * loading rack for its own agent (issue #5 rework, 0.3.3).
+ */
+async function attachSectionStainSlidesToRacks(sectionId: number): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ sample_id: number; depth_um: number; depth_index: number; stain_count: number }>>(
-    `SELECT sr.sample_id, sr.depth_um, sr.depth_index,
-            COUNT(sl.id) AS stain_count
-       FROM section_requests sr
-       LEFT JOIN slides sl ON sl.section_request_id = sr.id AND sl.purpose = 'stain'
-      WHERE sr.id = ?
-      GROUP BY sr.id`,
+  const agents = await db.select<Array<{ assay_type: string; assay_name: string }>>(
+    `SELECT DISTINCT assay_type, assay_name
+       FROM slides
+      WHERE section_request_id = ? AND purpose = 'stain'`,
     [sectionId],
   );
-  const section = rows[0];
-  if (!section || section.stain_count === 0) return null;
-  const stackId = await getOrCreateOpenSlideStack(
-    section.sample_id,
-    section.depth_um,
-    section.depth_index,
-  );
-  await db.execute(
-    `UPDATE slides
-        SET stack_id = ?,
-            cut_depth_um = COALESCE(cut_depth_um, ?),
-            cut_depth_index = COALESCE(cut_depth_index, ?)
-      WHERE section_request_id = ? AND purpose = 'stain'`,
-    [stackId, section.depth_um, section.depth_index, sectionId],
-  );
-  return stackId;
+  for (const agent of agents) {
+    const rackId = await getOrCreateStainRack(agent.assay_type, agent.assay_name);
+    await db.execute(
+      `UPDATE slides SET stack_id = ?
+        WHERE section_request_id = ? AND purpose = 'stain'
+          AND assay_type = ? AND assay_name = ?`,
+      [rackId, sectionId, agent.assay_type, agent.assay_name],
+    );
+  }
 }
 
 const STACK_STAGE_COLUMNS: Record<string, string> = {
@@ -1567,7 +1566,7 @@ const STACK_STAGE_COLUMNS: Record<string, string> = {
 };
 
 const STACK_RESTORE_COLUMNS = [
-  "sample_id", "depth_um", "depth_index", "current_stage",
+  "kind", "assay_type", "assay_name", "sample_id", "current_stage",
   ...Object.values(STACK_STAGE_COLUMNS), "closed_at",
 ] as const;
 
@@ -1582,10 +1581,18 @@ export async function restoreSlideStack(snapshot: SlideStack): Promise<void> {
 
 export async function listOpenSlideStacks(): Promise<SlideStack[]> {
   const db = await getDb();
+  // A 'stain' rack spans samples (sample_id NULL); a 'sample' stack owns one.
+  // Member facts (sample codes, priority, project activity) are derived from the
+  // slides so both kinds render from one query. parent_code is the display
+  // handle: the agent name for a rack, the sample code for a sample stack.
   return db.select<SlideStack[]>(
-    `SELECT ss.*, s.project_id, s.sample_code AS parent_code,
-            s.sample_description AS parent_description, s.is_priority,
-            p.code AS project_code, p.name AS project_name,
+    `SELECT ss.*,
+            s.project_id,
+            CASE WHEN ss.kind = 'stain' THEN ss.assay_name ELSE s.sample_code END AS parent_code,
+            CASE WHEN ss.kind = 'stain' THEN '' ELSE s.sample_description END AS parent_description,
+            COALESCE(MAX(COALESCE(s.is_priority, msamp.is_priority)), 0) AS is_priority,
+            COALESCE(p.code, mproj.code) AS project_code,
+            COALESCE(p.name, mproj.name) AS project_name,
             COUNT(sl.id) AS slide_count,
             COALESCE(SUM(CASE WHEN sl.purpose = 'stain' THEN 1 ELSE 0 END), 0)
               AS assay_slide_count,
@@ -1593,6 +1600,7 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
               AS has_stain,
             COALESCE(MAX(CASE WHEN sl.purpose = 'stain' AND sl.assay_type = 'ihc' THEN 1 ELSE 0 END), 0)
               AS has_ihc,
+            COALESCE(GROUP_CONCAT(DISTINCT msamp.sample_code), '') AS member_sample_codes,
             COALESCE(GROUP_CONCAT(
               CASE WHEN sl.purpose = 'stain' THEN
                 sl.slide_code || ': ' || CASE WHEN sl.assay_type = 'ihc'
@@ -1603,27 +1611,42 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
               ' · '
             ), '') AS slide_summary
        FROM slide_stacks ss
-       JOIN samples s ON s.id = ss.sample_id
-       JOIN projects p ON p.id = s.project_id
+       LEFT JOIN samples s ON s.id = ss.sample_id
+       LEFT JOIN projects p ON p.id = s.project_id
        LEFT JOIN slides sl ON sl.stack_id = ss.id
-      WHERE ss.closed_at IS NULL AND p.is_active = 1
+       LEFT JOIN section_requests msr ON msr.id = sl.section_request_id
+       LEFT JOIN samples msamp ON msamp.id = msr.sample_id
+       LEFT JOIN projects mproj ON mproj.id = msamp.project_id
+      WHERE ss.closed_at IS NULL
+        AND (ss.kind = 'stain' OR p.is_active = 1)
       GROUP BY ss.id
-      ORDER BY s.is_priority DESC, ss.created_at ASC, ss.id ASC`,
+      ORDER BY is_priority DESC, ss.created_at ASC, ss.id ASC`,
   );
+}
+
+/** Distinct sample ids owning slides in a stack (a stain rack spans several). */
+export async function listStackSampleIds(stackId: number): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ sample_id: number }>>(
+    `SELECT DISTINCT sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.stack_id = ?`,
+    [stackId],
+  );
+  return rows.map((r) => r.sample_id);
 }
 
 export async function listSlidesForStack(stackId: number): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(
-    `SELECT sl.*, sr.depth_um, sr.depth_index, s.sample_code AS parent_code,
+    `SELECT sl.*, s.sample_code AS parent_code,
             p.code AS project_code, p.name AS project_name
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
       WHERE sl.stack_id = ?
-      ORDER BY COALESCE(sl.cut_depth_index, sr.depth_index),
-               sl.depth_duplicate_ordinal, sl.id`,
+      ORDER BY s.sample_code, sl.slide_ordinal, sl.id`,
     [stackId],
   );
 }
@@ -1636,23 +1659,59 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
   const db = await getDb();
   const timestamp = nowTimestamp();
   const slideColumn = SECTION_STAGE_COLUMNS[stageKey];
-  if (slideColumn) {
-    await db.execute(
-      `UPDATE slides
-          SET current_stage = ?, ${slideColumn} = COALESCE(${slideColumn}, ?)
-        WHERE stack_id = ? AND purpose = 'stain'`,
-      [stageKey, timestamp, stackId],
+  const setSlideStage = async (targetStackId: number) => {
+    if (slideColumn) {
+      await db.execute(
+        `UPDATE slides SET current_stage = ?, ${slideColumn} = COALESCE(${slideColumn}, ?)
+          WHERE stack_id = ? AND purpose = 'stain'`,
+        [stageKey, timestamp, targetStackId],
+      );
+    } else {
+      await db.execute(
+        `UPDATE slides SET current_stage = ? WHERE stack_id = ? AND purpose = 'stain'`,
+        [stageKey, targetStackId],
+      );
+    }
+  };
+
+  // A cross-sample stain rack: advances through the reagent substages as a unit
+  // and NEVER merges with another rack. When it leaves staining it SCATTERS —
+  // each member slide rejoins its own sample's per-sample imaging stack.
+  if (source.kind === "stain") {
+    if (STAIN_RACK_STAGES.includes(stageKey)) {
+      await setSlideStage(stackId);
+      await db.execute(
+        `UPDATE slide_stacks SET current_stage = ?, ${column} = COALESCE(${column}, ?) WHERE id = ?`,
+        [stageKey, timestamp, stackId],
+      );
+      return stackId;
+    }
+    // Scatter into per-sample stacks at the downstream stage.
+    const members = await db.select<Array<{ id: number; sample_id: number }>>(
+      `SELECT sl.id, sr.sample_id
+         FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sl.stack_id = ?`,
+      [stackId],
     );
-  } else {
-    await db.execute(
-      `UPDATE slides SET current_stage = ? WHERE stack_id = ? AND purpose = 'stain'`,
-      [stageKey, stackId],
-    );
+    for (const member of members) {
+      const target = await getOrCreateSampleStack(member.sample_id, stageKey, timestamp);
+      await db.execute(
+        slideColumn
+          ? `UPDATE slides SET stack_id = ?, current_stage = ?, ${slideColumn} = COALESCE(${slideColumn}, ?) WHERE id = ?`
+          : `UPDATE slides SET stack_id = ?, current_stage = ? WHERE id = ?`,
+        slideColumn ? [target, stageKey, timestamp, member.id] : [target, stageKey, member.id],
+      );
+    }
+    await deleteSlideStack(stackId); // rack consumed
+    return stackId;
   }
 
+  // A per-sample stack: advance, merging with the same sample's stack already at
+  // the destination stage (companion convergence, unchanged from 0.3.2).
+  await setSlideStage(stackId);
   const mergeTarget = stageKey === "analyzed"
     ? null
-    : await getOpenSlideStack(source.sample_id, source.depth_um, stageKey, source.id);
+    : await getOpenSampleStack(source.sample_id ?? -1, stageKey, source.id);
   if (mergeTarget) {
     await db.execute(`UPDATE slides SET stack_id = ? WHERE stack_id = ?`, [mergeTarget.id, source.id]);
     await db.execute(
@@ -1662,7 +1721,6 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
     await deleteSlideStack(source.id);
     return mergeTarget.id;
   }
-
   await db.execute(
     `UPDATE slide_stacks
         SET current_stage = ?, ${column} = COALESCE(${column}, ?),
@@ -1671,6 +1729,25 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
     [stageKey, timestamp, stageKey, timestamp, stackId],
   );
   return stackId;
+}
+
+/** The one open per-sample stack for (sample, stage), created if absent. */
+async function getOrCreateSampleStack(
+  sampleId: number,
+  stageKey: string,
+  timestamp: string,
+): Promise<number> {
+  const existing = await getOpenSampleStack(sampleId, stageKey);
+  if (existing) return existing.id;
+  const db = await getDb();
+  const column = STACK_STAGE_COLUMNS[stageKey] ?? "stage_ready_for_imaging_at";
+  const result = await db.execute(
+    `INSERT INTO slide_stacks (kind, sample_id, current_stage, ${column})
+     VALUES ('sample', ?, ?, ?)`,
+    [sampleId, stageKey, timestamp],
+  );
+  if (result.lastInsertId == null) throw new Error("Could not create the sample stack.");
+  return result.lastInsertId;
 }
 
 export async function syncAssayStackWorkflowStep(
@@ -1751,10 +1828,8 @@ export async function assignExtraSlideToAssay(input: {
   const rows = await db.select<Array<{
     sample_id: number;
     slide_code: string;
-    depth_um: number;
-    depth_index: number;
   }>>(
-    `SELECT sr.sample_id, sl.slide_code, sr.depth_um, sr.depth_index
+    `SELECT sr.sample_id, sl.slide_code
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`,
     [input.slideId],
@@ -1767,26 +1842,19 @@ export async function assignExtraSlideToAssay(input: {
   );
   if (!catalog.length) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
-  const openStack = await getOpenSlideStack(
-    slide.sample_id,
-    slide.depth_um,
-    "stain_requested",
-  );
-  const stackId = openStack?.id ?? await getOrCreateOpenSlideStack(
-    slide.sample_id,
-    slide.depth_um,
-    slide.depth_index,
-  );
+  // The extra enters staining: it joins the cross-sample loading rack for its
+  // agent (creating it if none is open).
+  const openRack = await getOpenStainRack(input.assayType, assayName);
+  const stackId = openRack?.id ?? await getOrCreateStainRack(input.assayType, assayName);
 
   await db.execute(
     `UPDATE slides
-        SET stack_id = ?, cut_depth_um = COALESCE(cut_depth_um, ?),
-            cut_depth_index = COALESCE(cut_depth_index, ?),
+        SET stack_id = ?,
             purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
             current_stage = 'stain_requested', assignment_saved = 1,
             stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
       WHERE id = ?`,
-    [stackId, slide.depth_um, slide.depth_index, input.assayType, assayName, assayName, timestamp, input.slideId],
+    [stackId, input.assayType, assayName, assayName, timestamp, input.slideId],
   );
 
   await db.execute(
@@ -1799,7 +1867,7 @@ export async function assignExtraSlideToAssay(input: {
 
   return {
     stackId,
-    createdStackId: openStack ? null : stackId,
+    createdStackId: openRack ? null : stackId,
   };
 }
 
@@ -1971,7 +2039,7 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
         WHERE section_request_id = ?`,
       [timestamp, id],
     );
-    await attachSectionStainSlidesToOpenStack(id);
+    await attachSectionStainSlidesToRacks(id);
   }
   if (stageKey === "stained") {
     await db.execute(
@@ -2066,7 +2134,7 @@ export async function reinsertSlide(snapshot: Slide): Promise<void> {
   const db = await getDb();
   const columns = [
     "id", "section_request_id", "slide_ordinal", "slide_code", "purpose", "stain_name",
-    "depth_duplicate_ordinal", "stack_id", "cut_depth_um", "cut_depth_index",
+    "stack_id",
     "current_stage", "stage_cut_at", "stage_stain_requested_at", "stage_staining_started_at",
     "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at", "stage_dried_at", "stage_ready_for_imaging_at",
     "stage_pictures_taken_at", "stage_analyzed_at", "location", "notes",
@@ -2085,8 +2153,8 @@ export async function reinsertSlide(snapshot: Slide): Promise<void> {
 // Mutable slide columns a snapshot restore may overwrite (everything but id
 // and created_at). Used to undo extra-slide assignment.
 const SLIDE_RESTORE_COLUMNS = [
-  "section_request_id", "slide_ordinal", "depth_duplicate_ordinal", "slide_code",
-  "stack_id", "cut_depth_um", "cut_depth_index",
+  "section_request_id", "slide_ordinal", "slide_code",
+  "stack_id",
   "purpose", "stain_name", "slice_count", "control_agent", "assay_type", "assay_name",
   "assignment_saved", "current_stage", "stage_cut_at", "stage_stain_requested_at",
   "stage_staining_started_at", "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at",

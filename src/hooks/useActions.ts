@@ -13,7 +13,8 @@ import {
   deleteSlideStack,
   deleteSlideStackIfEmpty,
   deleteSlidesForStack,
-  getOpenSlideStack,
+  getOpenSampleStack,
+  listStackSampleIds,
   getProcessingBatchSamples,
   getSample,
   getSlideStack,
@@ -415,7 +416,7 @@ export function useActions() {
   );
 
   const saveSectioningPlan = useCallback(
-    async (sampleId: number, plan: Array<{ depth_um: number; duplicates: number }>) => {
+    async (sampleId: number, plan: Array<{ duplicates: number; stains?: string }>) => {
       const before = await getSample(sampleId);
       if (!before) return;
       await updateSectioningPlan(sampleId, plan);
@@ -515,7 +516,7 @@ export function useActions() {
   const sendSectionsToCutting = useCallback(
     async (
       sampleId: number,
-      groups: Array<{ depth_um: number; duplicates: number; stains?: string }>,
+      groups: Array<{ duplicates: number; stains?: string }>,
     ) => {
       const beforeBlock = await getSample(sampleId);
       const ids = await createSectionRequests(sampleId, groups);
@@ -551,7 +552,7 @@ export function useActions() {
   const sendSectionsToCuttingForSamples = useCallback(
     async (
       sampleIds: number[],
-      groups: Array<{ depth_um: number; duplicates: number; stains?: string }>,
+      groups: Array<{ duplicates: number; stains?: string }>,
     ) => {
       if (sampleIds.length === 0) return 0;
       if (sampleIds.length === 1) return sendSectionsToCutting(sampleIds[0], groups);
@@ -756,14 +757,6 @@ export function useActions() {
     async (input: { slideId: number; assayType: "stain" | "ihc"; assayName: string }) => {
       const slideBefore = await getSlide(input.slideId);
       if (!slideBefore) return;
-      const formerSectionBefore = await getSectionRequest(slideBefore.section_request_id);
-      const stackBefore = formerSectionBefore
-        ? await getOpenSlideStack(
-            formerSectionBefore.sample_id,
-            formerSectionBefore.depth_um,
-            "stain_requested",
-          )
-        : null;
       const result = await assignExtraSlideToAssay(input);
       // Fulfilling a requested stain auto-acknowledges the matching request.
       await acknowledgeRequestsForSlide(input.slideId);
@@ -774,14 +767,14 @@ export function useActions() {
         label: `Assign ${slideBefore.slide_code}`,
         undo: async () => {
           await restoreSlide(slideBefore);
+          // Joining an agent rack only adds the slide; drop the rack if the
+          // undo emptied a freshly-created one.
           if (result.createdStackId != null) await deleteSlideStackIfEmpty(result.createdStackId);
-          else if (stackBefore) await restoreSlideStack(stackBefore);
           invalidate();
         },
         redo: async () => {
           if (result.createdStackId != null && stackAfter) await reinsertSlideStack(stackAfter);
           if (slideAfter) await restoreSlide(slideAfter);
-          if (stackAfter) await restoreSlideStack(stackAfter);
           invalidate();
         },
       });
@@ -874,11 +867,27 @@ export function useActions() {
         }
       }
 
-      const mergeTargets = (await Promise.all(sources.map((stack) =>
-        stageKey === "analyzed"
-          ? Promise.resolve(null)
-          : getOpenSlideStack(stack.sample_id, stack.depth_um, stageKey, stack.id),
-      ))).filter((stack): stack is SlideStack => stack !== null);
+      // Capture the stacks the move will touch so undo can restore them: a
+      // per-sample stack merges with the same sample's stack at the destination;
+      // a cross-sample stain rack scatters into each member sample's stack.
+      const DOWNSTREAM_STAGES = new Set(["ready_for_imaging", "pictures_taken", "analyzed"]);
+      const mergeTargets: SlideStack[] = [];
+      if (stageKey !== "analyzed") {
+        for (const stack of sources) {
+          if (stack.kind === "stain") {
+            if (DOWNSTREAM_STAGES.has(stageKey)) {
+              const sampleIds = await listStackSampleIds(stack.id);
+              for (const sid of sampleIds) {
+                const target = await getOpenSampleStack(sid, stageKey);
+                if (target) mergeTargets.push(target);
+              }
+            }
+          } else {
+            const target = await getOpenSampleStack(stack.sample_id ?? -1, stageKey, stack.id);
+            if (target) mergeTargets.push(target);
+          }
+        }
+      }
       const before = [...new Map([...sources, ...mergeTargets].map((stack) => [stack.id, stack])).values()];
       const beforeSlides = (await Promise.all(before.map((stack) => listSlidesForStack(stack.id)))).flat();
       const beforeChecklists = (await Promise.all(

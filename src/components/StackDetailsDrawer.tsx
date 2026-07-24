@@ -82,7 +82,9 @@ export function StackDetailsDrawer({
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
             <Layers size={16} className="shrink-0" />
-            <span className="truncate">{stack.parent_code} | {stack.depth_um} um</span>
+            <span className="truncate">
+              {stack.parent_code}{stack.kind === "stain" ? " · stain rack" : ""}
+            </span>
           </h2>
           <p className="truncate text-xs text-ink-faint">
             {stack.parent_description || stack.project_name || `Stack ${stack.id}`}
@@ -166,7 +168,7 @@ export function StackDetailsDrawer({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-semibold text-ink">{slide.slide_code}</span>
                     <span className="block truncate text-[10px] text-ink-faint">
-                      {slide.assay_name || slide.stain_name} | {slide.cut_depth_um ?? slide.depth_um ?? "?"} um
+                      {slide.assay_name || slide.stain_name}{slide.parent_code ? ` | ${slide.parent_code}` : ""}
                     </span>
                   </span>
                   <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>

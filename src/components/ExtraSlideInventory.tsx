@@ -65,7 +65,6 @@ export function ExtraSlideInventory({
         />
       </label>
       {visible.map((group) => {
-        const depths = [...new Set(group.slides.map((slide) => slide.depth_um).filter((depth) => depth != null))];
         return (
           <button
             type="button"
@@ -82,11 +81,6 @@ export function ExtraSlideInventory({
             <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
               {group.sampleDescription || group.projectCode}
             </span>
-            {depths.length > 0 && (
-              <span className="shrink-0 text-[10px] text-ink-faint">
-                {depths.length === 1 ? `${depths[0]} um` : `${depths.length} depths`}
-              </span>
-            )}
             <span
               className="shrink-0 rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand"
               title={`${group.slides.length} extra slide${group.slides.length === 1 ? "" : "s"}`}

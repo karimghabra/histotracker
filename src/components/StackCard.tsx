@@ -22,6 +22,7 @@ export function StackCard({
     disabled: overlay,
   });
   const slideCount = stack.assay_slide_count ?? stack.slide_count ?? 0;
+  const memberSampleCount = (stack.member_sample_codes ?? "").split(",").filter(Boolean).length;
 
   return (
     <div
@@ -41,7 +42,11 @@ export function StackCard({
         <span className={cn("h-3.5 w-3.5 shrink-0 rounded border", selected ? "border-brand bg-brand" : "border-line bg-white")} />
         <Layers size={11} className="shrink-0 text-ink-faint" />
         <span className="text-xs font-semibold text-ink">{stack.parent_code}</span>
-        <span className="text-[10px] text-ink-faint">{stack.depth_um} um</span>
+        {stack.kind === "stain" && (
+          <span className="rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
+            {memberSampleCount} {memberSampleCount === 1 ? "sample" : "samples"}
+          </span>
+        )}
         {stack.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}
         <span className="ml-auto text-[11px] font-medium text-ink-soft">
           {slideCount} {slideCount === 1 ? "slide" : "slides"}

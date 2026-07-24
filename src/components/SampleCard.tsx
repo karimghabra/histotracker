@@ -119,12 +119,20 @@ export function SampleCard({
         <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
           {sample.sample_description || "—"}
         </span>
-        {(planSummary || sample.sectioned_depths || sample.max_cut_depth_um != null) && (
+        {sample.pending_stains && (
+          <span
+            className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
+            title={`Awaiting staining: ${sample.pending_stains}`}
+          >
+            ⚑ needs stain
+          </span>
+        )}
+        {planSummary && (
           <span
             className="shrink-0 text-[10px] text-ink-faint"
-            title={planSummary ? `Sectioning plan: ${planSummary}` : sample.sectioned_depths ? `Sectioned depths: ${sample.sectioned_depths}` : "Deepest requested depth"}
+            title={`Sectioning plan: ${planSummary}`}
           >
-            {planSummary || sample.sectioned_depths || `${sample.max_cut_depth_um}um requested`}
+            {planSummary}
           </span>
         )}
         <button

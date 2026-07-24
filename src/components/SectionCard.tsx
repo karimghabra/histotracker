@@ -65,7 +65,7 @@ export function SectionCard({
         <span className="text-xs font-semibold text-ink">{section.parent_code}</span>
         {section.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}
         <span className="ml-auto text-[11px] font-medium text-ink-soft">
-          {isGrouped ? `${visibleSlideCount} assay slides` : `${section.depth_um}µm ×${section.duplicates}`}
+          {isGrouped ? `${visibleSlideCount} assay slides` : `×${section.duplicates}`}
         </span>
       </div>
       {visibleSummary ? (

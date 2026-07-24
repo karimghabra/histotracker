@@ -54,7 +54,6 @@ export interface Sample {
   stage_ihc_at: string | null;
   stage_pictures_taken_at: string | null;
   stage_analyzed_at: string | null;
-  max_cut_depth_um: number | null;
   block_exhausted: number; // 0 | 1
   is_priority: number; // 0 | 1
   prioritized_at: string | null;
@@ -65,7 +64,9 @@ export interface Sample {
   project_code?: string;
   project_name?: string;
   team_lead?: string;
-  sectioned_depths?: string;
+  /** Assay agents assigned to this sample's slides that haven't yet entered
+   *  staining — drives the "needs staining" flag (0.3.3). */
+  pending_stains?: string;
 }
 
 export interface SampleTimelineEvent {
@@ -82,8 +83,6 @@ export interface SampleTimelineEvent {
 export interface SectionRequest {
   id: number;
   sample_id: number;
-  depth_um: number;
-  depth_index: number | null;
   duplicates: number;
   stains: string;
   notes: string;
@@ -128,7 +127,6 @@ export interface Slide {
   stack_id: number | null;
   sample_id?: number;
   slide_ordinal: number;
-  depth_duplicate_ordinal: number | null;
   slide_code: string;
   purpose: SlidePurpose;
   stain_name: string;
@@ -152,21 +150,19 @@ export interface Slide {
   notes: string;
   created_at: string;
   parent_code?: string;
-  depth_um?: number;
   project_code?: string;
   project_name?: string;
   sample_description?: string;
-  depth_index?: number;
-  cut_depth_um: number | null;
-  cut_depth_index: number | null;
   is_priority?: number;
 }
 
 export interface SlideStack {
   id: number;
-  sample_id: number;
-  depth_um: number;
-  depth_index: number;
+  /** 'stain' = cross-sample agent rack (sample_id null); 'sample' = per-sample. */
+  kind: "stain" | "sample";
+  assay_type: string | null;
+  assay_name: string | null;
+  sample_id: number | null;
   current_stage: string;
   stage_stain_requested_at: string | null;
   stage_stained_at: string | null;
@@ -191,6 +187,7 @@ export interface SlideStack {
   has_stain?: number;
   has_ihc?: number;
   slide_summary?: string;
+  member_sample_codes?: string;
 }
 
 export interface ProcessingBatch {

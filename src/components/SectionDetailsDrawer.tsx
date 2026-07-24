@@ -40,7 +40,7 @@ function SlideAssignmentRow({
       <div className="mb-1 flex items-center justify-between">
         <span className="text-xs font-semibold text-ink">{slide.slide_code}</span>
         <span className="text-[10px] uppercase tracking-wide text-ink-faint">
-          Duplicate {duplicateLabel(slide.depth_duplicate_ordinal ?? slide.slide_ordinal)}
+          Duplicate {duplicateLabel(slide.slide_ordinal)}
         </span>
       </div>
       <p className="mb-1.5 text-[10px] text-ink-faint">
@@ -189,7 +189,7 @@ export function SectionDetailsDrawer({
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <h2 className="text-base font-semibold text-ink">
-            {section.parent_code} · {section.depth_um} um ×{section.duplicates}
+            {section.parent_code} · ×{section.duplicates}
           </h2>
           <p className="text-xs text-ink-faint">
             Section from {section.parent_description || section.parent_code}
