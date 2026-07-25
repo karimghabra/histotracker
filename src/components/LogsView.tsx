@@ -1,22 +1,21 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Search } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
+import { useActions } from "../hooks/useActions";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS } from "../lib/stages";
 import { cn } from "../lib/utils";
 
 // A slide's own lifecycle, built from its per-slide timestamps (these are always
 // accurate — unlike the aggregate stack, a slide keeps its own stamps through
-// rack scatter/merge). Refrax is omitted (it duplicates Coverslipped's stamp).
-const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide }> = [
-  { label: "Cut", column: "created_at" },
-  { label: "Needs stains / IHC", column: "stage_stain_requested_at" },
+// rack scatter/merge). Condensed to the milestones that matter.
+const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide; fallback?: keyof Slide }> = [
+  // stage_cut_at is stamped in local time at cut; created_at (UTC) is a fallback
+  // for older slides so their Cut step still shows.
+  { label: "Cut", column: "stage_cut_at", fallback: "created_at" },
   { label: "Stained", column: "stage_stained_at" },
   { label: "Coverslipped", column: "stage_coverslipped_at" },
-  { label: "Dried", column: "stage_dried_at" },
-  { label: "Ready for imaging", column: "stage_ready_for_imaging_at" },
-  { label: "Pictures taken", column: "stage_pictures_taken_at" },
-  { label: "Analyzed", column: "stage_analyzed_at" },
+  { label: "Imaged", column: "stage_pictures_taken_at" },
 ];
 
 function fmtTime(at: string): string {
@@ -26,28 +25,31 @@ function fmtTime(at: string): string {
 /** Only the steps that actually happened (have a timestamp), in order. */
 function recordedEvents(
   row: Record<string, unknown>,
-  steps: Array<{ label: string; column: string }>,
+  steps: Array<{ label: string; column: string; fallback?: string }>,
 ): Array<{ label: string; at: string }> {
   return steps
-    .map((s) => ({ label: s.label, at: row[s.column] as string | null }))
+    .map((s) => ({
+      label: s.label,
+      at: (row[s.column] ?? (s.fallback ? row[s.fallback] : null)) as string | null,
+    }))
     .filter((e): e is { label: string; at: string } => Boolean(e.at));
 }
 
+// Even, tab-separated columns — the step label on top, its time underneath — so
+// a column's width never depends on the timestamp.
 function Timeline({ events }: { events: Array<{ label: string; at: string }> }) {
   if (events.length === 0)
     return <span className="text-[10px] text-ink-faint">No events recorded yet.</span>;
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap gap-x-7 gap-y-2">
       {events.map((e, i) => (
-        <span
-          key={i}
-          title={e.at}
-          className="inline-flex items-center gap-1 rounded border border-line bg-panel px-1.5 py-0.5 text-[10px] text-ink-soft"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-          {e.label}
-          <span className="text-ink-faint">{fmtTime(e.at)}</span>
-        </span>
+        <div key={i} className="flex min-w-[4.5rem] flex-col gap-0.5">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-ink">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
+            {e.label}
+          </span>
+          <span className="pl-3 text-[10px] tabular-nums text-ink-faint">{fmtTime(e.at)}</span>
+        </div>
       ))}
     </div>
   );
@@ -67,6 +69,38 @@ function agentLabel(slide: Slide): string {
   if (slide.assay_name) return slide.assay_name;
   if (slide.purpose === "extra") return "Extra";
   return "—";
+}
+
+// Free-text notes with a save-on-blur textarea (only writes when changed).
+function NotesEditor({
+  value,
+  placeholder,
+  onSave,
+}: {
+  value: string;
+  placeholder: string;
+  onSave: (notes: string) => void;
+}) {
+  const [text, setText] = useState(value ?? "");
+  const [focused, setFocused] = useState(false);
+  // Adopt external changes only while not editing, so a refetch can't clobber typing.
+  useEffect(() => {
+    if (!focused) setText(value ?? "");
+  }, [value, focused]);
+  return (
+    <textarea
+      value={text}
+      rows={2}
+      placeholder={placeholder}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        if (text !== (value ?? "")) onSave(text);
+      }}
+      className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
+    />
+  );
 }
 
 export function LogsView() {
@@ -296,6 +330,7 @@ function FragmentRow({
   stainFilter: string | null;
   colCount: number;
 }) {
+  const { editSampleNotes, editSlideNotes } = useActions();
   const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
   function toggleSlide(id: number) {
     setOpenSlides((cur) => {
@@ -336,6 +371,16 @@ function FragmentRow({
             </h4>
             <Timeline events={recordedEvents(sample as unknown as Record<string, unknown>, BLOCK_TIMELINE_STAGES)} />
 
+            {/* Sample notes — free text, saved on blur. */}
+            <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+              Sample notes
+            </h4>
+            <NotesEditor
+              value={sample.overall_notes ?? ""}
+              placeholder="Notes about this sample…"
+              onSave={(notes) => void editSampleNotes(sample.id, notes)}
+            />
+
             {/* Slides — each with its own separate timeline. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Slides ({slides.length})
@@ -366,8 +411,13 @@ function FragmentRow({
                         <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
                       </button>
                       {slideOpen && (
-                        <div className="px-3 pb-2 pl-7">
+                        <div className="space-y-2 px-3 pb-2 pl-7">
                           <Timeline events={recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE)} />
+                          <NotesEditor
+                            value={slide.notes ?? ""}
+                            placeholder="Notes about this slide…"
+                            onSave={(notes) => void editSlideNotes(slide.id, notes)}
+                          />
                         </div>
                       )}
                     </div>

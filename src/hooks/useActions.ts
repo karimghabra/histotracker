@@ -29,6 +29,8 @@ import {
   revertSectionToStage,
   revertToStage,
   setBlockExhausted,
+  setSampleNotes,
+  setSlideNotes,
   setPickedUp,
   setSamplePriority,
   setSectionTimestamp,
@@ -234,6 +236,15 @@ export function useActions() {
       if (!before) return;
       await commit(`Edit ${before.sample_code}`, () => updateSampleDetails(sampleId, input));
     },
+    [commit],
+  );
+
+  const editSampleNotes = useCallback(
+    (sampleId: number, notes: string) => commit("Edit sample notes", () => setSampleNotes(sampleId, notes)),
+    [commit],
+  );
+  const editSlideNotes = useCallback(
+    (slideId: number, notes: string) => commit("Edit slide notes", () => setSlideNotes(slideId, notes)),
     [commit],
   );
 
@@ -601,6 +612,8 @@ export function useActions() {
     editBatchStart,
     editTimestamp,
     saveDetails,
+    editSampleNotes,
+    editSlideNotes,
     saveSectioningPlan,
     removeSample,
     removeSamples,

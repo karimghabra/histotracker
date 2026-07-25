@@ -621,6 +621,17 @@ export async function setBlockExhausted(sampleId: number, exhausted: boolean): P
   ]);
 }
 
+/** Free-text notes on a sample (the block's general notes) and on a slide. */
+export async function setSampleNotes(sampleId: number, notes: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE samples SET overall_notes = ? WHERE id = ?`, [notes, sampleId]);
+}
+
+export async function setSlideNotes(slideId: number, notes: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE slides SET notes = ? WHERE id = ?`, [notes, slideId]);
+}
+
 // ---- Processing batches ----------------------------------------------------
 
 function formatLocalTimestamp(date: Date): string {
@@ -1380,9 +1391,9 @@ export async function createSectionRequests(
         await db.execute(
           `INSERT INTO slides
             (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
-             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
-           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
-          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name],
+             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage, stage_cut_at)
+           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned', ?)`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name, timestamp],
         );
       } else {
         // Extras are a deliberate, saved disposition chosen at cut time — no
@@ -1391,9 +1402,9 @@ export async function createSectionRequests(
         // (issue #12), via listExtraSlides' stage filter.
         await db.execute(
           `INSERT INTO slides
-            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
-           VALUES (?, ?, ?, 'extra', 1, 'extra')`,
-          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
+            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage, stage_cut_at)
+           VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), timestamp],
         );
       }
       nextOrdinal += 1;
@@ -1541,12 +1552,13 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
     [row.sample_id],
   );
   let nextLetter = (countRow[0]?.n ?? 0) + 1;
+  const cutAt = nowTimestamp();
   for (let ordinal = row.existing_count + 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
     await db.execute(
       `INSERT INTO slides
-        (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
-       VALUES (?, ?, ?, 'extra', 1, 'extra')`,
-      [id, ordinal, slideCodeFor(row.sample_code, nextLetter)],
+        (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage, stage_cut_at)
+       VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
+      [id, ordinal, slideCodeFor(row.sample_code, nextLetter), cutAt],
     );
     nextLetter += 1;
   }

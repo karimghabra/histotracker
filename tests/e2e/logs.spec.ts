@@ -82,9 +82,28 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await expect(page.getByText("Sample timeline")).toBeVisible();
   const slideRow = page.getByRole("button", { name: /EE-0001-A/ });
   await expect(slideRow).toBeVisible();
+  // Sample notes persist through a refetch.
+  const sampleNotes = page.getByPlaceholder("Notes about this sample…");
+  await sampleNotes.fill("Block looks good");
+  await sampleNotes.blur();
+  await expect(sampleNotes).toHaveValue("Block looks good");
+
   // Expand the slide → its own (separate) timeline, starting at Cut.
   await slideRow.click();
   await expect(page.getByText(/Cut/).first()).toBeVisible();
+
+  // Slide notes persist too.
+  const slideNotes = page.getByPlaceholder("Notes about this slide…");
+  await slideNotes.fill("Faint staining");
+  await slideNotes.blur();
+  await expect(slideNotes).toHaveValue("Faint staining");
+
+  // Collapse + re-expand the sample: both notes survive (read back from the DB).
+  await sampleCell.click();
+  await sampleCell.click();
+  await expect(page.getByPlaceholder("Notes about this sample…")).toHaveValue("Block looks good");
+  // The slide stayed expanded, so its notes are read straight back from the DB.
+  await expect(page.getByPlaceholder("Notes about this slide…")).toHaveValue("Faint staining");
   await page.screenshot({ path: "test-results/logs-expanded.png", fullPage: true });
 
   // Sorting: clicking a header keeps the sample listed.
