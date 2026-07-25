@@ -1,14 +1,15 @@
 import { useRef, useState } from "react";
-import { Plus, Scissors, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Plus, Scissors, X } from "lucide-react";
 import { Button, Modal } from "./ui";
 import { parsePreselectedStains } from "../lib/db";
 import type { Sample } from "../lib/types";
+import { cn } from "../lib/utils";
 
 // A single slide the technician plans to cut: either a plain Extra or a slide
 // carrying one stain/IHC agent. Encoded as "extra" or "<type>::<name>".
 type SlideRow = { key: number; value: string };
 
-interface Group {
+export interface Group {
   duplicates: number;
   stains?: string;
   assay_type?: string;
@@ -34,18 +35,20 @@ function planToRows(raw: string): SlideRow[] {
   return rows;
 }
 
-/** Canonical signature of a saved plan — lets us tell when batched blocks carry
- *  divergent plans (so one plan isn't silently applied to all). */
-export function planSignature(raw: string): string {
-  try {
-    const plan = JSON.parse(raw || "[]") as Group[];
-    return plan
-      .map((g) => `${g.assay_type || ""}::${g.assay_name || g.stains || "extra"}x${Math.max(1, Number(g.duplicates) || 1)}`)
-      .sort()
-      .join("|");
-  } catch {
-    return raw;
+/** The rows a block should start with: outstanding requested stains first
+ *  (#41), else its saved plan, else four extras (#4). */
+function effectiveRows(sample: Sample): SlideRow[] {
+  const pending = parsePreselectedStains(sample.pending_stains);
+  if (pending.length) {
+    const extras = Math.max(2, 4 - pending.length);
+    let key = 0;
+    return [
+      ...pending.map((a) => ({ key: key++, value: `${a.assay_type}::${a.assay_name}` })),
+      ...Array.from({ length: extras }, () => ({ key: key++, value: "extra" })),
+    ];
   }
+  const existing = planToRows(sample.sectioning_plan);
+  return existing.length ? existing : [0, 1, 2, 3].map((key) => ({ key, value: "extra" }));
 }
 
 /** Aggregate per-slide rows back into homogeneous cut groups. */
@@ -53,7 +56,6 @@ function rowsToGroups(rows: SlideRow[]): Group[] {
   const counts = new Map<string, number>();
   for (const row of rows) counts.set(row.value, (counts.get(row.value) ?? 0) + 1);
   const groups: Group[] = [];
-  // Stains first, then a single extras group — mirrors the auto-plan shape.
   for (const [value, n] of counts) {
     if (value === "extra") continue;
     const [assay_type, assay_name] = value.split("::");
@@ -68,9 +70,8 @@ export function SectioningPlanDialog({
   sample,
   catalog = [],
   batchSamples,
+  onSendPlans,
   onSave,
-  onSend,
-  onSendEachOwn,
   onClose,
 }: {
   sample: Sample;
@@ -78,87 +79,107 @@ export function SectioningPlanDialog({
   catalog?: Array<{ assay_type: string; name: string }>;
   /** The selected embedded blocks when sending a batch (includes `sample`). */
   batchSamples?: Sample[];
-  onSave: (plan: Group[]) => Promise<void>;
-  /** Apply the edited plan uniformly to every batched block. */
-  onSend: (groups: Group[]) => Promise<void>;
-  /** Cut each batched block by its own saved plan (divergent-plan case). */
-  onSendEachOwn?: () => Promise<void>;
+  /** Cut every block by its own (reviewed/edited) plan. */
+  onSendPlans: (entries: Array<{ sampleId: number; groups: Group[] }>) => Promise<void>;
+  /** Save the shown block's plan as a draft (single-block only). */
+  onSave?: (sampleId: number, plan: Group[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const batch = batchSamples && batchSamples.length > 1 ? batchSamples : [sample];
-  const batchCount = batch.length;
-  const divergent =
-    batchCount > 1 && new Set(batch.map((b) => planSignature(b.sectioning_plan))).size > 1;
-  const [rows, setRows] = useState<SlideRow[]>(() => {
-    // Prefill from the block's OUTSTANDING requested stains first (issue #41): a
-    // stain requested after the plan was seeded still shows up here, one slide
-    // each plus enough extras to reach four slides with two extra.
-    const pending = parsePreselectedStains(sample.pending_stains);
-    if (pending.length) {
-      const extras = Math.max(2, 4 - pending.length);
-      let key = 0;
-      return [
-        ...pending.map((a) => ({ key: key++, value: `${a.assay_type}::${a.assay_name}` })),
-        ...Array.from({ length: extras }, () => ({ key: key++, value: "extra" })),
-      ];
-    }
-    const existing = planToRows(sample.sectioning_plan);
-    // Default cut: four extras (issue #4 — at least four slides, two extra).
-    return existing.length
-      ? existing
-      : [0, 1, 2, 3].map((key) => ({ key, value: "extra" }));
-  });
+  const blocks = batchSamples && batchSamples.length > 0 ? batchSamples : [sample];
+  const isBatch = blocks.length > 1;
+  const [index, setIndex] = useState(0);
+  const active = Math.min(index, blocks.length - 1);
+  const current = blocks[active] ?? sample;
+  // One editable plan per block, each seeded from that block's effective plan.
+  const [plans, setPlans] = useState<SlideRow[][]>(() => blocks.map(effectiveRows));
   const [busy, setBusy] = useState(false);
   const nextKey = useRef(1000);
+  const rows = plans[active] ?? [];
 
   const stainCount = rows.filter((r) => r.value !== "extra").length;
   const extraCount = rows.length - stainCount;
-  // Cutting is only allowed once the block is embedded (issue #7).
-  const canSend = sample.current_stage === "embedded";
-  const preselected = Boolean(sample.pending_stains);
+  const canSend = blocks.every((b) => b.current_stage === "embedded");
+  const preselected = Boolean(current.pending_stains);
 
+  function updateRows(fn: (rs: SlideRow[]) => SlideRow[]) {
+    setPlans((ps) => ps.map((p, i) => (i === active ? fn(p) : p)));
+  }
   function setRow(key: number, value: string) {
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, value } : r)));
+    updateRows((rs) => rs.map((r) => (r.key === key ? { ...r, value } : r)));
   }
   function addRow() {
-    setRows((rs) => [...rs, { key: (nextKey.current += 1), value: "extra" }]);
+    updateRows((rs) => [...rs, { key: (nextKey.current += 1), value: "extra" }]);
   }
   function removeRow(key: number) {
-    setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : rs));
+    updateRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : rs));
+  }
+  function copyToAll() {
+    setPlans((ps) => ps.map(() => rows.map((r, i) => ({ key: i, value: r.value }))));
   }
 
-  async function savePlan() {
+  async function send() {
     setBusy(true);
-    await onSave(rowsToGroups(rows));
+    const entries = blocks.map((b, i) => ({ sampleId: b.id, groups: rowsToGroups(plans[i]) }));
+    await onSendPlans(entries);
     setBusy(false);
     onClose();
   }
-
-  async function sendForCutting() {
-    // The cut archives + clears the plan (fresh on re-open), so no pre-save here.
+  async function saveDraft() {
+    if (!onSave) return;
     setBusy(true);
-    await onSend(rowsToGroups(rows));
-    setBusy(false);
-    onClose();
-  }
-
-  async function sendEachOwn() {
-    if (!onSendEachOwn) return;
-    setBusy(true);
-    await onSendEachOwn();
+    await onSave(current.id, rowsToGroups(rows));
     setBusy(false);
     onClose();
   }
 
   return (
-    <Modal title={`Send for Cutting · ${sample.sample_code}`} onClose={onClose}>
-      <p className="mb-3 text-xs text-ink-faint">
+    <Modal
+      title={isBatch ? `Send for Cutting · ${blocks.length} blocks` : `Send for Cutting · ${current.sample_code}`}
+      onClose={onClose}
+    >
+      {isBatch && (
+        <div className="mb-3 flex items-center gap-1">
+          <Button variant="ghost" className="shrink-0 px-1.5" disabled={active === 0} onClick={() => setIndex(active - 1)}>
+            <ChevronLeft size={15} />
+          </Button>
+          <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto thin-scroll">
+            {blocks.map((b, i) => {
+              const hasStain = (plans[i] ?? []).some((r) => r.value !== "extra");
+              return (
+                <button
+                  key={b.id}
+                  onClick={() => setIndex(i)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium",
+                    i === active ? "bg-brand text-white" : "bg-surface text-ink-soft hover:bg-brand/10",
+                  )}
+                >
+                  {b.sample_code}
+                  <span className={cn("h-1.5 w-1.5 rounded-full", hasStain ? "bg-amber-400" : "bg-transparent")} />
+                </button>
+              );
+            })}
+          </div>
+          <Button variant="ghost" className="shrink-0 px-1.5" disabled={active === blocks.length - 1} onClick={() => setIndex(active + 1)}>
+            <ChevronRight size={15} />
+          </Button>
+        </div>
+      )}
+
+      <p className="mb-2 text-xs text-ink-faint">
+        {isBatch && (
+          <>
+            Plan for <strong className="text-ink-soft">{current.sample_code}</strong> · block {active + 1} of{" "}
+            {blocks.length}
+            {current.sample_description ? ` — ${current.sample_description}` : ""}. <br />
+          </>
+        )}
         How many slides to cut, and which carry a stain? Everything else is an extra.
       </p>
 
       {preselected && (
         <p className="mb-3 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          Prefilled from this block's preselected stains ({sample.pending_stains}). Adjust if needed, then send.
+          Prefilled from {current.sample_code}'s preselected stains ({current.pending_stains}).
         </p>
       )}
 
@@ -168,7 +189,7 @@ export function SectioningPlanDialog({
         <span />
       </div>
 
-      <div className="max-h-72 space-y-2 overflow-y-auto thin-scroll">
+      <div className="max-h-64 space-y-2 overflow-y-auto thin-scroll">
         {rows.map((row, i) => (
           <div key={row.key} className="grid grid-cols-[1.5rem_auto_1.25rem] items-center gap-2">
             <span className="text-sm text-ink-faint">{i + 1}.</span>
@@ -205,24 +226,17 @@ export function SectioningPlanDialog({
       </Button>
 
       <p className="mt-3 text-xs text-ink-soft">
-        {rows.length} {rows.length === 1 ? "slide" : "slides"} · {stainCount} stained ·{" "}
-        {extraCount} extra
+        {rows.length} {rows.length === 1 ? "slide" : "slides"} · {stainCount} stained · {extraCount} extra
       </p>
 
-      {batchCount > 1 && divergent && (
-        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-          The {batchCount} selected blocks have <strong>different sectioning plans</strong>. Cut each by
-          its own plan, or apply the plan above to all of them.
-        </p>
-      )}
-      {batchCount > 1 && !divergent && (
+      {isBatch && (
         <p className="mt-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          This cut will be sent to all {batchCount} selected embedded blocks.
+          Each block is cut by its own plan — page through the blocks above to review or edit them. Sending cuts all {blocks.length}.
         </p>
       )}
       {!canSend && (
         <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-          Cutting unlocks once this block reaches Embedded Inventory. You can still save the plan now.
+          Cutting unlocks once every block reaches Embedded Inventory.
         </p>
       )}
 
@@ -230,36 +244,26 @@ export function SectioningPlanDialog({
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        {!(divergent && onSendEachOwn) && (
-          <Button variant="subtle" onClick={savePlan} disabled={busy}>
-            Save Plan
+        {isBatch ? (
+          <Button variant="subtle" onClick={copyToAll} disabled={busy} title="Copy this block's plan to every selected block">
+            <Copy size={14} /> Copy to all blocks
           </Button>
-        )}
-        {divergent && onSendEachOwn ? (
-          <>
-            <Button
-              variant="subtle"
-              onClick={sendForCutting}
-              disabled={busy || rows.length === 0 || !canSend}
-              title="Overwrite every selected block with the plan above"
-            >
-              Apply this plan to all {batchCount}
-            </Button>
-            <Button variant="primary" onClick={sendEachOwn} disabled={busy || !canSend}>
-              <Scissors size={14} /> Cut each its own · {batchCount}
-            </Button>
-          </>
         ) : (
-          <Button
-            variant="primary"
-            onClick={sendForCutting}
-            disabled={busy || rows.length === 0 || !canSend}
-            title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
-          >
-            <Scissors size={14} /> Send for Cutting
-            {batchCount > 1 ? ` · ${batchCount} blocks` : ""}
-          </Button>
+          onSave && (
+            <Button variant="subtle" onClick={saveDraft} disabled={busy}>
+              Save Plan
+            </Button>
+          )
         )}
+        <Button
+          variant="primary"
+          onClick={send}
+          disabled={busy || rows.length === 0 || !canSend}
+          title={!canSend ? "Embed the block(s) before sending to sectioning." : undefined}
+        >
+          <Scissors size={14} /> Send for Cutting
+          {isBatch ? ` · ${blocks.length} blocks` : ""}
+        </Button>
       </div>
     </Modal>
   );

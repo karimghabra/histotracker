@@ -5,7 +5,6 @@ import {
   addSample,
   assignExtraSlideToAssay,
   createSectionRequests,
-  createSectionRequestsForOwnPlans,
   completeSectionImaging as completeSectionImagingDb,
   deleteSample,
   deleteSectionRequest,
@@ -306,15 +305,22 @@ export function useActions() {
     [commit],
   );
 
-  // Batch cut where each block keeps its OWN saved plan (divergent-plan case).
-  const sendEachOwnPlanToCutting = useCallback(
-    (sampleIds: number[]) =>
-      commit(
-        sampleIds.length > 1
-          ? `Send for cutting · ${sampleIds.length} blocks (own plans)`
-          : "Send for cutting",
-        () => createSectionRequestsForOwnPlans(sampleIds),
-      ),
+  // Cut each block by its own reviewed/edited plan (the batch navigator sends
+  // one entry per block; a single block is just one entry).
+  const sendPlansToCutting = useCallback(
+    (
+      entries: Array<{
+        sampleId: number;
+        groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>;
+      }>,
+    ) =>
+      commit(entries.length > 1 ? `Send for cutting · ${entries.length} blocks` : "Send for cutting", async () => {
+        let total = 0;
+        for (const { sampleId, groups } of entries) {
+          total += (await createSectionRequests(sampleId, groups)).length;
+        }
+        return total;
+      }),
     [commit],
   );
 
@@ -603,7 +609,7 @@ export function useActions() {
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
     sendSectionsToCutting,
     sendSectionsToCuttingForSamples,
-    sendEachOwnPlanToCutting,
+    sendPlansToCutting,
     moveSection,
     moveSections,
     assignSlide,

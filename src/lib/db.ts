@@ -1418,30 +1418,6 @@ export async function createSectionRequests(
   return ids;
 }
 
-/** Cut several blocks, each by ITS OWN saved sectioning plan (issue: batch send
- *  must not clobber divergent plans). A block with no saved plan defaults to the
- *  standard four extras. */
-export async function createSectionRequestsForOwnPlans(sampleIds: number[]): Promise<number> {
-  const db = await getDb();
-  let total = 0;
-  for (const id of sampleIds) {
-    const rows = await db.select<Array<{ sectioning_plan: string }>>(
-      `SELECT sectioning_plan FROM samples WHERE id = ?`,
-      [id],
-    );
-    let groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }> = [];
-    try {
-      const parsed = JSON.parse(rows[0]?.sectioning_plan || "[]");
-      if (Array.isArray(parsed)) groups = parsed;
-    } catch {
-      /* fall through to default */
-    }
-    if (groups.length === 0) groups = [{ duplicates: 4, stains: "" }];
-    const created = await createSectionRequests(id, groups);
-    total += created.length;
-  }
-  return total;
-}
 
 /**
  * The auto-generated sectioning plan for an embedded sample with preselected

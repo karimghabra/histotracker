@@ -208,7 +208,7 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   // #41b: Send for Cutting is prefilled from the block's preselected stains.
   await page.getByText("EE-0001", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/Prefilled from this block/i)).toBeVisible();
+  await expect(page.getByText(/Prefilled from .* preselected stains/i)).toBeVisible();
 });
 
 test("needs-sectioning card exposes a real multi-select checkbox (#37)", async ({ page }) => {
