@@ -1399,7 +1399,48 @@ export async function createSectionRequests(
       nextOrdinal += 1;
     }
   }
+
+  // Archive the fulfilled plan as a timeline event, then clear the live plan so
+  // re-opening Send for Cutting always starts a WHOLLY NEW plan rather than the
+  // one that was just cut. The slides themselves are the durable record.
+  const slideCount = groups.reduce((total, g) => total + Math.max(1, g.duplicates), 0);
+  const planSummary = groups
+    .map((g) => `×${Math.max(1, g.duplicates)} ${g.assay_name ? g.assay_name : g.stains ? g.stains : "extra"}`)
+    .join(", ");
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'sectioning_cut', ?, ?, ?)`,
+    [sampleId, `Cut ${slideCount} slide${slideCount === 1 ? "" : "s"}: ${planSummary}`, JSON.stringify(groups), timestamp],
+  );
+  await db.execute(`UPDATE samples SET sectioning_plan = '' WHERE id = ?`, [sampleId]);
   return ids;
+}
+
+/** Cut several blocks, each by ITS OWN saved sectioning plan (issue: batch send
+ *  must not clobber divergent plans). A block with no saved plan defaults to the
+ *  standard four extras. */
+export async function createSectionRequestsForOwnPlans(sampleIds: number[]): Promise<number> {
+  const db = await getDb();
+  let total = 0;
+  for (const id of sampleIds) {
+    const rows = await db.select<Array<{ sectioning_plan: string }>>(
+      `SELECT sectioning_plan FROM samples WHERE id = ?`,
+      [id],
+    );
+    let groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }> = [];
+    try {
+      const parsed = JSON.parse(rows[0]?.sectioning_plan || "[]");
+      if (Array.isArray(parsed)) groups = parsed;
+    } catch {
+      /* fall through to default */
+    }
+    if (groups.length === 0) groups = [{ duplicates: 4, stains: "" }];
+    const created = await createSectionRequests(id, groups);
+    total += created.length;
+  }
+  return total;
 }
 
 /**

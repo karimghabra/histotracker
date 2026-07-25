@@ -5,6 +5,7 @@ import {
   addSample,
   assignExtraSlideToAssay,
   createSectionRequests,
+  createSectionRequestsForOwnPlans,
   completeSectionImaging as completeSectionImagingDb,
   deleteSample,
   deleteSectionRequest,
@@ -305,6 +306,18 @@ export function useActions() {
     [commit],
   );
 
+  // Batch cut where each block keeps its OWN saved plan (divergent-plan case).
+  const sendEachOwnPlanToCutting = useCallback(
+    (sampleIds: number[]) =>
+      commit(
+        sampleIds.length > 1
+          ? `Send for cutting · ${sampleIds.length} blocks (own plans)`
+          : "Send for cutting",
+        () => createSectionRequestsForOwnPlans(sampleIds),
+      ),
+    [commit],
+  );
+
   const sendSectionsToCutting = useCallback(
     (sampleId: number, groups: Array<{ duplicates: number; stains?: string }>) =>
       sendSectionsToCuttingForSamples([sampleId], groups),
@@ -590,6 +603,7 @@ export function useActions() {
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
     sendSectionsToCutting,
     sendSectionsToCuttingForSamples,
+    sendEachOwnPlanToCutting,
     moveSection,
     moveSections,
     assignSlide,

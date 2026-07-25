@@ -27,6 +27,7 @@ export function SampleDetailsDrawer({
     removeSamples,
     saveSectioningPlan,
     sendSectionsToCuttingForSamples,
+    sendEachOwnPlanToCutting,
     setExhausted,
     setExhaustedSamples,
     editTimestamp,
@@ -310,12 +311,15 @@ export function SampleDetailsDrawer({
         <SectioningPlanDialog
           sample={sample}
           catalog={catalog}
-          batchCount={selectedEmbedded.length > 1 ? selectedEmbedded.length : 1}
+          batchSamples={selectedEmbedded}
           onSave={(plan) => saveSectioningPlan(sample.id, plan)}
           onSend={async (groups) => {
             const targets =
               selectedEmbedded.length > 1 ? selectedEmbedded.map((s) => s.id) : [sample.id];
             await sendSectionsToCuttingForSamples(targets, groups);
+          }}
+          onSendEachOwn={async () => {
+            await sendEachOwnPlanToCutting(selectedEmbedded.map((s) => s.id));
           }}
           onClose={() => setShowSectioning(false)}
         />

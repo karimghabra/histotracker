@@ -34,6 +34,20 @@ function planToRows(raw: string): SlideRow[] {
   return rows;
 }
 
+/** Canonical signature of a saved plan — lets us tell when batched blocks carry
+ *  divergent plans (so one plan isn't silently applied to all). */
+export function planSignature(raw: string): string {
+  try {
+    const plan = JSON.parse(raw || "[]") as Group[];
+    return plan
+      .map((g) => `${g.assay_type || ""}::${g.assay_name || g.stains || "extra"}x${Math.max(1, Number(g.duplicates) || 1)}`)
+      .sort()
+      .join("|");
+  } catch {
+    return raw;
+  }
+}
+
 /** Aggregate per-slide rows back into homogeneous cut groups. */
 function rowsToGroups(rows: SlideRow[]): Group[] {
   const counts = new Map<string, number>();
@@ -53,20 +67,28 @@ function rowsToGroups(rows: SlideRow[]): Group[] {
 export function SectioningPlanDialog({
   sample,
   catalog = [],
-  batchCount = 1,
+  batchSamples,
   onSave,
   onSend,
+  onSendEachOwn,
   onClose,
 }: {
   sample: Sample;
   /** Stain/IHC agents the technician can attach to a slide. */
   catalog?: Array<{ assay_type: string; name: string }>;
-  /** When > 1, the same plan is sent to that many selected embedded blocks (#8). */
-  batchCount?: number;
+  /** The selected embedded blocks when sending a batch (includes `sample`). */
+  batchSamples?: Sample[];
   onSave: (plan: Group[]) => Promise<void>;
+  /** Apply the edited plan uniformly to every batched block. */
   onSend: (groups: Group[]) => Promise<void>;
+  /** Cut each batched block by its own saved plan (divergent-plan case). */
+  onSendEachOwn?: () => Promise<void>;
   onClose: () => void;
 }) {
+  const batch = batchSamples && batchSamples.length > 1 ? batchSamples : [sample];
+  const batchCount = batch.length;
+  const divergent =
+    batchCount > 1 && new Set(batch.map((b) => planSignature(b.sectioning_plan))).size > 1;
   const [rows, setRows] = useState<SlideRow[]>(() => {
     // Prefill from the block's OUTSTANDING requested stains first (issue #41): a
     // stain requested after the plan was seeded still shows up here, one slide
@@ -113,10 +135,17 @@ export function SectioningPlanDialog({
   }
 
   async function sendForCutting() {
+    // The cut archives + clears the plan (fresh on re-open), so no pre-save here.
     setBusy(true);
-    const groups = rowsToGroups(rows);
-    await onSave(groups); // keep the plan in sync
-    await onSend(groups);
+    await onSend(rowsToGroups(rows));
+    setBusy(false);
+    onClose();
+  }
+
+  async function sendEachOwn() {
+    if (!onSendEachOwn) return;
+    setBusy(true);
+    await onSendEachOwn();
     setBusy(false);
     onClose();
   }
@@ -180,7 +209,13 @@ export function SectioningPlanDialog({
         {extraCount} extra
       </p>
 
-      {batchCount > 1 && (
+      {batchCount > 1 && divergent && (
+        <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+          The {batchCount} selected blocks have <strong>different sectioning plans</strong>. Cut each by
+          its own plan, or apply the plan above to all of them.
+        </p>
+      )}
+      {batchCount > 1 && !divergent && (
         <p className="mt-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
           This cut will be sent to all {batchCount} selected embedded blocks.
         </p>
@@ -191,22 +226,40 @@ export function SectioningPlanDialog({
         </p>
       )}
 
-      <div className="mt-4 flex justify-end gap-2">
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="subtle" onClick={savePlan} disabled={busy}>
-          Save Plan
-        </Button>
-        <Button
-          variant="primary"
-          onClick={sendForCutting}
-          disabled={busy || rows.length === 0 || !canSend}
-          title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
-        >
-          <Scissors size={14} /> Send for Cutting
-          {batchCount > 1 ? ` · ${batchCount} blocks` : ""}
-        </Button>
+        {!(divergent && onSendEachOwn) && (
+          <Button variant="subtle" onClick={savePlan} disabled={busy}>
+            Save Plan
+          </Button>
+        )}
+        {divergent && onSendEachOwn ? (
+          <>
+            <Button
+              variant="subtle"
+              onClick={sendForCutting}
+              disabled={busy || rows.length === 0 || !canSend}
+              title="Overwrite every selected block with the plan above"
+            >
+              Apply this plan to all {batchCount}
+            </Button>
+            <Button variant="primary" onClick={sendEachOwn} disabled={busy || !canSend}>
+              <Scissors size={14} /> Cut each its own · {batchCount}
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={sendForCutting}
+            disabled={busy || rows.length === 0 || !canSend}
+            title={!canSend ? "Embed this block before sending it to sectioning." : undefined}
+          >
+            <Scissors size={14} /> Send for Cutting
+            {batchCount > 1 ? ` · ${batchCount} blocks` : ""}
+          </Button>
+        )}
       </div>
     </Modal>
   );
