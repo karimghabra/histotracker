@@ -298,3 +298,74 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await statusSelect.selectOption({ label: "Active" });
   await expect(page.getByText("No samples match")).toBeVisible();
 });
+
+// Drives one sample to fully-analyzed and leaves a second in progress, then
+// exercises the Logs status partition and the CSV export end to end.
+test("Logs status partition + CSV export", async ({ page }) => {
+  await seedSample(page); // EE-0001
+  await embedBlock(page);
+
+  // EE-0001 → analyzed (cut a stain, run the protocol, image, analyze).
+  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page
+    .locator("select")
+    .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
+    .first()
+    .selectOption({ index: 1 });
+  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByText("4 slides").first().click();
+  await page.getByRole("button", { name: /Mark Sectioned/ }).click();
+  await page.locator("button:has(svg.lucide-x)").first().click();
+  const staining = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
+  await staining.getByText("Alcian Blue").first().click();
+  await page.getByLabel("Active operator").fill("Alex");
+  for (const step of ["Stained", "Coverslipped", "Dried"]) {
+    await page.getByRole("button", { name: step, exact: true }).click();
+  }
+  const imaging = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
+  await imaging.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByRole("button", { name: /Complete Imaging/ }).click();
+  await page.getByRole("button", { name: /Mark Analyzed/ }).click();
+  // Marking analyzed removes the stack from the board and auto-closes its drawer.
+
+  // A second block, left in pre-processing → still Active (no analyzed slides).
+  await addSample(page, "In-progress block"); // EE-0002
+  await expect(page.getByText("EE-0002")).toBeVisible();
+
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  const statusSelect = page
+    .locator("select")
+    .filter({ has: page.locator("option", { hasText: "All statuses" }) });
+
+  // All → both; Analyzed → only EE-0001; Active → only EE-0002.
+  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
+  await page.screenshot({ path: "test-results/logs-all.png", fullPage: true });
+  await statusSelect.selectOption({ label: "Analyzed" });
+  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toHaveCount(0);
+  await statusSelect.selectOption({ label: "Active" });
+  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toHaveCount(0);
+
+  // Export CSV (all statuses) → confirmation + the file lands in the virtual FS.
+  await statusSelect.selectOption({ label: "All statuses" });
+  await page.getByRole("button", { name: /Export CSV/ }).click();
+  await expect(page.getByText("Exported.")).toBeVisible();
+  const csv = await page.evaluate(() => {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".csv")) return atob(localStorage.getItem(k) as string);
+    }
+    return null;
+  });
+  expect(csv).toContain("Sample ID");
+  expect(csv).toContain("EE-0001-A");
+  expect(csv).toContain("Alcian Blue");
+  expect(csv).toContain("EE-0002"); // the slide-less in-progress block still appears
+});

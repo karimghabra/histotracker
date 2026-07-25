@@ -49,6 +49,14 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
       return undefined as unknown as T;
     }
 
+    // Native "Save as…" dialog: return a deterministic path so file exports
+    // (CSV/XLSX) can be exercised headlessly — the bytes then land in the shared
+    // virtual filesystem via the save_file command above.
+    case "plugin:dialog|save": {
+      const opts = (_args?.options ?? {}) as { defaultPath?: string };
+      return (opts.defaultPath ?? "export.bin") as unknown as T;
+    }
+
     // Writes / no-return commands: resolve successfully.
     case "github_put_file":
       return "shim-sha" as unknown as T;

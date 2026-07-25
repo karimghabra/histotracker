@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3 - 2026-07-25
+
+- **Logs "Active" filter fixed.** Active/Analyzed now partition on slide state: a
+  sample is *Analyzed* once every one of its assay slides is analyzed (extras are
+  ignored, since they never get an analyzed stamp) and *Active* otherwise — so a
+  half-finished sample correctly reads as Active.
+- **Export the Logs as CSV.** A new "Export CSV" button downloads exactly what's
+  on screen (current filter + sort), one row per slide with its sample context
+  and timeline stamps (Cut / Stained / Coverslipped / Imaged / Analyzed) plus
+  slide and sample notes; slide-less samples still get a row.
+
 ## 0.4.2 - 2026-07-25
 
 - **Stack timeline no longer loses the pre-imaging stamps.** When a stain rack

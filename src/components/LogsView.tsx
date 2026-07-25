@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import { useActions } from "../hooks/useActions";
+import { saveLogsCsv } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS } from "../lib/stages";
 import { cn } from "../lib/utils";
@@ -115,6 +116,8 @@ export function LogsView() {
   const [sortKey, setSortKey] = useState<SortKey>("sample");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  useEffect(() => setExportMsg(null), [project, stain, status, search]);
 
   const slidesBySample = useMemo(() => {
     const map = new Map<string, Slide[]>();
@@ -150,11 +153,15 @@ export function LogsView() {
     const query = search.trim().toLowerCase();
     return rows.filter(({ sample, slides: sampleSlides, agents }) => {
       if (project !== "all" && sample.project_code !== project) return false;
-      // "Analyzed" is a per-slide state — a block itself never reaches the
-      // analyzed stage, so filter on whether any of its slides were analyzed.
-      const hasAnalyzed = sampleSlides.some((s) => Boolean(s.stage_analyzed_at));
-      if (status === "analyzed" && !hasAnalyzed) return false;
-      if (status === "active" && hasAnalyzed) return false;
+      // "Analyzed" vs "Active" is a per-slide state — a block itself never
+      // reaches the analyzed stage. A sample counts as fully analyzed once every
+      // one of its ASSAY slides is analyzed (extras never get an analyzed stamp,
+      // so they're excluded); "Active" is anything not yet fully analyzed.
+      const assaySlides = sampleSlides.filter((s) => s.purpose !== "extra");
+      const fullyAnalyzed =
+        assaySlides.length > 0 && assaySlides.every((s) => Boolean(s.stage_analyzed_at));
+      if (status === "analyzed" && !fullyAnalyzed) return false;
+      if (status === "active" && fullyAnalyzed) return false;
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       if (query) {
         const hay = [sample.sample_code, sample.sample_description, ...agents].join(" ").toLowerCase();
@@ -214,6 +221,16 @@ export function LogsView() {
       return next;
     });
   }
+  async function exportCsv() {
+    setExportMsg(null);
+    try {
+      // Export exactly what's shown: the current filter + sort, one row per slide.
+      const path = await saveLogsCsv(sorted.map((r) => ({ sample: r.sample, slides: r.slides })));
+      setExportMsg(path ? "Exported." : "Export cancelled.");
+    } catch (e) {
+      setExportMsg(`Export failed: ${e}`);
+    }
+  }
 
   const columns: Array<{ key: SortKey; label: string; align?: "right" }> = [
     { key: "sample", label: "Sample ID" },
@@ -257,8 +274,16 @@ export function LogsView() {
           <option value="active">Active</option>
           <option value="analyzed">Analyzed</option>
         </select>
-        <span className="ml-auto text-xs text-ink-faint">
-          {sorted.length} {sorted.length === 1 ? "sample" : "samples"}
+        <button
+          type="button"
+          onClick={() => void exportCsv()}
+          title="Export the current view (filtered + sorted) as a CSV, one row per slide"
+          className="ml-auto flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft hover:text-ink"
+        >
+          <Download size={13} /> Export CSV
+        </button>
+        <span className="text-xs text-ink-faint">
+          {exportMsg ?? `${sorted.length} ${sorted.length === 1 ? "sample" : "samples"}`}
         </span>
       </div>
 

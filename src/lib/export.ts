@@ -133,6 +133,72 @@ export async function exportSamplesCsv(): Promise<string | null> {
   return path;
 }
 
+// ---- Logs view export (one row per slide, with sample context) ---------------
+
+export type LogExportRow = { sample: Sample; slides: Slide[] };
+
+// Slides cut before local stamping only have the UTC created_at; use it as a
+// fallback so the Cut column is never blank (mirrors the Logs slide timeline).
+const slideCutAt = (sl: Slide): string => sl.stage_cut_at ?? sl.created_at ?? "";
+
+const LOGS_HEADERS = [
+  "Project", "Sample ID", "Description", "Sample Stage", "Date Added",
+  "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
+  "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
+  "Slide Notes", "Sample Notes",
+];
+
+/**
+ * Build the Logs CSV — one row per slide, plus a single row for a sample that
+ * has no slides yet, so the export mirrors what the Logs table shows (including
+ * the per-slide timeline stamps). Pure and order-preserving so it can be unit
+ * tested and so it honours the caller's current filter/sort.
+ */
+export function buildLogsCsv(rows: LogExportRow[]): string {
+  const lines = [LOGS_HEADERS.map(csvCell).join(",")];
+  for (const { sample, slides } of rows) {
+    const base = [
+      sample.project_code ?? "",
+      sample.sample_code,
+      sample.sample_description ?? "",
+      sample.current_stage ?? "",
+      (sample.date_added ?? "").slice(0, 10),
+    ];
+    if (slides.length === 0) {
+      lines.push([...base, "", "", "", "", "", "", "", "", "", sample.overall_notes ?? ""].map(csvCell).join(","));
+      continue;
+    }
+    for (const sl of slides) {
+      lines.push([
+        ...base,
+        sl.slide_code ?? "",
+        sl.assay_type ?? "",
+        sl.assay_name || (sl.purpose === "extra" ? "Extra" : ""),
+        sl.current_stage ?? "",
+        slideCutAt(sl),
+        sl.stage_stained_at ?? "",
+        sl.stage_coverslipped_at ?? "",
+        sl.stage_pictures_taken_at ?? "",
+        sl.stage_analyzed_at ?? "",
+        sl.notes ?? "",
+        sample.overall_notes ?? "",
+      ].map(csvCell).join(","));
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** Save the (already filtered/sorted) Logs rows as a CSV via the native dialog. */
+export async function saveLogsCsv(rows: LogExportRow[]): Promise<string | null> {
+  const path = await save({
+    defaultPath: `histometer-logs-${todayIso()}.csv`,
+    filters: [{ name: "CSV", extensions: ["csv"] }],
+  });
+  if (!path) return null;
+  await writeBytes(path, new TextEncoder().encode(buildLogsCsv(rows)));
+  return path;
+}
+
 /** Export a normalized workbook with Projects and Samples sheets. */
 export async function exportWorkbookXlsx(): Promise<string | null> {
   const [projects, samples, sections, slides, batches] = await Promise.all([
