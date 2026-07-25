@@ -284,10 +284,10 @@ export function SampleDetailsDrawer({
             variant="primary"
             className="flex-1"
             disabled={!processingReady}
-            title={!processingReady ? "Complete preprocessing for every selected sample first." : "Review and start a processing batch."}
+            title={!processingReady ? "Complete preprocessing for every selected sample first." : "Start a run now, or plan one for a future start."}
             onClick={() => onRequestProcessing(processingSamples.map((selected) => selected.id))}
           >
-            <CheckCircle2 size={15} /> Move {processingSamples.length > 1 ? `${processingSamples.length} to Processor` : "to Processor"}
+            <CheckCircle2 size={15} /> Start / Plan Run{processingSamples.length > 1 ? ` (${processingSamples.length})` : ""}
           </Button>
         ) : null}
         <Button

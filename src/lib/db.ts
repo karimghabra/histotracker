@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   ChecklistItem,
   AssayCatalogEntry,
@@ -104,6 +105,31 @@ export async function resetDb(): Promise<void> {
     // Best-effort: even if close fails, drop the handle so we reopen fresh.
   }
   dbPromise = null;
+}
+
+// ---- Whole-database snapshots (undo/redo) -----------------------------------
+
+/**
+ * Read the entire live SQLite file as bytes — a complete point-in-time snapshot
+ * of ALL state. Reuses the same Rust `read_file` command the workstation sync
+ * uses to publish the DB, so it's already a proven path.
+ */
+export async function snapshotDb(): Promise<number[]> {
+  const path = await getDbFilePath();
+  return invoke<number[]>("read_file", { path });
+}
+
+/**
+ * Overwrite the live SQLite file with a previously captured snapshot and reopen
+ * the connection against the new bytes. This is exactly how a viewer swaps in a
+ * downloaded snapshot; here it's how undo/redo move the whole DB back or forward.
+ */
+export async function restoreDb(bytes: number[]): Promise<void> {
+  const path = await getDbFilePath();
+  await resetDb();
+  await invoke("save_file", { path, contents: bytes });
+  // Reopen eagerly so the next query hits the restored bytes.
+  await getDb();
 }
 
 // ---- Projects ---------------------------------------------------------------
@@ -253,20 +279,30 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
 
 export async function listOpenSamples(): Promise<Sample[]> {
   const db = await getDb();
-  return db.select<Sample[]>(
+  // `produced_stains` = the agents that already have a slide in (or past) the
+  // staining stage. The needs-stain flag is computed PER stain: a preselected
+  // agent that hasn't been produced yet is still pending — so requesting a fresh
+  // stain flags the block even after earlier stains have entered staining (#41).
+  const rows = await db.select<Array<Sample & { produced_stains: string | null }>>(
     `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
-            -- The flag stays on the tile until one of the sample's stains enters
-            -- the staining stage (issues #1, #2).
-            CASE WHEN s.preselected_stains != '' AND NOT EXISTS (
-              SELECT 1 FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-               WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
-                 AND sl.stage_stain_requested_at IS NOT NULL
-            ) THEN s.preselected_stains ELSE '' END AS pending_stains
+            (SELECT GROUP_CONCAT(DISTINCT sl.assay_name)
+               FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+              WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
+                AND sl.stage_stain_requested_at IS NOT NULL) AS produced_stains
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0
       ORDER BY s.is_priority DESC, s.prioritized_at DESC, s.date_added ASC, s.id ASC`,
   );
+  return rows.map((row) => {
+    const { produced_stains, ...sample } = row;
+    const preselected = parsePreselectedStains(sample.preselected_stains);
+    const produced = new Set(
+      String(produced_stains ?? "").split(",").map((n) => n.trim().toLowerCase()).filter(Boolean),
+    );
+    const pending = preselected.filter((a) => !produced.has(a.assay_name.toLowerCase()));
+    return { ...sample, pending_stains: pending.length ? JSON.stringify(pending) : "" } as Sample;
+  });
 }
 
 export async function updateSampleStage(sampleId: number, stageKey: string): Promise<void> {

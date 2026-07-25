@@ -11,6 +11,7 @@ Package manager is **pnpm**. Data lives in a local **SQLite** database
 pnpm install
 pnpm build                 # tsc typecheck + vite build
 pnpm test                  # data-layer workflow harness (see below)
+pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 cd src-tauri && cargo check
 ```
 

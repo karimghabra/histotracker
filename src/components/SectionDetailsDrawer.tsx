@@ -128,11 +128,16 @@ export function SectionDetailsDrawer({
     .map((candidate) => candidate.id);
   // Pre-assigned slides skip a separate assignment step (issues #34/#38), so
   // "Mark Sectioned" advances every pre-staining section straight to staining.
-  const sectioningBatchIds = activeSelection
-    .filter((candidate) =>
-      ["needs_sectioning", "sectioned", "assignment_required"].includes(candidate.current_stage),
-    )
-    .map((candidate) => candidate.id);
+  const sectioningSections = activeSelection.filter((candidate) =>
+    ["needs_sectioning", "sectioned", "assignment_required"].includes(candidate.current_stage),
+  );
+  const sectioningBatchIds = sectioningSections.map((candidate) => candidate.id);
+  // The count on the button is the number of SLIDES being cut, not the number of
+  // cut groups / stain types (issue #40).
+  const sectioningSlideCount = sectioningSections.reduce(
+    (total, candidate) => total + (candidate.slide_count ?? 0),
+    0,
+  );
   const imagingBatchIds = activeSelection
     .filter((candidate) => ["ready_for_imaging", "pictures_taken"].includes(candidate.current_stage))
     .map((candidate) => candidate.id);
@@ -432,7 +437,7 @@ export function SectionDetailsDrawer({
             title="Mark sectioned — stains go to Staining, extras to inventory."
             onClick={() => run(() => moveSections(sectioningBatchIds, "stain_requested"))}
           >
-            <Scissors size={15} /> {sectioningBatchIds.length > 1 ? `Mark Sectioned (${sectioningBatchIds.length})` : "Mark Sectioned"}
+            <Scissors size={15} /> {sectioningSlideCount > 0 ? `Mark Sectioned (${sectioningSlideCount})` : "Mark Sectioned"}
           </Button>
         ) : section.current_stage === "stain_requested" ? (
           <Button

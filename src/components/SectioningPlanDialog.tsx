@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Plus, Scissors, X } from "lucide-react";
 import { Button, Modal } from "./ui";
+import { parsePreselectedStains } from "../lib/db";
 import type { Sample } from "../lib/types";
 
 // A single slide the technician plans to cut: either a plain Extra or a slide
@@ -67,6 +68,18 @@ export function SectioningPlanDialog({
   onClose: () => void;
 }) {
   const [rows, setRows] = useState<SlideRow[]>(() => {
+    // Prefill from the block's OUTSTANDING requested stains first (issue #41): a
+    // stain requested after the plan was seeded still shows up here, one slide
+    // each plus enough extras to reach four slides with two extra.
+    const pending = parsePreselectedStains(sample.pending_stains);
+    if (pending.length) {
+      const extras = Math.max(2, 4 - pending.length);
+      let key = 0;
+      return [
+        ...pending.map((a) => ({ key: key++, value: `${a.assay_type}::${a.assay_name}` })),
+        ...Array.from({ length: extras }, () => ({ key: key++, value: "extra" })),
+      ];
+    }
     const existing = planToRows(sample.sectioning_plan);
     // Default cut: four extras (issue #4 — at least four slides, two extra).
     return existing.length

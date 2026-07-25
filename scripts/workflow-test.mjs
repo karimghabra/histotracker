@@ -632,14 +632,19 @@ function stainOneSlide(api, sampleId, assayType, assayName) {
   return api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id;
 }
 
-// The "needs staining" flag: preselected stains present and none yet in staining.
+// The "needs staining" flag, computed PER stain (issue #41): a preselected agent
+// that has not yet been produced (reached staining) is still pending, even if
+// other stains for the sample already entered staining.
 function pendingFlag(api, sampleId) {
-  const row = api.get(
-    `SELECT preselected_stains,
-       (SELECT COUNT(*) FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-         WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.stage_stain_requested_at IS NOT NULL) AS inStaining
-      FROM samples WHERE id = ?`, [sampleId, sampleId]);
-  return row.preselected_stains !== "" && row.inStaining === 0 ? row.preselected_stains : "";
+  const row = api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
+  const preselected = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+  if (!preselected.length) return "";
+  const produced = new Set(api.all(
+    `SELECT DISTINCT sl.assay_name AS n FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.stage_stain_requested_at IS NOT NULL`,
+    [sampleId]).map((r) => String(r.n || "").toLowerCase()));
+  const pending = preselected.filter((a) => !produced.has(String(a.assay_name).toLowerCase()));
+  return pending.length ? JSON.stringify(pending) : "";
 }
 
 invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras (#1/#4)", () => {
@@ -733,10 +738,13 @@ issue(32, "planned run sample list is editable", () => {
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
 // stack. The fix captures the resulting stacks from the moved slides' current
 // stack_id (a scattered rack is deleted, so its id can't be relied on).
-issue(31, "imaging-move undo captures the scattered stacks", () => {
+issue(31, "undo/redo of an imaging move is a whole-DB swap (no ghost tile)", () => {
   const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
-  assert(actions.includes("beforeSlides.map((slide) => getSlide(slide.id))") && actions.includes("afterStackIds"),
-    "moveSlideStacks must recompute after-stacks from where the moved slides landed");
+  // A rack scattering into Ready-for-Imaging mints fresh per-sample stacks; the
+  // old per-row undo couldn't track them and stranded the tile. Restoring the
+  // whole DB puts the pre-move state back exactly, so no tile can linger.
+  assert(actions.includes("await restoreDb(entry.bytes)") && actions.includes("commitUndo("),
+    "undo swaps the entire DB back, so scattered imaging stacks are never stranded");
 });
 
 invariant("the needs-staining flag clears once a stain enters staining (#1/#2)", () => {
@@ -753,6 +761,27 @@ invariant("the needs-staining flag clears once a stain enters staining (#1/#2)",
   api.sectionToAssignment(section);
   api.startAssayWork(section); // stain enters the reagents
   eq(pendingFlag(api, id), "", "flag clears once the stain enters staining");
+});
+
+// #41 — a stain requested AFTER an earlier one is already in staining must still
+// flag the block (per-stain), and a request with no free extra flags for cutting.
+issue(41, "a newly requested stain re-flags the block for cutting", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "reflag", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }],
+  });
+  api.markEmbedded(id);
+  const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [id]).sectioning_plan);
+  const [section] = api.createSectionRequests(id, plan.filter((g) => g.assay_name));
+  api.startAssayWork(section); // H&E now in staining → its flag clears
+  eq(pendingFlag(api, id), "", "H&E flag clears once it is in staining");
+  // Request a NEW stain with no free extra → flags the block for a fresh cut.
+  const r = api.requestStainForSample(id, "stain", "SafO");
+  eq(r.target, "block", "no extra available → the block is flagged");
+  const pending = JSON.parse(pendingFlag(api, id) || "[]");
+  assert(pending.some((a) => a.assay_name === "SafO"), "the block is re-flagged for the new stain (SafO)");
+  assert(!pending.some((a) => a.assay_name === "H&E"), "the already-produced H&E is not re-flagged");
 });
 
 invariant("same agent across different samples loads into ONE cross-sample rack", () => {
@@ -1191,29 +1220,27 @@ issue(27, "Mark Sectioned advances the selected batch", () => {
     "Mark Sectioned must use the selected section IDs and go straight to staining");
 });
 
-issue(28, "section and imaging undo restore slide snapshots", () => {
+issue(28, "undo/redo restore the whole database snapshot", () => {
   const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
-  assert(actions.includes("for (const slide of beforeSlides) await restoreSlide(slide)"),
-    "section undo must restore its slides");
-  assert(actions.includes("Complete imaging") && actions.includes("for (const section of before) await restoreSectionRequest(section)"),
-    "bulk imaging must register a symmetric undo command");
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  assert(db.includes("export async function snapshotDb") && db.includes("export async function restoreDb"),
+    "the DB layer exposes whole-database snapshot + restore");
+  assert(actions.includes("await snapshotDb()") && actions.includes("record({ label, bytes: before })"),
+    "every mutation captures the pre-state DB snapshot for undo");
+  assert(actions.includes("await restoreDb(entry.bytes)"),
+    "undo and redo restore a whole-DB snapshot rather than replaying per-row closures");
 });
 
-// #29 — Undoing "start assay workflow" must not leave the minted slide stack
-// behind as an empty tile stuck in the assay lane. Restoring the section's
-// slides clears their stack_id, so the section-move undo must ALSO reconcile the
-// stacks the move touched: delete a stack it created, recreate it on redo.
-issue(29, "undoing start-assay removes the stack the move created", () => {
+// #29 — Undoing "start assay workflow" used to leave the minted slide stack
+// behind as an empty tile. With whole-DB snapshot undo there is nothing to
+// reconcile: restoring the entire pre-assay database removes the stack (and any
+// scattered per-sample stacks, #31) automatically — the UI simply refetches.
+issue(29, "whole-DB undo removes any stack a move minted, with no bespoke reconciliation", () => {
   const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
-  const dbSource = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
-  assert(
-    actions.includes("snapshotStacksForSlides") &&
-    actions.includes("await ensureStacks(") &&
-    actions.includes("await pruneStacks("),
-    "section-move undo/redo must snapshot and reconcile the slide stacks it touches",
-  );
-  assert(dbSource.includes("deleteSlideStackIfEmpty"),
-    "an empty minted stack must be prunable when its slides are restored");
+  assert(actions.includes("const commit = useCallback") && actions.includes("await snapshotDb()"),
+    "mutations snapshot the whole DB, so undo restores every table at once");
+  assert(!actions.includes("snapshotStacksForSlides") && !actions.includes("pruneStacks("),
+    "the fragile per-stack reconciliation is gone");
 });
 
 // The stack-pruning primitive itself: a stack with no slides is removed, one
@@ -1249,8 +1276,8 @@ invariant("downstream UI and actions address durable stack IDs", () => {
     "stack drawer must query and mutate stack-owned workflow state");
   assert(drawer.includes("removeSlides([...selectedSlideIds])"),
     "stack drawer must support one combined delete for selected slides");
-  assert(actions.includes("restoreSlideStack(stack)"),
-    "stack undo must restore the durable stack snapshot");
+  assert(actions.includes("await snapshotDb()"),
+    "stack moves are undoable via the whole-DB snapshot");
 });
 
 // ---------------------------------------------------------------------------

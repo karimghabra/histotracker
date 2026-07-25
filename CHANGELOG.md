@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.5 - 2026-07-25
+
+- **Undo/redo reworked to whole-database snapshots** (issue #31, and the class
+  behind #29): every action now snapshots the entire SQLite database before its
+  write, and undo/redo restore that snapshot wholesale — the UI just refetches.
+  This removes the fragile per-row restore logic that could leave ghost tiles
+  (e.g. a lingering "needs imaging" tile) or fail to redo. The DB is the single
+  source of truth; undo/redo simply move it back or forward.
+- **Run planning is now discoverable** (issues #4, #24): the planned-run feature
+  worked but was buried behind "Move to Processor" plus an easy-to-miss tab. The
+  entry point now reads **"Start / Plan Run"**, so scheduling a future run (with
+  its PLANNED FOR tag and confirm-start step) is actually reachable.
+- **"Mark Sectioned" counts slides, not stain types** (issue #40): the button
+  now shows the number of slides being cut.
+- **Requested stains re-flag the block per stain** (issue #41): asking for a new
+  stain when no extra is free flags the embedded block for a fresh cut even after
+  earlier stains are already in staining, and the Send for Cutting dialog
+  prefills the outstanding requested stains.
+- **Added a real UI test layer** (vitest + React Testing Library): the actual
+  React components are now rendered and asserted in tests (`pnpm test:ui`),
+  alongside the existing data-layer harness — so render/interaction regressions
+  can no longer pass a type-check unnoticed.
+
 ## 0.3.4 - 2026-07-24
 
 - **Sectioning reworked around a "Send for Cutting" step** (issues #35, #36): the
