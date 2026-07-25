@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 async function signInAndSeedUser(page: import("@playwright/test").Page) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByTitle("Manage lab users").click();
+  await page.getByRole("button", { name: "Manage" }).click();
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(

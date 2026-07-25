@@ -4,7 +4,7 @@ import { test, expect, type Page } from "@playwright/test";
 async function seed(page: Page, opts: { user?: string } = {}) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByTitle("Manage lab users").click();
+  await page.getByRole("button", { name: "Manage" }).click();
   await page.getByPlaceholder("Alex Rivera").fill(opts.user ?? "Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
@@ -26,7 +26,7 @@ test("#1: undo preserves the signed-in user and keeps the header in sync", async
   await addSample(page, "Block");
   await expect(page.getByText("EE-0001")).toBeVisible();
   // Switch users, then undo the sample create.
-  await page.getByTitle("Manage lab users").click();
+  await page.getByRole("button", { name: "Manage" }).click();
   await page.getByPlaceholder("Alex Rivera").fill("Blake Chen");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");

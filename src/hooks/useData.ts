@@ -23,6 +23,12 @@ import {
   setStainRequestStatus,
   setUserActive,
   setProjectActive,
+  updateProject,
+  deleteProject,
+  addAssay,
+  updateAssay,
+  setAssayActive,
+  deleteAssay,
   updateSampleDetails,
   updateSampleStage,
 } from "../lib/db";
@@ -70,8 +76,27 @@ export function useProcessingBatches() {
   });
 }
 
-export function useAssayCatalog() {
-  return useQuery({ queryKey: ["assay-catalog"], queryFn: listAssayCatalog });
+export function useAssayCatalog(includeInactive = false) {
+  return useQuery({
+    queryKey: ["assay-catalog", includeInactive],
+    queryFn: () => listAssayCatalog(includeInactive),
+  });
+}
+
+export function useAssayCatalogMutations() {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["assay-catalog"] });
+  const create = useMutation({ mutationFn: addAssay, onSuccess: invalidate });
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => updateAssay(id, name),
+    onSuccess: invalidate,
+  });
+  const setEnabled = useMutation({
+    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) => setAssayActive(id, isActive),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({ mutationFn: deleteAssay, onSuccess: invalidate });
+  return { create, rename, setEnabled, remove };
 }
 
 export function useSectionSlides(sectionId: number | null) {
@@ -169,8 +194,19 @@ export function useProjectMutations() {
       setProjectActive(id, isActive),
     onSuccess: invalidate,
   });
+  const update = useMutation({
+    mutationFn: ({
+      id,
+      input,
+    }: {
+      id: number;
+      input: { code: string; name: string; team_lead: string; lead_user_id: number };
+    }) => updateProject(id, input),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({ mutationFn: deleteProject, onSuccess: invalidate });
 
-  return { create, setActive };
+  return { create, setActive, update, remove };
 }
 
 export function useSampleMutations() {

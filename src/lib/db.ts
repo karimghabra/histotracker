@@ -280,6 +280,37 @@ export async function setProjectActive(projectId: number, isActive: boolean): Pr
   await db.execute(`UPDATE projects SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, projectId]);
 }
 
+export async function updateProject(
+  projectId: number,
+  input: { code: string; name: string; team_lead: string; lead_user_id: number },
+): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE projects SET code = ?, name = ?, team_lead = ?, lead_user_id = ? WHERE id = ?`,
+    [
+      input.code.trim().toUpperCase(),
+      input.name.trim(),
+      input.team_lead.trim(),
+      input.lead_user_id,
+      projectId,
+    ],
+  );
+}
+
+/** Permanently delete a project — only when it holds no samples, so no sample,
+ *  slide, or workflow record is ever orphaned. */
+export async function deleteProject(projectId: number): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(*) AS n FROM samples WHERE project_id = ?`,
+    [projectId],
+  );
+  if ((rows[0]?.n ?? 0) > 0) {
+    throw new Error("This project still has samples. Deactivate it instead, or remove its samples first.");
+  }
+  await db.execute(`DELETE FROM projects WHERE id = ?`, [projectId]);
+}
+
 // ---- Sample IDs -------------------------------------------------------------
 
 async function nextSampleNumber(projectId: number): Promise<number> {
@@ -2245,11 +2276,54 @@ export async function completeSectionImaging(sectionId: number): Promise<void> {
   );
 }
 
-export async function listAssayCatalog(): Promise<AssayCatalogEntry[]> {
+export async function listAssayCatalog(includeInactive = false): Promise<AssayCatalogEntry[]> {
   const db = await getDb();
+  // slide_count = how many slides already carry this agent (by type + name), so
+  // the UI can block deleting an agent that prior slide assignments depend on.
   return db.select<AssayCatalogEntry[]>(
-    `SELECT * FROM assay_catalog WHERE is_active = 1 ORDER BY assay_type, name COLLATE NOCASE`,
+    `SELECT c.*,
+            (SELECT COUNT(*) FROM slides s
+               WHERE s.assay_type = c.assay_type
+                 AND s.assay_name = c.name COLLATE NOCASE) AS slide_count
+       FROM assay_catalog c
+      ${includeInactive ? "" : "WHERE c.is_active = 1"}
+      ORDER BY c.assay_type, c.name COLLATE NOCASE`,
   );
+}
+
+export async function addAssay(input: { assay_type: "stain" | "ihc"; name: string }): Promise<number> {
+  const db = await getDb();
+  const res = await db.execute(
+    `INSERT INTO assay_catalog (assay_type, name) VALUES (?, ?)`,
+    [input.assay_type, input.name.trim()],
+  );
+  return res.lastInsertId ?? 0;
+}
+
+export async function updateAssay(id: number, name: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE assay_catalog SET name = ? WHERE id = ?`, [name.trim(), id]);
+}
+
+export async function setAssayActive(id: number, isActive: boolean): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE assay_catalog SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, id]);
+}
+
+/** Delete a catalog agent — blocked while any slide already carries it, so prior
+ *  slide assignments (which store the agent by name) are never compromised. */
+export async function deleteAssay(id: number): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(*) AS n FROM slides s
+       JOIN assay_catalog c ON c.id = ?
+      WHERE s.assay_type = c.assay_type AND s.assay_name = c.name COLLATE NOCASE`,
+    [id],
+  );
+  if ((rows[0]?.n ?? 0) > 0) {
+    throw new Error("This agent is used on existing slides. Deactivate it instead to keep those assignments intact.");
+  }
+  await db.execute(`DELETE FROM assay_catalog WHERE id = ?`, [id]);
 }
 
 export async function updateSectionStage(id: number, stageKey: string): Promise<void> {

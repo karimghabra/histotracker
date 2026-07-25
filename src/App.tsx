@@ -11,7 +11,7 @@ import { StackDetailsDrawer } from "./components/StackDetailsDrawer";
 import { BatchStartDialog } from "./components/BatchStartDialog";
 import { ProcessingBatchDetailsDrawer } from "./components/ProcessingBatchDetailsDrawer";
 import { ExtraSlideDetailsDrawer } from "./components/ExtraSlideDetailsDrawer";
-import { UserManagerDialog } from "./components/UserManagerDialog";
+import { ManageDialog } from "./components/ManageDialog";
 import { SetupScreen } from "./components/SetupScreen";
 import { RequestStainDialog } from "./components/RequestStainDialog";
 import { RequestsInbox } from "./components/RequestsInbox";
@@ -446,8 +446,8 @@ export default function App() {
                     <LogOut size={15} />
                   </Button>
                 )}
-                <Button variant="subtle" className="px-2" title="Manage lab users" onClick={() => setShowUsers(true)}>
-                  <Users size={15} /> Users
+                <Button variant="subtle" className="px-2" title="Manage users, projects & stains" onClick={() => setShowUsers(true)}>
+                  <Users size={15} /> Manage
                 </Button>
                 <Button variant="subtle" className="relative px-2" title="Incoming stain requests" onClick={() => setShowRequests(true)}>
                   <Inbox size={15} /> Requests
@@ -639,7 +639,7 @@ export default function App() {
       </main>
 
       {showNewProject && <NewProjectDialog users={users.filter((user) => user.is_active)} onClose={() => setShowNewProject(false)} />}
-      {showUsers && <UserManagerDialog users={users} activeUser={activeUser} onClose={() => setShowUsers(false)} />}
+      {showUsers && <ManageDialog users={users} activeUser={activeUser} onClose={() => setShowUsers(false)} />}
       {showNewSample && selectedProject && (
         <NewSampleDialog project={selectedProject} onClose={() => setShowNewSample(false)} />
       )}

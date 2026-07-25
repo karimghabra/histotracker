@@ -231,6 +231,7 @@ export interface AssayCatalogEntry {
   name: string;
   is_active: number;
   created_at: string;
+  slide_count?: number;
 }
 
 export type StainRequestStatus = "requested" | "acknowledged" | "done" | "rejected";
