@@ -1,9 +1,57 @@
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Search } from "lucide-react";
-import type { Slide } from "../lib/types";
+import type { Sample, Slide } from "../lib/types";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
-import { SECTION_STAGE_LABELS, STAGE_LABELS } from "../lib/stages";
+import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS } from "../lib/stages";
 import { cn } from "../lib/utils";
+
+// A slide's own lifecycle, built from its per-slide timestamps (these are always
+// accurate — unlike the aggregate stack, a slide keeps its own stamps through
+// rack scatter/merge). Refrax is omitted (it duplicates Coverslipped's stamp).
+const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide }> = [
+  { label: "Cut", column: "created_at" },
+  { label: "Needs stains / IHC", column: "stage_stain_requested_at" },
+  { label: "Stained", column: "stage_stained_at" },
+  { label: "Coverslipped", column: "stage_coverslipped_at" },
+  { label: "Dried", column: "stage_dried_at" },
+  { label: "Ready for imaging", column: "stage_ready_for_imaging_at" },
+  { label: "Pictures taken", column: "stage_pictures_taken_at" },
+  { label: "Analyzed", column: "stage_analyzed_at" },
+];
+
+function fmtTime(at: string): string {
+  return at.length >= 16 ? at.slice(5, 16) : at; // "2026-07-25 07:28" -> "07-25 07:28"
+}
+
+/** Only the steps that actually happened (have a timestamp), in order. */
+function recordedEvents(
+  row: Record<string, unknown>,
+  steps: Array<{ label: string; column: string }>,
+): Array<{ label: string; at: string }> {
+  return steps
+    .map((s) => ({ label: s.label, at: row[s.column] as string | null }))
+    .filter((e): e is { label: string; at: string } => Boolean(e.at));
+}
+
+function Timeline({ events }: { events: Array<{ label: string; at: string }> }) {
+  if (events.length === 0)
+    return <span className="text-[10px] text-ink-faint">No events recorded yet.</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {events.map((e, i) => (
+        <span
+          key={i}
+          title={e.at}
+          className="inline-flex items-center gap-1 rounded border border-line bg-panel px-1.5 py-0.5 text-[10px] text-ink-soft"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+          {e.label}
+          <span className="text-ink-faint">{fmtTime(e.at)}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 type SortKey = "sample" | "description" | "project" | "stage" | "stains" | "slides" | "added";
 type Status = "all" | "active" | "analyzed";
@@ -214,16 +262,11 @@ export function LogsView() {
               return (
                 <FragmentRow
                   key={sample.id}
+                  sample={sample}
+                  agents={agents}
+                  slides={sampleSlides}
                   open={isOpen}
                   onToggle={() => toggleExpand(sample.id)}
-                  code={sample.sample_code}
-                  description={sample.sample_description}
-                  projectCode={sample.project_code ?? ""}
-                  stage={sampleStage(sample.current_stage)}
-                  agents={agents}
-                  slideCount={sampleSlides.length}
-                  added={sample.date_added}
-                  slides={sampleSlides}
                   stainFilter={stain === "all" ? null : stain}
                   colCount={columns.length + 1}
                 />
@@ -237,32 +280,32 @@ export function LogsView() {
 }
 
 function FragmentRow({
+  sample,
+  agents,
+  slides,
   open,
   onToggle,
-  code,
-  description,
-  projectCode,
-  stage,
-  agents,
-  slideCount,
-  added,
-  slides,
   stainFilter,
   colCount,
 }: {
+  sample: Sample;
+  agents: string[];
+  slides: Slide[];
   open: boolean;
   onToggle: () => void;
-  code: string;
-  description: string;
-  projectCode: string;
-  stage: string;
-  agents: string[];
-  slideCount: number;
-  added: string;
-  slides: Slide[];
   stainFilter: string | null;
   colCount: number;
 }) {
+  const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
+  function toggleSlide(id: number) {
+    setOpenSlides((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <>
       <tr
@@ -272,53 +315,65 @@ function FragmentRow({
         <td className="pl-2 text-ink-faint">
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </td>
-        <td className="px-2 py-1.5 font-semibold text-ink">{code}</td>
-        <td className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft">{description || "—"}</td>
-        <td className="px-2 py-1.5 text-ink-soft">{projectCode}</td>
-        <td className="px-2 py-1.5 text-ink-soft">{stage}</td>
+        <td className="px-2 py-1.5 font-semibold text-ink">{sample.sample_code}</td>
+        <td className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft">{sample.sample_description || "—"}</td>
+        <td className="px-2 py-1.5 text-ink-soft">{sample.project_code ?? ""}</td>
+        <td className="px-2 py-1.5 text-ink-soft">{sampleStage(sample.current_stage)}</td>
         <td className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft">
           {agents.length ? agents.join(", ") : "—"}
         </td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft">{slideCount}</td>
-        <td className="px-2 py-1.5 text-ink-faint" title={added}>{(added || "").slice(0, 10)}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft">{slides.length}</td>
+        <td className="px-2 py-1.5 text-ink-faint" title={sample.date_added}>
+          {(sample.date_added || "").slice(0, 10)}
+        </td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={colCount} className="bg-surface px-3 py-2">
+          <td colSpan={colCount} className="bg-surface px-4 py-3">
+            {/* Sample timeline — the block's own lifecycle. */}
+            <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+              Sample timeline
+            </h4>
+            <Timeline events={recordedEvents(sample as unknown as Record<string, unknown>, BLOCK_TIMELINE_STAGES)} />
+
+            {/* Slides — each with its own separate timeline. */}
+            <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+              Slides ({slides.length})
+            </h4>
             {slides.length === 0 ? (
-              <p className="py-2 text-center text-[11px] text-ink-faint">No slides cut yet for this sample.</p>
+              <p className="text-[11px] text-ink-faint">No slides cut yet for this sample.</p>
             ) : (
-              <table className="w-full text-[11px]">
-                <thead>
-                  <tr className="text-ink-faint">
-                    <th className="px-2 py-1 text-left font-medium">Slide ID</th>
-                    <th className="px-2 py-1 text-left font-medium">Agent</th>
-                    <th className="px-2 py-1 text-left font-medium">Stage</th>
-                    <th className="px-2 py-1 text-left font-medium">Location</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {slides.map((slide) => {
-                    const match =
-                      stainFilter && slide.assay_name?.toLowerCase() === stainFilter.toLowerCase();
-                    return (
-                      <tr key={slide.id} className={cn("border-t border-line/50", match && "bg-amber-100/60")}>
-                        <td className="px-2 py-1 font-medium text-ink">{slide.slide_code}</td>
-                        <td className="px-2 py-1 text-ink-soft">
-                          {slide.assay_type && (
-                            <span className="mr-1 rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
-                              {slide.assay_type}
-                            </span>
-                          )}
-                          {agentLabel(slide)}
-                        </td>
-                        <td className="px-2 py-1 text-ink-soft">{slideStage(slide.current_stage)}</td>
-                        <td className="px-2 py-1 text-ink-faint">{slide.location || "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="divide-y divide-line/60 overflow-hidden rounded-md border border-line/60">
+                {slides.map((slide) => {
+                  const match =
+                    stainFilter && slide.assay_name?.toLowerCase() === stainFilter.toLowerCase();
+                  const slideOpen = openSlides.has(slide.id);
+                  return (
+                    <div key={slide.id} className={cn(match && "bg-amber-100/50")}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSlide(slide.id)}
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] hover:bg-brand/5"
+                      >
+                        {slideOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                        <span className="font-medium text-ink">{slide.slide_code}</span>
+                        {slide.assay_type && (
+                          <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
+                            {slide.assay_type}
+                          </span>
+                        )}
+                        <span className="text-ink-soft">{agentLabel(slide)}</span>
+                        <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
+                      </button>
+                      {slideOpen && (
+                        <div className="px-3 pb-2 pl-7">
+                          <Timeline events={recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE)} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </td>
         </tr>

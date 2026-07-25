@@ -77,10 +77,14 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await expect(page.getByText("No samples match")).toBeVisible();
   await stainSelect.selectOption("Any stain / IHC");
 
-  // Expand the sample → its slides drill in (sub-table header + slide-code rows).
+  // Expand the sample → sample timeline + its slides drill in.
   await sampleCell.click();
-  await expect(page.getByText("Slide ID", { exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /EE-0001-/ }).first()).toBeVisible(); // a slide code
+  await expect(page.getByText("Sample timeline")).toBeVisible();
+  const slideRow = page.getByRole("button", { name: /EE-0001-A/ });
+  await expect(slideRow).toBeVisible();
+  // Expand the slide → its own (separate) timeline, starting at Cut.
+  await slideRow.click();
+  await expect(page.getByText(/Cut/).first()).toBeVisible();
   await page.screenshot({ path: "test-results/logs-expanded.png", fullPage: true });
 
   // Sorting: clicking a header keeps the sample listed.
