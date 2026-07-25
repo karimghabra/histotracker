@@ -148,10 +148,13 @@ export function LogsView() {
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return rows.filter(({ sample, agents }) => {
+    return rows.filter(({ sample, slides: sampleSlides, agents }) => {
       if (project !== "all" && sample.project_code !== project) return false;
-      if (status === "analyzed" && sample.current_stage !== "analyzed") return false;
-      if (status === "active" && sample.current_stage === "analyzed") return false;
+      // "Analyzed" is a per-slide state — a block itself never reaches the
+      // analyzed stage, so filter on whether any of its slides were analyzed.
+      const hasAnalyzed = sampleSlides.some((s) => Boolean(s.stage_analyzed_at));
+      if (status === "analyzed" && !hasAnalyzed) return false;
+      if (status === "active" && hasAnalyzed) return false;
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       if (query) {
         const hay = [sample.sample_code, sample.sample_description, ...agents].join(" ").toLowerCase();

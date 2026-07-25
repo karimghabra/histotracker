@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 - 2026-07-25
+
+- **Stack timeline no longer loses the pre-imaging stamps.** When a stain rack
+  advances to Ready for Imaging it scatters into a per-sample imaging stack, and
+  the new aggregate stack row was only stamped with the imaging stage — so the
+  drawer's Stack timeline showed Stained / Coverslipped / Dried as blank even
+  though they had happened. The timeline now derives each step from the stack's
+  slides (which keep their own stamps through the scatter), falling back to the
+  stack row only for stack-only markers like IHC Complete.
+- **Logs "Analyzed" filter now works.** It filtered on the block's stage, but a
+  block never reaches the analyzed stage — only its slides do. The filter now
+  matches samples that have any analyzed slide (and "Active" is the complement).
+
 ## 0.4.1 - 2026-07-25
 
 The 0.4.0 tag never produced an installer — its CI build failed at

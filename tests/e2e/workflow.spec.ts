@@ -232,3 +232,69 @@ test("needs-sectioning card exposes a real multi-select checkbox (#37)", async (
   await checkbox.uncheck();
   await expect(checkbox).not.toBeChecked();
 });
+
+// Drives a stained slide all the way to Analyzed, verifying two things the aggregate
+// stack row gets wrong after a stain rack scatters into a per-sample imaging stack:
+//   1. the drawer's Stack timeline still shows the pre-imaging stamps
+//      (Stained/Coverslipped/Dried) — recovered from the slides, not the stack row;
+//   2. the Logs "Analyzed" filter matches a sample whose slides were analyzed
+//      (a block never reaches the analyzed stage itself).
+test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches analyzed slides", async ({ page }) => {
+  await seedSample(page);
+  await embedBlock(page);
+
+  // Cut with one stained slide (index 1 = first catalog stain, Alcian Blue).
+  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page
+    .locator("select")
+    .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
+    .first()
+    .selectOption({ index: 1 });
+  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+
+  // Mark Sectioned → a stain rack ("Alcian Blue") is minted in Staining.
+  await page.getByText("4 slides").first().click();
+  await page.getByRole("button", { name: /Mark Sectioned/ }).click();
+  await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
+  const staining = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
+  await staining.getByText("Alcian Blue").first().click();
+
+  // Run the whole stain protocol (Stained → Coverslipped → Dried). Finishing the
+  // last step auto-advances the rack to Ready for Imaging, scattering it into a
+  // per-sample imaging stack (which is where the aggregate row loses the stamps).
+  await page.getByLabel("Active operator").fill("Alex");
+  for (const step of ["Stained", "Coverslipped", "Dried"]) {
+    await page.getByRole("button", { name: step, exact: true }).click();
+  }
+  // Finishing the protocol scatters the rack and auto-closes its drawer.
+
+  // Open the scattered stack in Ready for Imaging and check its timeline.
+  const imaging = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
+  await imaging.getByText("EE-0001", { exact: true }).first().click();
+  await expect(page.getByText("Stack timeline")).toBeVisible();
+  // (1) The pre-imaging stamps survived the scatter (recovered from the slides).
+  const stainedRow = page.locator("li").filter({ hasText: /^Stained/ });
+  await expect(stainedRow).toContainText(/\d{4}-\d{2}-\d{2}/);
+  await expect(page.locator("li").filter({ hasText: /^Coverslipped/ })).toContainText(/\d{4}-\d{2}-\d{2}/);
+  await page.screenshot({ path: "test-results/stack-timeline.png" });
+
+  // Complete Imaging → Mark Analyzed → the slide is analyzed.
+  await page.getByRole("button", { name: /Complete Imaging/ }).click();
+  await page.getByRole("button", { name: /Mark Analyzed/ }).click();
+
+  // (2) The Logs "Analyzed" filter now matches the sample.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  const statusSelect = page
+    .locator("select")
+    .filter({ has: page.locator("option", { hasText: "All statuses" }) });
+  await statusSelect.selectOption({ label: "Analyzed" });
+  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  // Flip to Active → the analyzed sample drops out.
+  await statusSelect.selectOption({ label: "Active" });
+  await expect(page.getByText("No samples match")).toBeVisible();
+});

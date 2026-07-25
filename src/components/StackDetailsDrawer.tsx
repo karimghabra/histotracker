@@ -62,6 +62,25 @@ export function StackDetailsDrawer({
   );
   const imagedCount = slides.filter((slide) => Boolean(slide.stage_pictures_taken_at)).length;
 
+  // The aggregate stack row loses the pre-imaging stamps (Stained/Coverslipped/
+  // Dried…) when a stain rack scatters into a per-sample imaging stack — the old
+  // rack is deleted and only the new stage is stamped. The SLIDES keep their own
+  // stamps, so build the timeline from them (latest across the stack's slides),
+  // falling back to the stack column for stack-only markers (e.g. IHC Complete).
+  const stageTimes = useMemo(() => {
+    const merged: Record<string, string | null> = {};
+    for (const stage of SECTION_STAGES) {
+      const col = stage.column;
+      let latest: string | null = null;
+      for (const slide of slides) {
+        const v = (slide as unknown as Record<string, string | null>)[col];
+        if (v && (latest === null || v > latest)) latest = v;
+      }
+      merged[col] = latest ?? (stack as unknown as Record<string, string | null>)[col] ?? null;
+    }
+    return merged;
+  }, [slides, stack]);
+
   useEffect(() => {
     setSelectingSlides(false);
     setSelectedSlideIds(new Set());
@@ -211,7 +230,7 @@ export function StackDetailsDrawer({
         <h3 className="mb-2 text-xs font-semibold uppercase text-ink-faint">Stack timeline</h3>
         <ol className="space-y-1">
           {SECTION_STAGES.filter((stage) => STACK_TIMELINE_KEYS.has(stage.key)).map((stage) => {
-            const at = (stack as unknown as Record<string, string | null>)[stage.column];
+            const at = stageTimes[stage.column];
             return (
               <li key={stage.key} className="flex items-center gap-2 text-xs">
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${at ? "bg-brand" : "bg-line"}`} />
