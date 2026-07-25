@@ -792,7 +792,7 @@ issue(31, "undo/redo of an imaging move is a whole-DB swap (no ghost tile)", () 
   // A rack scattering into Ready-for-Imaging mints fresh per-sample stacks; the
   // old per-row undo couldn't track them and stranded the tile. Restoring the
   // whole DB puts the pre-move state back exactly, so no tile can linger.
-  assert(actions.includes("await restoreDb(entry.snapshot") && actions.includes("commitUndo("),
+  assert(actions.includes("restoreDbPreservingSession(entry.snapshot") && actions.includes("commitUndo("),
     "undo swaps the entire DB back, so scattered imaging stacks are never stranded");
 });
 
@@ -1308,8 +1308,8 @@ issue(28, "undo/redo restore the whole database snapshot", () => {
     "the DB layer exposes whole-database snapshot + restore");
   assert(actions.includes("await snapshotDb()") && actions.includes("record({ label, snapshot: before })"),
     "every mutation captures the pre-state DB snapshot for undo");
-  assert(actions.includes("await restoreDb(entry.snapshot"),
-    "undo and redo restore a whole-DB snapshot rather than replaying per-row closures");
+  assert(actions.includes("restoreDbPreservingSession(entry.snapshot") && db.includes("await restoreDb(image)"),
+    "undo and redo restore a whole-DB snapshot (via restoreDbPreservingSession) rather than replaying per-row closures");
 });
 
 // #29 — Undoing "start assay workflow" used to leave the minted slide stack

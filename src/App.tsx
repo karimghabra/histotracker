@@ -20,6 +20,7 @@ import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpen
 import { useActions } from "./hooks/useActions";
 import { useSync } from "./hooks/useSync";
 import { useUndoStore } from "./lib/undo";
+import { hydrateUndoHistory } from "./lib/undoPersist";
 import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
 import { getSyncConfig, type SyncConfigPublic } from "./lib/syncConfig";
 import { exportSamplesCsv, exportWorkbookXlsx } from "./lib/export";
@@ -107,6 +108,12 @@ export default function App() {
     }
   }, [projects, selectedProjectId]);
 
+  // Restore the persisted undo/redo history (if it matches the live DB) so a
+  // reload doesn't strand the user with a greyed-out Undo (#2).
+  useEffect(() => {
+    void hydrateUndoHistory();
+  }, []);
+
   // Timed processing auto-advance on mount and every minute.
   useEffect(() => {
     const tick = async () => {
@@ -152,6 +159,30 @@ export default function App() {
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
   }, []);
+
+  // Escape closes an open detail drawer, matching how dialogs already dismiss.
+  // Skip when a modal is open (it handles its own Escape) or while typing.
+  const modalOpen =
+    showNewProject || showNewSample || showUsers || showRequests || showRequestStain ||
+    showSetup || pendingBatchSampleIds !== null;
+  const drawerOpen =
+    selectedSampleId !== null || selectedSectionId !== null || selectedStackId !== null ||
+    selectedBatchId !== null || selectedExtraSampleId !== null;
+  useEffect(() => {
+    if (modalOpen || !drawerOpen) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      setSelectedSampleId(null);
+      setSelectedSectionId(null);
+      setSelectedStackId(null);
+      setSelectedBatchId(null);
+      setSelectedExtraSampleId(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalOpen, drawerOpen]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const selectedSample = useMemo(
@@ -361,10 +392,10 @@ export default function App() {
       />
 
       <main className="flex min-w-0 flex-1 flex-col bg-surface">
-        <header className="flex items-center justify-between border-b border-line bg-panel px-6 py-3">
-          <div>
-            <h1 className="text-lg font-semibold text-ink">Open Histology Workflow</h1>
-            <p className="text-xs text-ink-faint">
+        <header className="flex items-center justify-between gap-3 border-b border-line bg-panel px-6 py-3">
+          <div className="shrink-0">
+            <h1 className="whitespace-nowrap text-lg font-semibold text-ink">Open Histology Workflow</h1>
+            <p className="whitespace-nowrap text-xs text-ink-faint">
               {status ?? (
                 <>
                   {samples.length} open {samples.length === 1 ? "sample" : "samples"} across{" "}
@@ -373,7 +404,7 @@ export default function App() {
               )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <SyncStatusPill
               role={syncConfig.role}
               syncing={sync.syncing}
@@ -511,7 +542,14 @@ export default function App() {
             {!isViewer && (
               <Button
                 variant="primary"
-                disabled={!selectedProject}
+                disabled={!selectedProject || !activeUser}
+                title={
+                  !activeUser
+                    ? "Sign in before adding samples"
+                    : !selectedProject
+                      ? "Select a project first"
+                      : undefined
+                }
                 onClick={() => setShowNewSample(true)}
               >
                 <Plus size={16} /> New Sample

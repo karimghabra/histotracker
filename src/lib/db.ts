@@ -152,6 +152,43 @@ export async function restoreDb(image: DbImage): Promise<void> {
   await getDb(); // reopen eagerly so callers see a ready connection
 }
 
+/**
+ * Restore a database image but keep the SESSION/CONFIG state (the user directory
+ * and app_settings, including who is signed in). Those are not undoable workflow
+ * data — rewinding them would delete lab users added mid-session or silently
+ * change the signed-in user (#1). Users are only ever added or toggled, so the
+ * live set is always a superset by id; re-applying it with upserts (no deletes)
+ * keeps every foreign-key reference valid.
+ */
+export async function restoreDbPreservingSession(image: DbImage): Promise<void> {
+  const live = await getDb();
+  const users = await live.select<
+    Array<{ id: number; name: string; initials: string; is_active: number; created_at: string }>
+  >(`SELECT id, name, initials, is_active, created_at FROM users`);
+  const settings = await live.select<Array<{ key: string; value: string }>>(
+    `SELECT key, value FROM app_settings`,
+  );
+
+  await restoreDb(image);
+
+  const db = await getDb();
+  for (const u of users) {
+    await db.execute(
+      `INSERT INTO users (id, name, initials, is_active, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name, initials = excluded.initials, is_active = excluded.is_active`,
+      [u.id, u.name, u.initials, u.is_active, u.created_at],
+    );
+  }
+  for (const s of settings) {
+    await db.execute(
+      `INSERT INTO app_settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [s.key, s.value],
+    );
+  }
+}
+
 // ---- Projects ---------------------------------------------------------------
 
 export async function listProjects(activeOnly = false): Promise<Project[]> {

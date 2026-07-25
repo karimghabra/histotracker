@@ -12,6 +12,7 @@ import {
   deleteSlideStack,
   deleteSlideStackIfEmpty,
   deleteSlidesForStack,
+  restoreDbPreservingSession,
   getSample,
   getSectionRequest,
   getSlide,
@@ -23,7 +24,6 @@ import {
   updatePlannedBatchMembers,
   requestStainForSample as requestStainForSampleDb,
   recordAuditEvent,
-  restoreDb,
   snapshotDb,
   updateProcessingBatchStart,
   revertSectionToStage,
@@ -72,6 +72,10 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["sample-timeline"] });
     qc.invalidateQueries({ queryKey: ["extra-slides"] });
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
+    // Undo/redo swap the whole DB image; the session-preserving restore re-adds
+    // the current users + signed-in user, so refetch those too (#1).
+    qc.invalidateQueries({ queryKey: ["users"] });
+    qc.invalidateQueries({ queryKey: ["active-user"] });
   }, [qc]);
 
   // Run a mutation as a single undoable step: capture the DB before the writes,
@@ -546,7 +550,7 @@ export function useActions() {
     const current = await snapshotDb();
     const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.snapshot as DbImage);
+    await restoreDbPreservingSession(entry.snapshot as DbImage);
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
     return entry.label;
@@ -559,7 +563,7 @@ export function useActions() {
     const current = await snapshotDb();
     const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.snapshot as DbImage);
+    await restoreDbPreservingSession(entry.snapshot as DbImage);
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
     return entry.label;
