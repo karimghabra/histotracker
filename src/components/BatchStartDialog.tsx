@@ -31,14 +31,19 @@ export function BatchStartDialog({
 }) {
   const processingType = samples[0]?.processing_type ?? "Short";
   const incompatible = samples.some((sample) => sample.processing_type !== processingType);
-  // "now" starts the run immediately; "plan" schedules it for a future start
-  // that the technician confirms later (issues #4, #24).
-  const [mode, setMode] = useState<"now" | "plan">("now");
   const [startedAt, setStartedAt] = useState(nowTimestamp().replace(" ", "T"));
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const memberSummary = useMemo(() => samples.map((sample) => sample.sample_code).join(", "), [samples]);
+
+  // A run is "planned" when its start time is in the future, otherwise it starts
+  // now — inferred from the single start-time field, not a separate mode tab
+  // (issue #42). A one-minute grace keeps "now" from flipping to planned while
+  // the dialog sits open (issues #4, #24 handle the planned-run lifecycle).
+  const startMs = new Date(startedAt).getTime();
+  const isPlanned = Number.isFinite(startMs) && startMs > Date.now() + 60_000;
+  const mode = isPlanned ? "plan" : "now";
 
   async function start() {
     if (!activeOperator) {
@@ -80,22 +85,6 @@ export function BatchStartDialog({
 
   return (
     <Modal title={`${mode === "plan" ? "Plan" : "Start"} ${processingType} Processing Batch`} onClose={onClose} width="max-w-xl">
-      <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-line bg-panel p-0.5 text-xs">
-        <button
-          type="button"
-          onClick={() => setMode("now")}
-          className={`rounded-md px-2 py-1.5 font-medium ${mode === "now" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
-        >
-          Start now
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("plan")}
-          className={`rounded-md px-2 py-1.5 font-medium ${mode === "plan" ? "bg-brand text-white" : "text-ink-soft hover:bg-surface"}`}
-        >
-          Plan for later
-        </button>
-      </div>
       <div className="mb-4 rounded-lg border border-line bg-surface px-3 py-2">
         <div className="text-xs font-semibold text-ink">{samples.length} selected samples</div>
         <div className="mt-1 max-h-20 overflow-y-auto text-xs text-ink-soft thin-scroll">
@@ -123,6 +112,11 @@ export function BatchStartDialog({
           />
         </Field>
       </div>
+      <p className="mb-3 text-xs text-ink-faint">
+        {mode === "plan"
+          ? "Future start time — this run is scheduled and won't enter the processor until you confirm it."
+          : "Set a future start time to schedule the run for later instead of starting it now."}
+      </p>
 
       <Field label="Batch Notes (optional)">
         <TextArea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} />

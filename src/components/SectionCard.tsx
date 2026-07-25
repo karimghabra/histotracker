@@ -11,6 +11,7 @@ export function SectionCard({
   selected = false,
   onSelect,
   onSelectGroup,
+  onToggle,
   overlay = false,
 }: {
   section: SectionRequest;
@@ -18,6 +19,8 @@ export function SectionCard({
   selected?: boolean;
   onSelect?: (id: number, event: MouseEvent<HTMLDivElement>) => void;
   onSelectGroup?: (ids: number[], event: MouseEvent<HTMLDivElement>) => void;
+  /** Toggle this card's group in/out of the multi-selection (checkbox, issue #37). */
+  onToggle?: (ids: number[]) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -57,11 +60,14 @@ export function SectionCard({
       )}
     >
       <div className="flex items-center gap-1.5">
-        <span
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 rounded border",
-            selected ? "border-brand bg-brand" : "border-line bg-white",
-          )}
+        <input
+          type="checkbox"
+          checked={selected}
+          aria-label={`Select ${section.parent_code}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onChange={() => onToggle?.(grouped.map((item) => item.id))}
+          className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
         />
         <Layers size={11} className="shrink-0 text-ink-faint" />
         <span className="text-xs font-semibold text-ink">{section.parent_code}</span>

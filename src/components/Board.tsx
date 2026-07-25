@@ -406,6 +406,25 @@ export function Board({
     onSelectSection(repId);
   }
 
+  // Checkbox toggle for a Needs Sectioning card (issue #37): add/remove the
+  // sample's whole group from the multi-selection without replacing it, so
+  // ticking several cards accumulates a selection (no Ctrl needed).
+  function toggleSectionGroup(ids: number[]) {
+    setSelectedBlocks(new Set());
+    setSelectedStacks(new Set());
+    setSelectedSections((current) => {
+      const next = new Set(current);
+      const allSelected = ids.every((id) => next.has(id));
+      for (const id of ids) {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+    sectionGroupAnchor.current = ids[0] ?? null;
+    if (ids[0] != null) onSelectSection(ids[0]);
+  }
+
   function selectStack(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedBlocks(new Set());
     setSelectedSections(new Set());
@@ -640,6 +659,7 @@ export function Board({
                                 selected={group.every((section) => selectedSections.has(section.id))}
                                 onSelect={(_, event) => selectSectionGroup(group, event)}
                                 onSelectGroup={(_, event) => selectSectionGroup(group, event)}
+                                onToggle={toggleSectionGroup}
                               />
                             ))}
                       </QueueColumn>
