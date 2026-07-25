@@ -1,18 +1,24 @@
-import { Microscope, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
+import { LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Table2 } from "lucide-react";
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
+
+export type AppView = "board" | "logs";
 
 export function Sidebar({
   projects,
   selectedProjectId,
   onSelectProject,
   onAddProject,
+  view,
+  onSelectView,
 }: {
   projects: Project[];
   selectedProjectId: number | null;
   onSelectProject: (id: number) => void;
   onAddProject: () => void;
+  view: AppView;
+  onSelectView: (view: AppView) => void;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem("histometer-sidebar-collapsed") === "true",
@@ -29,6 +35,27 @@ export function Sidebar({
         <Microscope size={21} className="text-brand-strong" />
         {!collapsed && <span className="text-lg font-semibold tracking-tight">Histometer</span>}
       </div>
+
+      <nav className={cn("flex gap-1 pb-1", collapsed ? "flex-col px-1.5" : "px-3")}>
+        {([
+          { key: "board", label: "Board", icon: LayoutGrid },
+          { key: "logs", label: "Logs", icon: Table2 },
+        ] as const).map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => onSelectView(key)}
+            title={collapsed ? label : undefined}
+            className={cn(
+              "flex flex-1 items-center gap-2 rounded-lg py-2 text-sm font-medium transition",
+              collapsed ? "justify-center px-1" : "px-3",
+              view === key ? "bg-brand/15 text-ink" : "text-ink-soft hover:bg-brand/8",
+            )}
+          >
+            <Icon size={16} className="shrink-0" />
+            {!collapsed && label}
+          </button>
+        ))}
+      </nav>
 
       <div className={cn("flex items-center pb-2 pt-3", collapsed ? "flex-col gap-1 px-2" : "justify-between px-5")}>
         {!collapsed && <span className="text-xs font-semibold uppercase tracking-wider text-ink-soft">Active Projects</span>}

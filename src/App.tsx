@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Palette, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type AppView } from "./components/Sidebar";
+import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
 import { NewProjectDialog } from "./components/NewProjectDialog";
 import { NewSampleDialog } from "./components/NewSampleDialog";
@@ -81,6 +82,12 @@ export default function App() {
     () => Number(window.localStorage.getItem("histometer-drawer-width") ?? "416"),
   );
   const [status, setStatus] = useState<string | null>(null);
+  const [view, setView] = useState<AppView>(
+    () => ((window.localStorage.getItem("histometer-view") as AppView) ?? "board"),
+  );
+  useEffect(() => {
+    window.localStorage.setItem("histometer-view", view);
+  }, [view]);
   const exportRef = useRef<HTMLDivElement>(null);
 
   function flash(message: string) {
@@ -389,6 +396,8 @@ export default function App() {
         selectedProjectId={selectedProjectId}
         onSelectProject={setSelectedProjectId}
         onAddProject={() => setShowNewProject(true)}
+        view={view}
+        onSelectView={setView}
       />
 
       <main className="flex min-w-0 flex-1 flex-col bg-surface">
@@ -573,6 +582,12 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
+          {view === "logs" ? (
+            <div className="min-w-0 flex-1 overflow-hidden p-3">
+              <LogsView />
+            </div>
+          ) : (
+          <>
           <div className="min-w-0 flex-1 overflow-hidden p-3">
             <Board
               samples={samples}
@@ -634,6 +649,8 @@ export default function App() {
               </div>
               {activeDrawer}
             </>
+          )}
+          </>
           )}
         </div>
       </main>

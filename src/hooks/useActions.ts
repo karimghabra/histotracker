@@ -72,6 +72,8 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["sample-timeline"] });
     qc.invalidateQueries({ queryKey: ["extra-slides"] });
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
+    qc.invalidateQueries({ queryKey: ["all-samples"] });
+    qc.invalidateQueries({ queryKey: ["all-slides"] });
     // Undo/redo swap the whole DB image; the session-preserving restore re-adds
     // the current users + signed-in user, so refetch those too (#1).
     qc.invalidateQueries({ queryKey: ["users"] });

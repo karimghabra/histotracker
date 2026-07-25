@@ -5,6 +5,8 @@ import {
   addSample,
   autoAdvanceProcessingRuns,
   deleteSample,
+  listAllSamples,
+  listAllSlides,
   listOpenSamples,
   listOpenProcessingBatches,
   listOpenSectionRequests,
@@ -176,6 +178,15 @@ export function useOpenSamples() {
     queryKey: KEYS.openSamples,
     queryFn: listOpenSamples,
   });
+}
+
+// Full records for the Logs view — every sample and every slide, regardless of
+// stage or project active state.
+export function useAllSamples() {
+  return useQuery({ queryKey: ["all-samples"], queryFn: listAllSamples });
+}
+export function useAllSlides() {
+  return useQuery({ queryKey: ["all-slides"], queryFn: listAllSlides });
 }
 
 export function useProjectMutations() {
