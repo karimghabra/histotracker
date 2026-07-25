@@ -2,10 +2,10 @@ import { create } from "zustand";
 
 /**
  * A point-in-time snapshot of the ENTIRE database plus a human label for the
- * action that produced it. `snapshot` is an opaque payload (a logical dump of
- * every workflow table — see db.ts DbSnapshot); the store only shuffles them
- * between the undo/redo stacks. Undo/redo restore one wholesale, so the UI just
- * refetches (issue #31: no per-row restore closures that could drift).
+ * action that produced it. `snapshot` is an opaque payload (a raw SQLite file
+ * image — see db.ts DbImage); the store only shuffles them between the undo/redo
+ * stacks. Undo/redo swap one back in wholesale, so the UI just refetches — there
+ * is no per-row restore that could drift out of sync.
  */
 export interface Snapshot {
   label: string;

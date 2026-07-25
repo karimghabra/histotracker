@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   ChecklistItem,
   AssayCatalogEntry,
@@ -109,87 +110,46 @@ export async function resetDb(): Promise<void> {
 // ---- Whole-database snapshots (undo/redo) -----------------------------------
 
 /**
- * A logical snapshot of every workflow table: column names + all rows, captured
- * through the live connection so it is WAL-safe (unlike copying the raw .db
- * file, whose latest writes may still be in the -wal sidecar). `order` is a
- * topological table order (parents before children) so a restore can re-insert
- * without violating foreign keys.
+ * A snapshot is the raw bytes of the entire SQLite database file — a complete,
+ * point-in-time IMAGE of every table. Undo/redo simply swap one of these images
+ * back in wholesale: there is nothing to keep in sync — no per-row dump, no
+ * topological ordering, no trigger re-firing on restore, no exclude list to
+ * drift. The database is the single source of truth and the UI is a pure
+ * reflection of it (React Query refetches after a restore), so "undo" is exactly
+ * "revert to a previous instance of the database" and nothing more.
  */
-export interface DbSnapshot {
-  order: string[];
-  tables: Record<string, { columns: string[]; rows: unknown[][] }>;
-}
+export type DbImage = Uint8Array;
 
-// Session/config + append-only tables that undo must NOT rewind: the signed-in
-// user, schema-migration bookkeeping, and the audit log (which should keep
-// recording that an undo happened rather than erase itself).
-const SNAPSHOT_EXCLUDE = new Set(["_sqlx_migrations", "sqlite_sequence", "app_settings", "audit_events"]);
-
-/** Topological order of the workflow tables (each parent before its children). */
-async function snapshotTableOrder(db: Database): Promise<string[]> {
-  const names = (
-    await db.select<Array<{ name: string }>>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-    )
-  )
-    .map((r) => r.name)
-    .filter((n) => !SNAPSHOT_EXCLUDE.has(n));
-  const nameSet = new Set(names);
-  const parents = new Map<string, Set<string>>();
-  for (const name of names) {
-    const fks = await db.select<Array<{ table: string }>>(`PRAGMA foreign_key_list("${name}")`);
-    const set = new Set<string>();
-    for (const fk of fks) if (fk.table !== name && nameSet.has(fk.table)) set.add(fk.table);
-    parents.set(name, set);
-  }
-  const order: string[] = [];
-  const seen = new Set<string>();
-  const visiting = new Set<string>();
-  const visit = (name: string) => {
-    if (seen.has(name) || visiting.has(name)) return; // ignore cycles defensively
-    visiting.add(name);
-    for (const parent of parents.get(name) ?? []) visit(parent);
-    visiting.delete(name);
-    seen.add(name);
-    order.push(name);
-  };
-  for (const name of names) visit(name);
-  return order;
-}
-
-export async function snapshotDb(): Promise<DbSnapshot> {
+/**
+ * Capture the current database as a byte image. We checkpoint the WAL into the
+ * main file first so the on-disk image is complete — the -wal sidecar holding
+ * un-checkpointed writes is exactly what made naive file copies lossy before.
+ * Databases not in WAL mode simply no-op the checkpoint.
+ */
+export async function snapshotDb(): Promise<DbImage> {
   const db = await getDb();
-  const order = await snapshotTableOrder(db);
-  const tables: DbSnapshot["tables"] = {};
-  for (const name of order) {
-    const columns = (
-      await db.select<Array<{ name: string }>>(`PRAGMA table_info("${name}")`)
-    ).map((c) => c.name);
-    const rows = await db.select<Array<Record<string, unknown>>>(`SELECT * FROM "${name}"`);
-    tables[name] = { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+  try {
+    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // Not in WAL mode (or checkpoint unsupported): the main file is already current.
   }
-  return { order, tables };
+  const path = await getDbFilePath();
+  const bytes = await invoke<number[]>("read_file", { path });
+  return Uint8Array.from(bytes);
 }
 
 /**
- * Restore a logical snapshot: clear every captured table (children first) and
- * re-insert its rows (parents first). Runs through the normal connection, so no
- * file/WAL juggling and no reopen — undo/redo just refetch afterwards.
+ * Restore a database image: close the live connection, overwrite the SQLite file
+ * with the snapshot bytes, then reopen against them. These are the exact
+ * mechanics the sync viewer already uses to swap in a downloaded snapshot —
+ * proven, WAL-safe (the closed connection has no dirty -wal), and atomic from
+ * the app's point of view. Callers refetch afterwards.
  */
-export async function restoreDb(snap: DbSnapshot): Promise<void> {
-  const db = await getDb();
-  for (const name of [...snap.order].reverse()) {
-    await db.execute(`DELETE FROM "${name}"`);
-  }
-  for (const name of snap.order) {
-    const table = snap.tables[name];
-    if (!table || table.rows.length === 0) continue;
-    const cols = table.columns.map((c) => `"${c}"`).join(", ");
-    const placeholders = table.columns.map(() => "?").join(", ");
-    for (const row of table.rows) {
-      await db.execute(`INSERT INTO "${name}" (${cols}) VALUES (${placeholders})`, row);
-    }
-  }
+export async function restoreDb(image: DbImage): Promise<void> {
+  const path = await getDbFilePath(); // resolve while the connection is still open
+  await resetDb(); // close + drop the pooled handle so the file is unlocked
+  await invoke("save_file", { path, contents: Array.from(image) });
+  await getDb(); // reopen eagerly so callers see a ready connection
 }
 
 // ---- Projects ---------------------------------------------------------------

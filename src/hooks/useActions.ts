@@ -42,7 +42,7 @@ import {
   updateSectionStage,
   updateSlideStackStage,
 } from "../lib/db";
-import type { DbSnapshot } from "../lib/db";
+import type { DbImage } from "../lib/db";
 import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../lib/types";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
@@ -546,7 +546,7 @@ export function useActions() {
     const current = await snapshotDb();
     const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.snapshot as DbSnapshot);
+    await restoreDb(entry.snapshot as DbImage);
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
     return entry.label;
@@ -559,7 +559,7 @@ export function useActions() {
     const current = await snapshotDb();
     const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.snapshot as DbSnapshot);
+    await restoreDb(entry.snapshot as DbImage);
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
     return entry.label;
