@@ -1,5 +1,4 @@
 import Database from "@tauri-apps/plugin-sql";
-import { invoke } from "@tauri-apps/api/core";
 import type {
   ChecklistItem,
   AssayCatalogEntry,
@@ -110,26 +109,87 @@ export async function resetDb(): Promise<void> {
 // ---- Whole-database snapshots (undo/redo) -----------------------------------
 
 /**
- * Read the entire live SQLite file as bytes — a complete point-in-time snapshot
- * of ALL state. Reuses the same Rust `read_file` command the workstation sync
- * uses to publish the DB, so it's already a proven path.
+ * A logical snapshot of every workflow table: column names + all rows, captured
+ * through the live connection so it is WAL-safe (unlike copying the raw .db
+ * file, whose latest writes may still be in the -wal sidecar). `order` is a
+ * topological table order (parents before children) so a restore can re-insert
+ * without violating foreign keys.
  */
-export async function snapshotDb(): Promise<number[]> {
-  const path = await getDbFilePath();
-  return invoke<number[]>("read_file", { path });
+export interface DbSnapshot {
+  order: string[];
+  tables: Record<string, { columns: string[]; rows: unknown[][] }>;
+}
+
+// Session/config + append-only tables that undo must NOT rewind: the signed-in
+// user, schema-migration bookkeeping, and the audit log (which should keep
+// recording that an undo happened rather than erase itself).
+const SNAPSHOT_EXCLUDE = new Set(["_sqlx_migrations", "sqlite_sequence", "app_settings", "audit_events"]);
+
+/** Topological order of the workflow tables (each parent before its children). */
+async function snapshotTableOrder(db: Database): Promise<string[]> {
+  const names = (
+    await db.select<Array<{ name: string }>>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+    )
+  )
+    .map((r) => r.name)
+    .filter((n) => !SNAPSHOT_EXCLUDE.has(n));
+  const nameSet = new Set(names);
+  const parents = new Map<string, Set<string>>();
+  for (const name of names) {
+    const fks = await db.select<Array<{ table: string }>>(`PRAGMA foreign_key_list("${name}")`);
+    const set = new Set<string>();
+    for (const fk of fks) if (fk.table !== name && nameSet.has(fk.table)) set.add(fk.table);
+    parents.set(name, set);
+  }
+  const order: string[] = [];
+  const seen = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (name: string) => {
+    if (seen.has(name) || visiting.has(name)) return; // ignore cycles defensively
+    visiting.add(name);
+    for (const parent of parents.get(name) ?? []) visit(parent);
+    visiting.delete(name);
+    seen.add(name);
+    order.push(name);
+  };
+  for (const name of names) visit(name);
+  return order;
+}
+
+export async function snapshotDb(): Promise<DbSnapshot> {
+  const db = await getDb();
+  const order = await snapshotTableOrder(db);
+  const tables: DbSnapshot["tables"] = {};
+  for (const name of order) {
+    const columns = (
+      await db.select<Array<{ name: string }>>(`PRAGMA table_info("${name}")`)
+    ).map((c) => c.name);
+    const rows = await db.select<Array<Record<string, unknown>>>(`SELECT * FROM "${name}"`);
+    tables[name] = { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+  }
+  return { order, tables };
 }
 
 /**
- * Overwrite the live SQLite file with a previously captured snapshot and reopen
- * the connection against the new bytes. This is exactly how a viewer swaps in a
- * downloaded snapshot; here it's how undo/redo move the whole DB back or forward.
+ * Restore a logical snapshot: clear every captured table (children first) and
+ * re-insert its rows (parents first). Runs through the normal connection, so no
+ * file/WAL juggling and no reopen — undo/redo just refetch afterwards.
  */
-export async function restoreDb(bytes: number[]): Promise<void> {
-  const path = await getDbFilePath();
-  await resetDb();
-  await invoke("save_file", { path, contents: bytes });
-  // Reopen eagerly so the next query hits the restored bytes.
-  await getDb();
+export async function restoreDb(snap: DbSnapshot): Promise<void> {
+  const db = await getDb();
+  for (const name of [...snap.order].reverse()) {
+    await db.execute(`DELETE FROM "${name}"`);
+  }
+  for (const name of snap.order) {
+    const table = snap.tables[name];
+    if (!table || table.rows.length === 0) continue;
+    const cols = table.columns.map((c) => `"${c}"`).join(", ");
+    const placeholders = table.columns.map(() => "?").join(", ");
+    for (const row of table.rows) {
+      await db.execute(`INSERT INTO "${name}" (${cols}) VALUES (${placeholders})`, row);
+    }
+  }
 }
 
 // ---- Projects ---------------------------------------------------------------

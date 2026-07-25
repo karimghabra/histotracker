@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.6 - 2026-07-25
+
+- **Fixed undo/redo corrupting the database** (critical regression in 0.3.5).
+  0.3.5's undo copied the raw SQLite *file*, but the app runs in WAL mode, so the
+  file snapshot was missing the latest writes (they were still in the `-wal`
+  sidecar) — restoring it corrupted the database. Undo/redo now snapshot the
+  **logical contents** of every workflow table through the normal connection
+  (WAL-safe) and restore them in foreign-key order. No file I/O, no Tauri
+  commands, no reopen: undo swaps the DB back, the UI refetches, done. Backed by
+  a round-trip regression test (snapshot → destructive churn incl. a cascade
+  delete → restore → exact match, with foreign keys enforced).
+
 ## 0.3.5 - 2026-07-25
 
 - **Undo/redo reworked to whole-database snapshots** (issue #31, and the class

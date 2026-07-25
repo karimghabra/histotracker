@@ -556,6 +556,55 @@ function makeApi(db) {
         ORDER BY sl.id`);
   }
 
+  // Ports of snapshotDb()/restoreDb() — src/lib/db.ts. Logical whole-DB undo:
+  // capture every workflow table through the connection (WAL-safe) and restore
+  // in FK-dependency order.
+  const SNAPSHOT_EXCLUDE = new Set(["_sqlx_migrations", "sqlite_sequence", "app_settings", "audit_events"]);
+  function snapshotTableOrder() {
+    const names = all(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+      .map((r) => r.name).filter((n) => !SNAPSHOT_EXCLUDE.has(n));
+    const nameSet = new Set(names);
+    const parents = new Map();
+    for (const name of names) {
+      const set = new Set();
+      for (const fk of all(`PRAGMA foreign_key_list("${name}")`)) {
+        if (fk.table !== name && nameSet.has(fk.table)) set.add(fk.table);
+      }
+      parents.set(name, set);
+    }
+    const order = [], seen = new Set(), visiting = new Set();
+    const visit = (n) => {
+      if (seen.has(n) || visiting.has(n)) return;
+      visiting.add(n);
+      for (const p of parents.get(n) ?? []) visit(p);
+      visiting.delete(n);
+      seen.add(n);
+      order.push(n);
+    };
+    for (const n of names) visit(n);
+    return order;
+  }
+  function snapshotDb() {
+    const order = snapshotTableOrder();
+    const tables = {};
+    for (const name of order) {
+      const columns = all(`PRAGMA table_info("${name}")`).map((c) => c.name);
+      const rows = all(`SELECT * FROM "${name}"`);
+      tables[name] = { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+    }
+    return { order, tables };
+  }
+  function restoreDb(snap) {
+    for (const name of [...snap.order].reverse()) run(`DELETE FROM "${name}"`);
+    for (const name of snap.order) {
+      const t = snap.tables[name];
+      if (!t || !t.rows.length) continue;
+      const cols = t.columns.map((c) => `"${c}"`).join(", ");
+      const ph = t.columns.map(() => "?").join(", ");
+      for (const row of t.rows) run(`INSERT INTO "${name}" (${cols}) VALUES (${ph})`, row);
+    }
+  }
+
   return {
     db, run, all, get,
     seedProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
@@ -563,7 +612,7 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack,
     planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
-    requestStainForSample,
+    requestStainForSample, snapshotDb, restoreDb,
   };
 }
 
@@ -743,7 +792,7 @@ issue(31, "undo/redo of an imaging move is a whole-DB swap (no ghost tile)", () 
   // A rack scattering into Ready-for-Imaging mints fresh per-sample stacks; the
   // old per-row undo couldn't track them and stranded the tile. Restoring the
   // whole DB puts the pre-move state back exactly, so no tile can linger.
-  assert(actions.includes("await restoreDb(entry.bytes)") && actions.includes("commitUndo("),
+  assert(actions.includes("await restoreDb(entry.snapshot") && actions.includes("commitUndo("),
     "undo swaps the entire DB back, so scattered imaging stacks are never stranded");
 });
 
@@ -1220,14 +1269,46 @@ issue(27, "Mark Sectioned advances the selected batch", () => {
     "Mark Sectioned must use the selected section IDs and go straight to staining");
 });
 
+// The real proof of the undo rework: a logical whole-DB snapshot must round-trip
+// EXACTLY through a destructive churn (cascade delete + inserts + updates across
+// many tables), with foreign keys enforced (freshDb sets foreign_keys = ON).
+invariant("whole-DB snapshot/restore round-trips exactly across every table", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const s1 = api.addSample(p, "EE", "one", { preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }] });
+  const s2 = api.addSample(p, "EE", "two");
+  api.markEmbedded(s1.id);
+  api.markEmbedded(s2.id);
+  const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [s1.id]).sectioning_plan);
+  const secIds = api.createSectionRequests(s1.id, plan);
+  for (const id of secIds) api.startAssayWork(id); // slides + cross-sample stain racks
+  api.completePreprocessing(s2.id);
+  api.startProcessingBatch({ sampleIds: [s2.id], processingType: "Short", startedAt: now() });
+
+  const before = api.snapshotDb();
+  const dump = () => JSON.stringify(
+    before.order.map((t) => api.all(`SELECT * FROM "${t}"`).map((r) => JSON.stringify(r)).sort()),
+  );
+  const original = dump();
+
+  // Churn hard: cascade-delete a whole sample tree, mutate another, add a new one.
+  api.run(`DELETE FROM samples WHERE id = ?`, [s1.id]); // cascades to sections/slides/stacks
+  api.run(`UPDATE samples SET current_stage = 'analyzed' WHERE id = ?`, [s2.id]);
+  api.addSample(p, "EE", "three");
+  assert(dump() !== original, "the churn actually changed the database");
+
+  api.restoreDb(before);
+  eq(dump(), original, "restore reproduces the exact pre-churn contents of every table");
+});
+
 issue(28, "undo/redo restore the whole database snapshot", () => {
   const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   assert(db.includes("export async function snapshotDb") && db.includes("export async function restoreDb"),
     "the DB layer exposes whole-database snapshot + restore");
-  assert(actions.includes("await snapshotDb()") && actions.includes("record({ label, bytes: before })"),
+  assert(actions.includes("await snapshotDb()") && actions.includes("record({ label, snapshot: before })"),
     "every mutation captures the pre-state DB snapshot for undo");
-  assert(actions.includes("await restoreDb(entry.bytes)"),
+  assert(actions.includes("await restoreDb(entry.snapshot"),
     "undo and redo restore a whole-DB snapshot rather than replaying per-row closures");
 });
 

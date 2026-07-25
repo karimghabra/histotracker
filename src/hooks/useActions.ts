@@ -42,6 +42,7 @@ import {
   updateSectionStage,
   updateSlideStackStage,
 } from "../lib/db";
+import type { DbSnapshot } from "../lib/db";
 import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../lib/types";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
@@ -81,7 +82,7 @@ export function useActions() {
       const before = await snapshotDb();
       const result = await fn();
       invalidate();
-      record({ label, bytes: before });
+      record({ label, snapshot: before });
       return result;
     },
     [invalidate, record],
@@ -543,9 +544,9 @@ export function useActions() {
     if (undoStack.length === 0) return null;
     const label = undoStack[undoStack.length - 1].label;
     const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitUndo({ label, bytes: current });
+    const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.bytes);
+    await restoreDb(entry.snapshot as DbSnapshot);
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
     return entry.label;
@@ -556,9 +557,9 @@ export function useActions() {
     if (redoStack.length === 0) return null;
     const label = redoStack[redoStack.length - 1].label;
     const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitRedo({ label, bytes: current });
+    const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
     if (!entry) return null;
-    await restoreDb(entry.bytes);
+    await restoreDb(entry.snapshot as DbSnapshot);
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
     return entry.label;
