@@ -148,14 +148,10 @@ const LOGS_HEADERS = [
   "Slide Notes", "Sample Notes",
 ];
 
-/**
- * Build the Logs CSV — one row per slide, plus a single row for a sample that
- * has no slides yet, so the export mirrors what the Logs table shows (including
- * the per-slide timeline stamps). Pure and order-preserving so it can be unit
- * tested and so it honours the caller's current filter/sort.
- */
-export function buildLogsCsv(rows: LogExportRow[]): string {
-  const lines = [LOGS_HEADERS.map(csvCell).join(",")];
+// One array of cells (in LOGS_HEADERS order) per exported line — one row per
+// slide, plus a single row for a sample with no slides. Shared by CSV and XLSX.
+function logRowCells(rows: LogExportRow[]): string[][] {
+  const out: string[][] = [];
   for (const { sample, slides } of rows) {
     const base = [
       sample.project_code ?? "",
@@ -165,11 +161,11 @@ export function buildLogsCsv(rows: LogExportRow[]): string {
       (sample.date_added ?? "").slice(0, 10),
     ];
     if (slides.length === 0) {
-      lines.push([...base, "", "", "", "", "", "", "", "", "", sample.overall_notes ?? ""].map(csvCell).join(","));
+      out.push([...base, "", "", "", "", "", "", "", "", "", sample.overall_notes ?? ""]);
       continue;
     }
     for (const sl of slides) {
-      lines.push([
+      out.push([
         ...base,
         sl.slide_code ?? "",
         sl.assay_type ?? "",
@@ -182,9 +178,20 @@ export function buildLogsCsv(rows: LogExportRow[]): string {
         sl.stage_analyzed_at ?? "",
         sl.notes ?? "",
         sample.overall_notes ?? "",
-      ].map(csvCell).join(","));
+      ]);
     }
   }
+  return out;
+}
+
+/**
+ * Build the Logs CSV — one row per slide, mirroring what the Logs table shows
+ * (including the per-slide timeline stamps). Pure and order-preserving so it can
+ * be unit tested and so it honours the caller's current filter/sort.
+ */
+export function buildLogsCsv(rows: LogExportRow[]): string {
+  const lines = [LOGS_HEADERS.map(csvCell).join(",")];
+  for (const cells of logRowCells(rows)) lines.push(cells.map(csvCell).join(","));
   return `${lines.join("\n")}\n`;
 }
 
@@ -196,6 +203,32 @@ export async function saveLogsCsv(rows: LogExportRow[]): Promise<string | null> 
   });
   if (!path) return null;
   await writeBytes(path, new TextEncoder().encode(buildLogsCsv(rows)));
+  return path;
+}
+
+/** Save the same Logs rows as a single-sheet XLSX workbook. */
+export async function saveLogsXlsx(rows: LogExportRow[]): Promise<string | null> {
+  const path = await save({
+    defaultPath: `histometer-logs-${todayIso()}.xlsx`,
+    filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
+  });
+  if (!path) return null;
+  const objects = logRowCells(rows).map((cells) =>
+    Object.fromEntries(LOGS_HEADERS.map((h, i) => [h, cells[i] ?? ""])),
+  );
+  const schema = LOGS_HEADERS.map((column) => ({
+    column,
+    type: String,
+    value: (r: Record<string, string>) => r[column],
+  }));
+  // Use the same multi-sheet overload as exportWorkbookXlsx (a single "Log"
+  // sheet); the single-sheet `{ schema }` form is rejected by this version.
+  const write = writeXlsxFile as unknown as (
+    data: unknown[],
+    opts: { schema: unknown[]; sheets: string[] },
+  ) => { toBlob: () => Promise<Blob> };
+  const blob = await write([objects], { schema: [schema], sheets: ["Log"] }).toBlob();
+  await writeBytes(path, new Uint8Array(await blob.arrayBuffer()));
   return path;
 }
 

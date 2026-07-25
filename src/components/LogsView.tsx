@@ -1,11 +1,66 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Star } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import { useActions } from "../hooks/useActions";
-import { saveLogsCsv } from "../lib/export";
+import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
-import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS } from "../lib/stages";
+import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { cn } from "../lib/utils";
+
+// A sample's coarse position in the lab pipeline, derived from its slides (which
+// hold the accurate per-stage stamps) and — before any slides exist — its own
+// block stage. This one categorisation drives the Stage column, the stage
+// filter, and stage sorting.
+type PhaseKey = "preprocessing" | "embedded" | "sectioned" | "staining" | "imaging" | "analyzed";
+const LOG_PHASES: Array<{ key: PhaseKey; label: string }> = [
+  { key: "preprocessing", label: "Pre-processing" },
+  { key: "embedded", label: "Embedded" },
+  { key: "sectioned", label: "Sectioned" },
+  { key: "staining", label: "Staining / IHC" },
+  { key: "imaging", label: "Imaging" },
+  { key: "analyzed", label: "Analyzed" },
+];
+const PHASE_LABEL: Record<PhaseKey, string> = Object.fromEntries(
+  LOG_PHASES.map((p) => [p.key, p.label]),
+) as Record<PhaseKey, string>;
+const PHASE_RANK: Record<PhaseKey, number> = Object.fromEntries(
+  LOG_PHASES.map((p, i) => [p.key, i]),
+) as Record<PhaseKey, number>;
+
+function samplePhase(sample: Sample, slides: Slide[]): PhaseKey {
+  const assay = slides.filter((s) => s.purpose !== "extra");
+  if (assay.length > 0 && assay.every((s) => Boolean(s.stage_analyzed_at))) return "analyzed";
+  if (assay.some((s) => s.stage_ready_for_imaging_at || s.stage_pictures_taken_at)) return "imaging";
+  if (assay.some((s) => s.stage_stained_at || s.stage_coverslipped_at || s.stage_dried_at)) return "staining";
+  if (slides.length > 0) return "sectioned";
+  return (STAGE_ORDER[sample.current_stage] ?? 0) >= (STAGE_ORDER.embedded ?? 99) ? "embedded" : "preprocessing";
+}
+
+// Per-slide timestamp columns that count as "activity" (created_at is UTC and the
+// rest local, so it's excluded to keep the derived "last activity" consistent).
+const SLIDE_TS_COLUMNS: Array<keyof Slide> = [
+  "stage_cut_at", "stage_stained_at", "stage_coverslipped_at", "stage_dried_at",
+  "stage_ready_for_imaging_at", "stage_pictures_taken_at", "stage_analyzed_at",
+];
+const BLOCK_TS_COLUMNS = BLOCK_TIMELINE_STAGES.map((s) => s.column);
+
+function lastActivityOf(sample: Sample, slides: Slide[]): string {
+  let latest = "";
+  const consider = (v: unknown) => {
+    if (typeof v === "string" && v > latest) latest = v;
+  };
+  for (const col of BLOCK_TS_COLUMNS) consider((sample as unknown as Record<string, unknown>)[col]);
+  for (const slide of slides) {
+    for (const col of SLIDE_TS_COLUMNS) consider(slide[col]);
+  }
+  return latest;
+}
+
+// Analyzed progress across a sample's assay slides (extras never analyze).
+function analyzedProgress(slides: Slide[]): { done: number; total: number } {
+  const assay = slides.filter((s) => s.purpose !== "extra");
+  return { done: assay.filter((s) => Boolean(s.stage_analyzed_at)).length, total: assay.length };
+}
 
 // A slide's own lifecycle, built from its per-slide timestamps (these are always
 // accurate — unlike the aggregate stack, a slide keeps its own stamps through
@@ -56,12 +111,8 @@ function Timeline({ events }: { events: Array<{ label: string; at: string }> }) 
   );
 }
 
-type SortKey = "sample" | "description" | "project" | "stage" | "stains" | "slides" | "added";
-type Status = "all" | "active" | "analyzed";
+type SortKey = "sample" | "description" | "project" | "stage" | "stains" | "slides" | "added" | "updated";
 
-function sampleStage(stage: string): string {
-  return STAGE_LABELS[stage] ?? SECTION_STAGE_LABELS[stage] ?? stage;
-}
 function slideStage(stage: string): string {
   if (stage === "extra") return "Extra (inventory)";
   return SECTION_STAGE_LABELS[stage] ?? STAGE_LABELS[stage] ?? stage;
@@ -104,6 +155,36 @@ function NotesEditor({
   );
 }
 
+// Multi-select workflow-stage filter as a native disclosure (no outside-click
+// wiring needed). Empty selection = all stages.
+function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle: (k: PhaseKey) => void }) {
+  const label = selected.size === 0 ? "All stages" : `${selected.size} stage${selected.size > 1 ? "s" : ""}`;
+  return (
+    <details className="relative">
+      <summary className="flex cursor-pointer list-none items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink [&::-webkit-details-marker]:hidden">
+        {label}
+        <ChevronDown size={12} className="text-ink-faint" />
+      </summary>
+      <div className="absolute z-20 mt-1 w-44 rounded-md border border-line bg-white p-1 shadow-lg">
+        {LOG_PHASES.map((p) => (
+          <label
+            key={p.key}
+            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-ink hover:bg-brand/5"
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(p.key)}
+              onChange={() => onToggle(p.key)}
+              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+            />
+            {p.label}
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function LogsView() {
   const { data: samples = [] } = useAllSamples();
   const { data: slides = [] } = useAllSlides();
@@ -111,13 +192,18 @@ export function LogsView() {
 
   const [project, setProject] = useState("all");
   const [stain, setStain] = useState("all");
-  const [status, setStatus] = useState<Status>("all");
+  const [assayType, setAssayType] = useState<"all" | "stain" | "ihc">("all");
+  const [onlyMatching, setOnlyMatching] = useState(false);
+  const [phases, setPhases] = useState<Set<PhaseKey>>(new Set());
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("sample");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [exportMsg, setExportMsg] = useState<string | null>(null);
-  useEffect(() => setExportMsg(null), [project, stain, status, search]);
+  const phasesKey = [...phases].join(",");
+  useEffect(() => setExportMsg(null), [project, stain, assayType, phasesKey, fromDate, toDate, search]);
 
   const slidesBySample = useMemo(() => {
     const map = new Map<string, Slide[]>();
@@ -144,32 +230,55 @@ export function LogsView() {
       samples.map((sample) => {
         const slidesForSample = slidesBySample.get(sample.sample_code) ?? [];
         const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
-        return { sample, slides: slidesForSample, agents };
+        const phase = samplePhase(sample, slidesForSample);
+        const progress = analyzedProgress(slidesForSample);
+        const extras = slidesForSample.length - progress.total;
+        const hasNotes =
+          Boolean(sample.overall_notes?.trim()) || slidesForSample.some((s) => Boolean(s.notes?.trim()));
+        return {
+          sample,
+          slides: slidesForSample,
+          agents,
+          phase,
+          progress,
+          extras,
+          hasNotes,
+          lastActivity: lastActivityOf(sample, slidesForSample),
+        };
       }),
     [samples, slidesBySample],
   );
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return rows.filter(({ sample, slides: sampleSlides, agents }) => {
+    return rows.filter((row) => {
+      const { sample, slides: sampleSlides, agents, phase } = row;
       if (project !== "all" && sample.project_code !== project) return false;
-      // "Analyzed" vs "Active" is a per-slide state — a block itself never
-      // reaches the analyzed stage. A sample counts as fully analyzed once every
-      // one of its ASSAY slides is analyzed (extras never get an analyzed stamp,
-      // so they're excluded); "Active" is anything not yet fully analyzed.
-      const assaySlides = sampleSlides.filter((s) => s.purpose !== "extra");
-      const fullyAnalyzed =
-        assaySlides.length > 0 && assaySlides.every((s) => Boolean(s.stage_analyzed_at));
-      if (status === "analyzed" && !fullyAnalyzed) return false;
-      if (status === "active" && fullyAnalyzed) return false;
+      if (phases.size > 0 && !phases.has(phase)) return false;
+      if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
+      const added = (sample.date_added || "").slice(0, 10);
+      if (fromDate && added && added < fromDate) return false;
+      if (toDate && added && added > toDate) return false;
       if (query) {
-        const hay = [sample.sample_code, sample.sample_description, ...agents].join(" ").toLowerCase();
+        const hay = [
+          sample.sample_code,
+          sample.sample_description,
+          sample.project_code,
+          sample.project_name,
+          sample.overall_notes,
+          ...agents,
+          ...sampleSlides.map((s) => s.slide_code),
+          ...sampleSlides.map((s) => s.notes),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
         if (!hay.includes(query)) return false;
       }
       return true;
     });
-  }, [rows, project, status, stain, search]);
+  }, [rows, project, phases, assayType, stain, fromDate, toDate, search]);
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
@@ -190,7 +299,8 @@ export function LogsView() {
           cmp = (sa.project_code || "").localeCompare(sb.project_code || "");
           break;
         case "stage":
-          cmp = sampleStage(sa.current_stage).localeCompare(sampleStage(sb.current_stage));
+          // Pipeline order (Pre-processing → Analyzed), not alphabetical.
+          cmp = PHASE_RANK[a.phase] - PHASE_RANK[b.phase];
           break;
         case "stains":
           cmp = a.agents.join(",").localeCompare(b.agents.join(","));
@@ -200,6 +310,9 @@ export function LogsView() {
           break;
         case "added":
           cmp = (sa.date_added || "").localeCompare(sb.date_added || "");
+          break;
+        case "updated":
+          cmp = a.lastActivity.localeCompare(b.lastActivity);
           break;
       }
       return cmp * dir;
@@ -221,15 +334,24 @@ export function LogsView() {
       return next;
     });
   }
-  async function exportCsv() {
+  async function runExport(kind: "csv" | "xlsx") {
     setExportMsg(null);
+    // Export exactly what's shown: the current filter + sort, one row per slide.
+    const payload = sorted.map((r) => ({ sample: r.sample, slides: r.slides }));
     try {
-      // Export exactly what's shown: the current filter + sort, one row per slide.
-      const path = await saveLogsCsv(sorted.map((r) => ({ sample: r.sample, slides: r.slides })));
+      const path = kind === "csv" ? await saveLogsCsv(payload) : await saveLogsXlsx(payload);
       setExportMsg(path ? "Exported." : "Export cancelled.");
     } catch (e) {
       setExportMsg(`Export failed: ${e}`);
     }
+  }
+  function togglePhase(key: PhaseKey) {
+    setPhases((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   const columns: Array<{ key: SortKey; label: string; align?: "right" }> = [
@@ -240,7 +362,17 @@ export function LogsView() {
     { key: "stains", label: "Stains / IHC" },
     { key: "slides", label: "Slides", align: "right" },
     { key: "added", label: "Added" },
+    { key: "updated", label: "Updated" },
   ];
+  const totals = useMemo(() => {
+    let slideCount = 0;
+    let analyzedSamples = 0;
+    for (const r of sorted) {
+      slideCount += r.slides.length;
+      if (r.phase === "analyzed") analyzedSamples += 1;
+    }
+    return { samples: sorted.length, slides: slideCount, analyzed: analyzedSamples };
+  }, [sorted]);
   const selectClass =
     "rounded-md border border-line bg-white px-2 py-1 text-xs text-ink outline-none";
 
@@ -253,7 +385,7 @@ export function LogsView() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search sample, description, or stain…"
+            placeholder="Search code, description, stain, slide, notes…"
             className="w-56 bg-transparent text-xs text-ink outline-none placeholder:text-ink-faint"
           />
         </label>
@@ -269,22 +401,78 @@ export function LogsView() {
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
-        <select className={selectClass} value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="analyzed">Analyzed</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => void exportCsv()}
-          title="Export the current view (filtered + sorted) as a CSV, one row per slide"
-          className="ml-auto flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft hover:text-ink"
+        <select
+          className={selectClass}
+          value={assayType}
+          onChange={(e) => setAssayType(e.target.value as "all" | "stain" | "ihc")}
         >
-          <Download size={13} /> Export CSV
-        </button>
-        <span className="text-xs text-ink-faint">
-          {exportMsg ?? `${sorted.length} ${sorted.length === 1 ? "sample" : "samples"}`}
+          <option value="all">Any type</option>
+          <option value="stain">Stain</option>
+          <option value="ihc">IHC</option>
+        </select>
+        <StageFilter selected={phases} onToggle={togglePhase} />
+        {stain !== "all" && (
+          <label className="flex cursor-pointer items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft">
+            <input
+              type="checkbox"
+              checked={onlyMatching}
+              onChange={(e) => setOnlyMatching(e.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+            />
+            Only matching slides
+          </label>
+        )}
+        <label className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-faint">
+          Added
+          <input
+            type="date"
+            aria-label="Added from"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="bg-transparent text-xs text-ink outline-none"
+          />
+          <span>–</span>
+          <input
+            type="date"
+            aria-label="Added to"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="bg-transparent text-xs text-ink outline-none"
+          />
+        </label>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void runExport("csv")}
+            title="Export the current view (filtered + sorted) as CSV, one row per slide"
+            className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft hover:text-ink"
+          >
+            <Download size={13} /> CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void runExport("xlsx")}
+            title="Export the current view (filtered + sorted) as an Excel workbook"
+            className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft hover:text-ink"
+          >
+            <Download size={13} /> Excel
+          </button>
+        </div>
+      </div>
+
+      {/* Summary bar */}
+      <div className="mb-2 flex items-center gap-3 px-1 text-xs text-ink-faint">
+        <span>
+          <span className="font-semibold text-ink-soft">{totals.samples}</span>{" "}
+          {totals.samples === 1 ? "sample" : "samples"}
         </span>
+        <span>
+          <span className="font-semibold text-ink-soft">{totals.slides}</span> slides
+        </span>
+        <span>
+          <span className="font-semibold text-ink-soft">{totals.analyzed}</span> analyzed
+        </span>
+        {exportMsg && <span className="ml-auto text-brand">{exportMsg}</span>}
       </div>
 
       {/* Table */}
@@ -319,17 +507,23 @@ export function LogsView() {
                 </td>
               </tr>
             )}
-            {sorted.map(({ sample, slides: sampleSlides, agents }) => {
-              const isOpen = expanded.has(sample.id);
+            {sorted.map((row) => {
+              const isOpen = expanded.has(row.sample.id);
               return (
                 <FragmentRow
-                  key={sample.id}
-                  sample={sample}
-                  agents={agents}
-                  slides={sampleSlides}
+                  key={row.sample.id}
+                  sample={row.sample}
+                  agents={row.agents}
+                  slides={row.slides}
+                  phaseLabel={PHASE_LABEL[row.phase]}
+                  progress={row.progress}
+                  extras={row.extras}
+                  hasNotes={row.hasNotes}
+                  lastActivity={row.lastActivity}
                   open={isOpen}
-                  onToggle={() => toggleExpand(sample.id)}
+                  onToggle={() => toggleExpand(row.sample.id)}
                   stainFilter={stain === "all" ? null : stain}
+                  onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
                 />
               );
@@ -345,17 +539,29 @@ function FragmentRow({
   sample,
   agents,
   slides,
+  phaseLabel,
+  progress,
+  extras,
+  hasNotes,
+  lastActivity,
   open,
   onToggle,
   stainFilter,
+  onlyMatching,
   colCount,
 }: {
   sample: Sample;
   agents: string[];
   slides: Slide[];
+  phaseLabel: string;
+  progress: { done: number; total: number };
+  extras: number;
+  hasNotes: boolean;
+  lastActivity: string;
   open: boolean;
   onToggle: () => void;
   stainFilter: string | null;
+  onlyMatching: boolean;
   colCount: number;
 }) {
   const { editSampleNotes, editSlideNotes } = useActions();
@@ -368,6 +574,12 @@ function FragmentRow({
       return next;
     });
   }
+  // With a stain filter active, optionally show only the slides that match it.
+  const visibleSlides =
+    stainFilter && onlyMatching
+      ? slides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
+      : slides;
+  const slideTitle = extras > 0 ? `${progress.total} assay · ${extras} extra` : `${slides.length} slides`;
 
   return (
     <>
@@ -378,17 +590,49 @@ function FragmentRow({
         <td className="pl-2 text-ink-faint">
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </td>
-        <td className="px-2 py-1.5 font-semibold text-ink">{sample.sample_code}</td>
+        <td className="px-2 py-1.5 font-semibold text-ink">
+          <span className="inline-flex items-center gap-1">
+            {sample.is_priority ? (
+              <Star size={11} aria-hidden className="shrink-0 fill-amber-400 text-amber-400" />
+            ) : null}
+            {sample.sample_code}
+            {hasNotes && (
+              <span title="Has notes" aria-hidden className="text-ink-faint">
+                📝
+              </span>
+            )}
+          </span>
+        </td>
         <td className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft">{sample.sample_description || "—"}</td>
         <td className="px-2 py-1.5 text-ink-soft">{sample.project_code ?? ""}</td>
-        <td className="px-2 py-1.5 text-ink-soft">{sampleStage(sample.current_stage)}</td>
+        <td className="px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            <span className="whitespace-nowrap text-ink-soft">{phaseLabel}</span>
+            {progress.total > 0 && (
+              <span className="flex items-center gap-1" title={`${progress.done}/${progress.total} analyzed`}>
+                <span className="h-1.5 w-10 overflow-hidden rounded-full bg-line">
+                  <span
+                    className="block h-full rounded-full bg-brand"
+                    style={{ width: `${(progress.done / progress.total) * 100}%` }}
+                  />
+                </span>
+                <span className="tabular-nums text-[10px] text-ink-faint">
+                  {progress.done}/{progress.total}
+                </span>
+              </span>
+            )}
+          </div>
+        </td>
         <td className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft">
           {agents.length ? agents.join(", ") : "—"}
         </td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft">{slides.length}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
+          {slides.length}
+        </td>
         <td className="px-2 py-1.5 text-ink-faint" title={sample.date_added}>
           {(sample.date_added || "").slice(0, 10)}
         </td>
+        <td className="px-2 py-1.5 tabular-nums text-ink-faint">{lastActivity.slice(0, 10) || "—"}</td>
       </tr>
       {open && (
         <tr>
@@ -411,13 +655,16 @@ function FragmentRow({
 
             {/* Slides — each with its own separate timeline. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-              Slides ({slides.length})
+              Slides ({visibleSlides.length}
+              {visibleSlides.length !== slides.length ? ` of ${slides.length}` : ""})
             </h4>
-            {slides.length === 0 ? (
-              <p className="text-[11px] text-ink-faint">No slides cut yet for this sample.</p>
+            {visibleSlides.length === 0 ? (
+              <p className="text-[11px] text-ink-faint">
+                {slides.length === 0 ? "No slides cut yet for this sample." : "No slides match the stain filter."}
+              </p>
             ) : (
               <div className="divide-y divide-line/60 overflow-hidden rounded-md border border-line/60">
-                {slides.map((slide) => {
+                {visibleSlides.map((slide) => {
                   const match =
                     stainFilter && slide.assay_name?.toLowerCase() === stainFilter.toLowerCase();
                   const slideOpen = openSlides.has(slide.id);

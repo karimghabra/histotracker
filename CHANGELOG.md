@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.4 - 2026-07-25
+
+Logs rework (GitHub issues #44–#54):
+
+- **Stage column now shows real progress.** Instead of the block's stage (which
+  never advances past "Embedded"), each row shows the sample's pipeline phase
+  (Pre-processing → Embedded → Sectioned → Staining → Imaging → Analyzed) with an
+  `N/M analyzed` progress bar. (#44)
+- **Stage filter** — a multi-select of those phases replaces the old
+  Active/Analyzed toggle. (#45)
+- **Sorting** — new "Updated" (last-activity) column, and the Stage sort now
+  follows pipeline order instead of alphabetical. (#46)
+- **Assay-type filter** (stain vs IHC) and a slide-count tooltip that breaks down
+  assay vs extra slides. (#47)
+- **Search** now also matches slide codes, notes, and project name. (#48)
+- **Notes indicator** (📝) on rows that carry sample/slide notes. (#49)
+- **Date-added range** filter. (#50)
+- **Show only matching slides** toggle when a stain filter is active. (#51)
+- **Summary bar** (samples / slides / analyzed counts for the current view). (#52)
+- **Priority star** shown in the log. (#53)
+- **Export to Excel (XLSX)** alongside CSV. (#54)
+
 ## 0.4.3 - 2026-07-25
 
 - **Logs "Active" filter fixed.** Active/Analyzed now partition on slide state: a

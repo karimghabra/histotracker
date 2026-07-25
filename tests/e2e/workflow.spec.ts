@@ -287,15 +287,14 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
 
-  // (2) The Logs "Analyzed" filter now matches the sample.
+  // (2) The Logs stage filter places the sample in the Analyzed phase.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  const statusSelect = page
-    .locator("select")
-    .filter({ has: page.locator("option", { hasText: "All statuses" }) });
-  await statusSelect.selectOption({ label: "Analyzed" });
+  await page.locator("summary").filter({ hasText: /stage/ }).click();
+  await page.getByRole("checkbox", { name: "Analyzed" }).check();
   await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
-  // Flip to Active → the analyzed sample drops out.
-  await statusSelect.selectOption({ label: "Active" });
+  // Filter to a different phase → the analyzed sample drops out.
+  await page.getByRole("checkbox", { name: "Analyzed" }).uncheck();
+  await page.getByRole("checkbox", { name: "Staining / IHC" }).check();
   await expect(page.getByText("No samples match")).toBeVisible();
 });
 
@@ -338,24 +337,24 @@ test("Logs status partition + CSV export", async ({ page }) => {
   await expect(page.getByText("EE-0002")).toBeVisible();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  const statusSelect = page
-    .locator("select")
-    .filter({ has: page.locator("option", { hasText: "All statuses" }) });
 
-  // All → both; Analyzed → only EE-0001; Active → only EE-0002.
+  // No filter → both. Stage=Analyzed → only EE-0001. Stage=Pre-processing → only EE-0002.
   await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
   await page.screenshot({ path: "test-results/logs-all.png", fullPage: true });
-  await statusSelect.selectOption({ label: "Analyzed" });
+
+  await page.locator("summary").filter({ hasText: /stage/ }).click();
+  await page.getByRole("checkbox", { name: "Analyzed" }).check();
   await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toHaveCount(0);
-  await statusSelect.selectOption({ label: "Active" });
+  await page.getByRole("checkbox", { name: "Analyzed" }).uncheck();
+  await page.getByRole("checkbox", { name: "Pre-processing" }).check();
   await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "Pre-processing" }).uncheck();
 
-  // Export CSV (all statuses) → confirmation + the file lands in the virtual FS.
-  await statusSelect.selectOption({ label: "All statuses" });
-  await page.getByRole("button", { name: /Export CSV/ }).click();
+  // Export CSV (no stage filter) → confirmation + the file lands in the virtual FS.
+  await page.getByRole("button", { name: "CSV", exact: true }).click();
   await expect(page.getByText("Exported.")).toBeVisible();
   const csv = await page.evaluate(() => {
     for (let i = 0; i < localStorage.length; i += 1) {
@@ -368,4 +367,16 @@ test("Logs status partition + CSV export", async ({ page }) => {
   expect(csv).toContain("EE-0001-A");
   expect(csv).toContain("Alcian Blue");
   expect(csv).toContain("EE-0002"); // the slide-less in-progress block still appears
+
+  // Export XLSX too → a .xlsx lands in the virtual FS.
+  await page.getByRole("button", { name: "Excel", exact: true }).click();
+  await expect(page.getByText("Exported.")).toBeVisible();
+  const hasXlsx = await page.evaluate(() => {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".xlsx")) return true;
+    }
+    return false;
+  });
+  expect(hasXlsx).toBe(true);
 });
