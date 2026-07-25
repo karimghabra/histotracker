@@ -29,6 +29,11 @@ legacy/csv/
 # Local UI verification captures
 appshot*.png
 
+# Playwright browser-driven E2E harness output
+test-results/
+playwright-report/
+.playwright/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
