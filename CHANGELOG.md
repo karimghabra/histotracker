@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.1 - 2026-07-25
+
+The 0.4.0 tag never produced an installer — its CI build failed at
+`pnpm install --frozen-lockfile` because four dev dependencies added for the
+Playwright harness (`@playwright/test`, `playwright`, `sql.js`, `@types/sql.js`)
+were only written to `package-lock.json`, not `pnpm-lock.yaml`. 0.4.1 syncs the
+pnpm lockfile so the release actually builds, and folds in everything intended
+for 0.4.0:
+
+- **Image-based undo/redo**: undo now reverts to a previous whole-file SQLite
+  image (WAL-checkpointed), and the UI is a pure reflection of the DB. History
+  survives reloads (persisted to IndexedDB) and undo never signs you out.
+- **Manage dialog**: a tabbed dialog to manage users, projects, and the
+  stain/IHC catalog (add / rename / deactivate / delete, where delete is blocked
+  when the item is still referenced so prior slide assignments are never lost).
+- **Logs page**: a spreadsheet of every sample with filters (project / stain /
+  status), sorting, stain search, and per-sample slide drill-down.
+- **Separate sample & slide timelines** in the Logs, rendered as even,
+  tab-separated columns; the slide timeline is condensed to
+  Cut / Stained / Coverslipped / Imaged. Slides are now stamped with a local
+  `stage_cut_at` at cut time so "Cut" no longer displays in UTC.
+- **Notes** on each sample and each slide, editable from the Logs and undoable.
+- **Sectioning rework**: fulfilled plans are archived and cleared on cut (a fresh
+  Send-for-Cutting always starts a wholly new plan), and a multi-block cut uses a
+  per-block navigator so each block is cut by its own plan.
+
 ## 0.3.6 - 2026-07-25
 
 - **Fixed undo/redo corrupting the database** (critical regression in 0.3.5).
