@@ -4,7 +4,7 @@ import type { SectionRequest, Slide, SlidePurpose } from "../lib/types";
 import { SECTION_STAGES } from "../lib/stages";
 import { Button } from "./ui";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useImagingSlides, useSectionSlides } from "../hooks/useData";
+import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { duplicateLabel } from "../lib/utils";
@@ -109,7 +109,10 @@ export function SectionDetailsDrawer({
     setSlidePicturesTaken,
     completeSectionImaging,
   } = useActions();
-  const { data: slides = [] } = useSectionSlides(section.id);
+  // A Needs-Sectioning card groups every cut group of a sample, so the drawer
+  // shows the slides of ALL grouped sections, not just the primary one (#55).
+  const drawerSections = selectedSections.length > 0 ? selectedSections : [section];
+  const { data: slides = [] } = useSectionsSlides(drawerSections.map((s) => s.id));
   const { data: assayCatalog = [] } = useAssayCatalog();
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [draft, setDraft] = useState("");

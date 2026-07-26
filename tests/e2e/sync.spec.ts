@@ -42,6 +42,21 @@ async function seedWorkstation(page: Page) {
   await expect(page.getByText("EE-0001")).toBeVisible();
 }
 
+// Drive EE-0001 all the way to Embedded Inventory on the workstation.
+async function embedBlockWs(ws: Page) {
+  await ws.getByText("EE-0001", { exact: true }).click();
+  await ws.getByRole("button", { name: "Placed in fixative" }).click();
+  await ws.getByRole("button", { name: "Removed from fixative" }).click();
+  await ws.getByRole("button", { name: "Placed in ethanol" }).click();
+  await ws.locator("button:has(svg.lucide-x)").first().click();
+  await dragOnto(ws, "EE-0001", "Processor");
+  await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  await clickUntil(ws, "Start Batch", ws.getByText("Batch 1", { exact: true }));
+  await dragOnto(ws, "Batch 1", "Needs Embedding");
+  await dragOnto(ws, "EE-0001", "Embedded Inventory");
+  await expect(column(ws, "Embedded Inventory").getByText("EE-0001")).toBeVisible({ timeout: 15000 });
+}
+
 // Run a manual sync cycle and wait for it to settle without error.
 async function syncNow(page: Page) {
   await page.getByTitle("Sync now").click();
@@ -288,6 +303,51 @@ test("viewer stain request formally flags the block on the workstation", async (
   await vw.getByRole("button", { name: /My requests/ }).click();
   await expect(vw.getByText("EE-0001").first()).toBeVisible();
   await vw.screenshot({ path: "test-results/sync-request.png", fullPage: true });
+
+  await wsCtx.close();
+  await vwCtx.close();
+});
+
+// The formal request should AUTO-drive the workflow: a request for a block that
+// has an available extra pulls that extra straight into Staining and marks the
+// request acknowledged — no manual technician step.
+test("viewer request auto-pulls an available extra into Staining and acknowledges it", async ({ browser }) => {
+  const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `req2-${Date.now()}`);
+  await ws.goto("/?freshdb=1");
+  await seedWorkstation(ws);
+  await vw.goto("/?freshdb=1");
+  await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
+
+  await embedBlockWs(ws);
+  // Cut EE-0001 as all extras (default plan) → extras land in inventory.
+  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
+  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.locator("button:has(svg.lucide-x)").first().click();
+  await ws.getByText("4 slides").first().click();
+  await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
+  // The section drawer auto-closes once the all-extras section leaves Needs Sectioning.
+  await expect(column(ws, "Extras").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+  await streamTo(ws, vw, column(vw, "Extras").getByText("EE-0001").first());
+
+  // Viewer requests a stain.
+  await vw.getByRole("button", { name: /Request stain/ }).click();
+  await vw.getByPlaceholder("e.g. LIV-0007", { exact: true }).fill("EE-0001");
+  await vw
+    .locator("select")
+    .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })
+    .selectOption({ index: 1 });
+  await vw.getByRole("button", { name: /Send request/ }).click();
+
+  // Workstation drains → an extra is auto-pulled into Staining (no manual step).
+  await expect(async () => {
+    await syncNow(ws);
+    await expect(column(ws, "Staining / IHC").getByText("EE-0001").first()).toBeVisible({ timeout: 3000 });
+  }).toPass({ timeout: 40000 });
+
+  // …and the request is auto-acknowledged, not left a stale "requested" item.
+  await ws.getByRole("button", { name: "Requests" }).click();
+  await expect(ws.getByText("Acknowledged")).toBeVisible();
 
   await wsCtx.close();
   await vwCtx.close();

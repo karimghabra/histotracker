@@ -1573,6 +1573,20 @@ export async function listSlidesForSectionRequest(id: number): Promise<Slide[]> 
   );
 }
 
+/** Slides across several cut groups — a Needs-Sectioning card groups every
+ *  section_request of a sample, so its drawer must show all of them, not just
+ *  the first group's slides. */
+export async function listSlidesForSections(sectionIds: number[]): Promise<Slide[]> {
+  if (sectionIds.length === 0) return [];
+  for (const id of sectionIds) await ensureSlidesForSectionRequest(id);
+  const db = await getDb();
+  const placeholders = sectionIds.map(() => "?").join(", ");
+  return db.select<Slide[]>(
+    `SELECT * FROM slides WHERE section_request_id IN (${placeholders}) ORDER BY slide_ordinal, id`,
+    sectionIds,
+  );
+}
+
 export async function listExtraSlides(): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(

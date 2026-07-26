@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  acknowledgeRequestsForSlide,
   assayTypeByName,
   findSampleIdByCode,
   getDbFilePath,
@@ -326,7 +327,14 @@ async function applyRequestToBlock(payload: RequestFile): Promise<void> {
       ? payload.assay_type
       : await assayTypeByName(assayName);
   if (!assayType) return;
-  await requestStainForSample({ sampleId, assayType, assayName });
+  const result = await requestStainForSample({ sampleId, assayType, assayName });
+  // If a matching extra was pulled straight into staining, the request has been
+  // actioned automatically — acknowledge it so it isn't left a stale "requested"
+  // inbox item. (A block with no extra stays flagged ⚑ needs stain for cutting,
+  // and gets acknowledged when the tech assigns the cut slide.)
+  if (result.target === "extra" && result.slideId != null) {
+    await acknowledgeRequestsForSlide(result.slideId);
+  }
 }
 
 /**

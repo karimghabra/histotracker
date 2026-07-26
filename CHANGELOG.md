@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.6 - 2026-07-26
+
+Bug fixes from 0.4.5 testing (issues #55–#57):
+
+- **Section drawer now lists every planned assay slide (#55).** A Needs-Sectioning
+  card groups all of a sample's cut groups, but the drawer only showed the first
+  group's single slide. It now shows the slides of all the grouped cut groups.
+- **Undo after the staining→imaging scatter steps back one stage (#56).** The
+  stain-protocol steps weren't recorded as undo snapshots, so undoing after the
+  scatter jumped all the way back to Needs Sectioning. Each protocol step (and
+  the scatter it triggers) is now undoable — one Undo returns slides to Staining.
+- **A viewer stain request now actually drives the workflow (#57).** When the
+  workstation drains a request it auto-actions it like a bench request: a block
+  with an available extra pulls that extra straight into Staining and the request
+  is auto-acknowledged; a block with no extra is flagged ⚑ needs stain with the
+  cut prefilled. No manual technician step required for the movement.
+
 ## 0.4.5 - 2026-07-25
 
 - **Viewer sync now reflects every workflow stage.** After a viewer pulled a

@@ -222,7 +222,11 @@ request the bench UI does** — `drainRequests` → `applyRequestToBlock` calls
 `requestStainForSample` on the matching block, so it's flagged ⚑ needs stain (or
 an existing extra is pulled into staining), not just parked in the inbox. The
 viewer's `RequestStainDialog` picks a catalog agent (so the request carries
-`assay_type`); an unknown block/agent falls back to inbox-only. Then the
+`assay_type`); an unknown block/agent falls back to inbox-only. When the
+auto-action consumes an available extra into staining, the request is
+auto-**acknowledged** (`acknowledgeRequestsForSlide`) so it isn't left a stale
+`requested` item; a block flagged for cutting stays `requested` until the tech
+assigns the cut slide. Then the
 workstation resolves (`acknowledged` → `done`/`rejected`) → status rides back down
 in the next snapshot so the requester sees it. Viewers see their own requests by
 default, with a **Mine / All** toggle (avoids duplicate requests).

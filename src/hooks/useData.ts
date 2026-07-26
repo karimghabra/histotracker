@@ -12,6 +12,7 @@ import {
   listOpenSectionRequests,
   listOpenSlideStacks,
   listSlidesForSectionRequest,
+  listSlidesForSections,
   listSlidesForStack,
   listStainSlidesForSections,
   listSampleTimelineEvents,
@@ -106,6 +107,17 @@ export function useSectionSlides(sectionId: number | null) {
     queryKey: ["section-slides", sectionId],
     queryFn: () => listSlidesForSectionRequest(sectionId as number),
     enabled: sectionId !== null,
+  });
+}
+
+// All slides across a set of grouped cut groups (keyed under "section-slides" so
+// the existing invalidation covers it).
+export function useSectionsSlides(sectionIds: number[]) {
+  const key = [...sectionIds].sort((a, b) => a - b);
+  return useQuery({
+    queryKey: ["section-slides", "multi", key],
+    queryFn: () => listSlidesForSections(sectionIds),
+    enabled: sectionIds.length > 0,
   });
 }
 

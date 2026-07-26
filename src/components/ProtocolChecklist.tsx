@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
-import { ensureChecklist, setChecklistItemComplete } from "../lib/db";
+import { ensureChecklist, setChecklistItemComplete, snapshotDb } from "../lib/db";
+import { useUndoStore } from "../lib/undo";
 import { cn } from "../lib/utils";
 
 export function ProtocolChecklist({
@@ -31,6 +32,7 @@ export function ProtocolChecklist({
     () => window.localStorage.getItem("histometer-active-operator") ?? "",
   );
   const [error, setError] = useState<string | null>(null);
+  const record = useUndoStore((s) => s.record);
   const complete = items.filter((item) => item.is_complete === 1).length;
 
   async function toggle(itemId: number, value: boolean) {
@@ -39,9 +41,13 @@ export function ProtocolChecklist({
       return;
     }
     setError(null);
+    const item = items.find((candidate) => candidate.id === itemId);
+    // Snapshot BEFORE the step so Undo peels back one protocol step (and the
+    // staining→imaging scatter it triggers) at a time, instead of jumping to the
+    // last board-level action (#56).
+    const before = await snapshotDb();
     window.localStorage.setItem("histometer-active-operator", operator.trim());
     await setChecklistItemComplete(itemId, value, operator.trim());
-    const item = items.find((candidate) => candidate.id === itemId);
     const scopeIds = [...new Set([scopeId, ...batchScopeIds])];
     if (item) {
       for (const targetScopeId of scopeIds) {
@@ -57,6 +63,7 @@ export function ProtocolChecklist({
         if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
       }
       if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
+      record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, snapshot: before });
     }
     await qc.invalidateQueries({ queryKey });
     await Promise.all(scopeIds.map((id) => qc.invalidateQueries({ queryKey: ["protocol-checklist", scopeType, id, stageKey] })));

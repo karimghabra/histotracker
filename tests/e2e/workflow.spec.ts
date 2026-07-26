@@ -66,8 +66,14 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
 async function embedBlock(page: Page) {
   await completePreprocessing(page);
   await dragOnto(page, "EE-0001", "Processor");
-  await page.getByRole("button", { name: "Start Batch" }).click();
-  await expect(page.getByText("Batch 1", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  // A background refetch can momentarily blank the active operator and no-op the
+  // Start-Batch click, so retry it until the batch actually appears.
+  await expect(async () => {
+    const btn = page.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 15000 });
   await dragOnto(page, "Batch 1", "Needs Embedding");
   await dragOnto(page, "EE-0001", "Embedded Inventory");
 }
@@ -379,4 +385,61 @@ test("Logs status partition + CSV export", async ({ page }) => {
     return false;
   });
   expect(hasXlsx).toBe(true);
+});
+
+test("section drawer lists assay slides across all grouped cut groups (#55)", async ({ page }) => {
+  await seedSample(page);
+  await embedBlock(page);
+
+  // Cut with TWO different agents → two section_requests, grouped under one card.
+  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  const rows = page.locator(".max-h-64 select");
+  await rows.nth(0).selectOption({ index: 1 });
+  await rows.nth(1).selectOption({ index: 2 });
+  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.locator("button:has(svg.lucide-x)").first().click();
+
+  // Open the grouped Needs Sectioning card → the drawer shows BOTH assay slides,
+  // not just the first cut group's one slide.
+  await page.getByText("4 slides").first().click();
+  await expect(page.getByText("Assay slides")).toBeVisible();
+  await expect(page.getByText("EE-0001-A", { exact: true })).toBeVisible();
+  await expect(page.getByText("EE-0001-B", { exact: true })).toBeVisible();
+});
+
+test("undo after the staining scatter returns to Staining, not Needs Sectioning (#56)", async ({ page }) => {
+  await seedSample(page);
+  await embedBlock(page);
+  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page
+    .locator("select")
+    .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
+    .first()
+    .selectOption({ index: 1 });
+  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.locator("button:has(svg.lucide-x)").first().click();
+  await page.getByText("4 slides").first().click();
+  await page.getByRole("button", { name: /Mark Sectioned/ }).click();
+  await page.locator("button:has(svg.lucide-x)").first().click();
+
+  const col = (title: string) =>
+    page.locator("div.rounded-lg").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+
+  // Run the stain protocol → scatter into Ready for Imaging.
+  await col("Staining / IHC").getByText("Alcian Blue").first().click();
+  await page.getByLabel("Active operator").fill("Alex");
+  const steps = ["Stained", "Coverslipped", "Dried"];
+  for (let i = 0; i < steps.length; i += 1) {
+    await page.getByRole("button", { name: steps[i], exact: true }).click();
+    if (i < steps.length - 1) await expect(page.getByText(new RegExp(`${i + 1}/3 complete`))).toBeVisible();
+  }
+  await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+
+  // Undo once → slides return to Staining, NOT all the way to Needs Sectioning.
+  await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
+  await expect(col("Staining / IHC").getByText("Alcian Blue").first()).toBeVisible({ timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-0001")).toHaveCount(0);
+  await expect(col("Needs Sectioning").getByText("4 slides")).toHaveCount(0);
 });
