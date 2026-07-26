@@ -217,10 +217,20 @@ scope), re-enter it in each app's setup screen (Token field). Nothing else chang
 cycle.
 
 **Request lifecycle** — viewer submits → file in `requests/` → workstation drains
-it into `stain_requests` (status `requested`) → workstation resolves
-(`acknowledged` → `done`/`rejected`) → status rides back down in the next snapshot
-so the requester sees it. Viewers see their own requests by default, with a
-**Mine / All** toggle to view everyone's (avoids duplicate requests).
+it into `stain_requests` (status `requested`) **and raises the same formal stain
+request the bench UI does** — `drainRequests` → `applyRequestToBlock` calls
+`requestStainForSample` on the matching block, so it's flagged ⚑ needs stain (or
+an existing extra is pulled into staining), not just parked in the inbox. The
+viewer's `RequestStainDialog` picks a catalog agent (so the request carries
+`assay_type`); an unknown block/agent falls back to inbox-only. Then the
+workstation resolves (`acknowledged` → `done`/`rejected`) → status rides back down
+in the next snapshot so the requester sees it. Viewers see their own requests by
+default, with a **Mine / All** toggle (avoids duplicate requests).
+
+**Refresh on sync** — a pull swaps the whole SQLite image, so `useSync`'s
+`invalidateAll()` invalidates *every* React Query (not a hand-maintained key
+list, which once omitted `open-slide-stacks` + the Logs and left a viewer's
+Staining / Imaging columns stale).
 
 **Auto-acknowledge** — when the workstation assigns/creates a `stain` slide, any
 still-`requested` request matching the same sample + assay (and slide, if the

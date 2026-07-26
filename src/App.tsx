@@ -247,7 +247,6 @@ export default function App() {
     for (const section of sections) if (section.parent_code) codes.add(section.parent_code);
     return [...codes].sort();
   }, [samples, sections]);
-  const requestAssayNames = useMemo(() => assayCatalog.map((entry) => entry.name), [assayCatalog]);
 
   // Surface background sync failures without stealing focus.
   useEffect(() => {
@@ -697,7 +696,7 @@ export default function App() {
         <RequestStainDialog
           operatorName={syncConfig.operator_name}
           sampleCodes={requestSampleCodes}
-          assayNames={requestAssayNames}
+          catalog={assayCatalog}
           onSubmitted={(message) => flash(message)}
           onClose={() => setShowRequestStain(false)}
         />

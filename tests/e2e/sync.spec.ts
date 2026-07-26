@@ -238,3 +238,57 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   await wsCtx.close();
   await vwCtx.close();
 });
+
+// A viewer's stain request should raise the SAME formal request the bench does:
+// the workstation drains it and flags the block (⚑ needs stain), and that flag
+// streams back to the viewer — not just a passive inbox note.
+test("viewer stain request formally flags the block on the workstation", async ({ browser }) => {
+  const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `req-${Date.now()}`);
+  await ws.goto("/?freshdb=1");
+  await seedWorkstation(ws);
+  await vw.goto("/?freshdb=1");
+  await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
+
+  // Take EE-0001 to Embedded Inventory so it's a real block a viewer can request.
+  await ws.getByText("EE-0001", { exact: true }).click();
+  await ws.getByRole("button", { name: "Placed in fixative" }).click();
+  await ws.getByRole("button", { name: "Removed from fixative" }).click();
+  await ws.getByRole("button", { name: "Placed in ethanol" }).click();
+  await ws.locator("button:has(svg.lucide-x)").first().click();
+  await dragOnto(ws, "EE-0001", "Processor");
+  await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  await clickUntil(ws, "Start Batch", ws.getByText("Batch 1", { exact: true }));
+  await dragOnto(ws, "Batch 1", "Needs Embedding");
+  await dragOnto(ws, "EE-0001", "Embedded Inventory");
+  await expect(column(ws, "Embedded Inventory").getByText("EE-0001")).toBeVisible({ timeout: 15000 });
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("EE-0001"));
+
+  // Viewer raises a formal stain request against the synced block.
+  await vw.getByRole("button", { name: /Request stain/ }).click();
+  await vw.getByPlaceholder("e.g. LIV-0007", { exact: true }).fill("EE-0001");
+  await vw
+    .locator("select")
+    .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })
+    .selectOption({ index: 1 });
+  await vw.getByRole("button", { name: /Send request/ }).click();
+
+  // Workstation drains it → the block is flagged "needs stain" (formal request).
+  await expect(async () => {
+    await syncNow(ws);
+    await expect(column(ws, "Embedded Inventory").getByText(/needs stain/i)).toBeVisible({ timeout: 3000 });
+  }).toPass({ timeout: 40000 });
+
+  // The request also lands in the workstation inbox.
+  await ws.getByRole("button", { name: "Requests" }).click();
+  await expect(ws.getByText("EE-0001").first()).toBeVisible();
+  await ws.keyboard.press("Escape");
+
+  // The flag streams back to the viewer, and the viewer tracks its request.
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText(/needs stain/i));
+  await vw.getByRole("button", { name: /My requests/ }).click();
+  await expect(vw.getByText("EE-0001").first()).toBeVisible();
+  await vw.screenshot({ path: "test-results/sync-request.png", fullPage: true });
+
+  await wsCtx.close();
+  await vwCtx.close();
+});

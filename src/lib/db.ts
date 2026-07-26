@@ -2134,6 +2134,28 @@ export async function requestStainForSample(input: {
   return { target: "block", slideId: null, stackId: null, createdStackId: null };
 }
 
+/** Resolve a sample's numeric id from its code (case-insensitive). */
+export async function findSampleIdByCode(code: string): Promise<number | null> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM samples WHERE sample_code = ? COLLATE NOCASE LIMIT 1`,
+    [code.trim()],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/** Look up an agent's type (stain/ihc) from the catalog by name — lets a viewer
+ *  request (which may only carry a name) resolve to a typed, formal request. */
+export async function assayTypeByName(name: string): Promise<"stain" | "ihc" | null> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ assay_type: string }>>(
+    `SELECT assay_type FROM assay_catalog WHERE name = ? COLLATE NOCASE ORDER BY is_active DESC LIMIT 1`,
+    [name.trim()],
+  );
+  const type = rows[0]?.assay_type;
+  return type === "stain" || type === "ihc" ? type : null;
+}
+
 /** Undo of a stain request: return a slide to an inventory extra, unlinking it
  *  from any rack it joined and clearing the staining timestamp (#39). */
 export async function revertSlideToExtra(slideId: number): Promise<void> {

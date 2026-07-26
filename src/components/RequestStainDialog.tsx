@@ -6,45 +6,48 @@ import { submitRequest } from "../lib/githubSync";
 export function RequestStainDialog({
   operatorName,
   sampleCodes,
-  assayNames,
+  catalog,
   defaultSampleCode,
   onSubmitted,
   onClose,
 }: {
   operatorName: string;
   sampleCodes: string[];
-  assayNames: string[];
+  catalog: Array<{ assay_type: string; name: string }>;
   defaultSampleCode?: string;
   onSubmitted: (message: string) => void;
   onClose: () => void;
 }) {
   const [sampleCode, setSampleCode] = useState(defaultSampleCode ?? "");
   const [slideCode, setSlideCode] = useState("");
-  const [requestedAssay, setRequestedAssay] = useState("");
+  // "assay_type::name" — the same encoding the bench "Request a Stain" control uses.
+  const [agent, setAgent] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
     if (!sampleCode.trim()) {
-      setError("Enter the sample this request is for.");
+      setError("Choose the sample this request is for.");
       return;
     }
-    if (!requestedAssay.trim()) {
-      setError("Name the stain or IHC agent you're requesting.");
+    if (!agent) {
+      setError("Choose the stain or IHC agent you're requesting.");
       return;
     }
+    const [assayType, assayName] = agent.split("::");
     setBusy(true);
     setError(null);
     try {
       await submitRequest({
         sampleCode: sampleCode.trim(),
         slideCode: slideCode.trim(),
-        requestedAssay: requestedAssay.trim(),
+        requestedAssay: assayName,
+        assayType: assayType === "ihc" ? "ihc" : "stain",
         note: note.trim(),
         requesterName: operatorName,
       });
-      onSubmitted(`Requested ${requestedAssay.trim()} for ${sampleCode.trim()}`);
+      onSubmitted(`Requested ${assayName} for ${sampleCode.trim()}`);
       onClose();
     } catch (cause) {
       setError(String(cause));
@@ -56,8 +59,9 @@ export function RequestStainDialog({
   return (
     <Modal title="Request a stain" onClose={onClose} width="max-w-md">
       <p className="mb-3 text-xs text-ink-faint">
-        Your request is sent to the workstation, which will action it and publish the update
-        back to you. You can track its status under “My requests”.
+        This raises a formal stain request on the workstation — the block is flagged for
+        cutting (or an existing extra is pulled into staining), just as if requested at the
+        bench. Track its status under “My requests”.
       </p>
 
       <Field label="Sample">
@@ -79,17 +83,18 @@ export function RequestStainDialog({
       </Field>
 
       <Field label="Requested stain / IHC">
-        <TextInput
-          list="request-assay-names"
-          value={requestedAssay}
-          onChange={(e) => setRequestedAssay(e.target.value)}
-          placeholder="e.g. H&E, CD3, Ki-67"
-        />
-        <datalist id="request-assay-names">
-          {assayNames.map((name) => (
-            <option key={name} value={name} />
+        <select
+          value={agent}
+          onChange={(e) => setAgent(e.target.value)}
+          className="w-full rounded-lg border border-line bg-white px-2 py-2 text-sm text-ink outline-none focus:border-brand"
+        >
+          <option value="">Choose an agent…</option>
+          {catalog.map((a) => (
+            <option key={`${a.assay_type}::${a.name}`} value={`${a.assay_type}::${a.name}`}>
+              {a.name} ({a.assay_type})
+            </option>
           ))}
-        </datalist>
+        </select>
       </Field>
 
       <Field label="Note (optional)">

@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  assayTypeByName,
+  findSampleIdByCode,
   getDbFilePath,
   insertStainRequest,
+  requestStainForSample,
   resetDb,
 } from "./db";
 import { buildStatusWorkbookBytes } from "./export";
@@ -269,6 +272,9 @@ export interface RequestInput {
   sampleCode: string;
   slideCode?: string;
   requestedAssay: string;
+  /** Agent type, so the workstation can raise the same FORMAL stain request its
+   *  own bench UI does (flags the block / pulls an extra). Optional for back-compat. */
+  assayType?: "stain" | "ihc";
   note?: string;
   requesterName: string;
 }
@@ -279,6 +285,7 @@ interface RequestFile {
   sample_code: string;
   slide_code: string;
   requested_assay: string;
+  assay_type?: string;
   requester_name: string;
   note: string;
   created_at: string;
@@ -292,6 +299,7 @@ export async function submitRequest(input: RequestInput): Promise<string> {
     sample_code: input.sampleCode.trim(),
     slide_code: input.slideCode?.trim() ?? "",
     requested_assay: input.requestedAssay.trim(),
+    assay_type: input.assayType,
     requester_name: input.requesterName.trim(),
     note: input.note?.trim() ?? "",
     created_at: nowTimestamp(),
@@ -303,6 +311,22 @@ export async function submitRequest(input: RequestInput): Promise<string> {
     `Stain request from ${payload.requester_name || "viewer"}`,
   );
   return uuid;
+}
+
+// Turn an ingested viewer request into the workstation's formal stain request:
+// resolve the block, resolve the agent type (from the request, else the catalog
+// by name), then flag it. No matching block or agent → inbox-only (no throw).
+async function applyRequestToBlock(payload: RequestFile): Promise<void> {
+  const assayName = (payload.requested_assay ?? "").trim();
+  if (!payload.sample_code || !assayName) return;
+  const sampleId = await findSampleIdByCode(payload.sample_code);
+  if (sampleId == null) return;
+  const assayType =
+    payload.assay_type === "stain" || payload.assay_type === "ihc"
+      ? payload.assay_type
+      : await assayTypeByName(assayName);
+  if (!assayType) return;
+  await requestStainForSample({ sampleId, assayType, assayName });
 }
 
 /**
@@ -333,7 +357,14 @@ export async function drainRequests(): Promise<number> {
       note: payload.note ?? "",
       created_at: payload.created_at || nowTimestamp(),
     });
-    if (isNew) ingested += 1;
+    if (isNew) {
+      ingested += 1;
+      // Raise the SAME formal stain request the workstation's own bench UI does:
+      // add it to the block's preselected stains (⚑ needs stain, prefilled cut)
+      // or pull an available extra into staining. Best-effort — a request for an
+      // unknown block/agent still lands in the inbox for manual handling.
+      await applyRequestToBlock(payload).catch(() => undefined);
+    }
     await githubDeleteFile(entry.path, file.sha, `Ingest request ${payload.uuid ?? entry.name}`);
   }
   return ingested;

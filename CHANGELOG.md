@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.5 - 2026-07-25
+
+- **Viewer sync now reflects every workflow stage.** After a viewer pulled a
+  snapshot, the app only refreshed a subset of views, so **stain racks, imaging
+  stacks, and analyzed rows never appeared on a viewer** even though the data had
+  synced. A pull swaps the whole database, so it now refreshes everything.
+  Verified with a two-instance harness that walks a block through the entire
+  pipeline (pre-processing → analyzed) and checks the viewer at each step.
+- **A viewer's stain request is now a formal request.** Instead of only landing
+  in the inbox, the workstation drains the request and raises the same request
+  its own bench UI does — the block is flagged **⚑ needs stain** (or an existing
+  extra is pulled into staining) and that flag streams back to the viewer. The
+  viewer's request dialog now picks an agent from the catalog (so the request
+  carries its stain/IHC type); an unknown block/agent still falls back to
+  inbox-only.
+
 ## 0.4.4 - 2026-07-25
 
 Logs rework (GitHub issues #44–#54):
