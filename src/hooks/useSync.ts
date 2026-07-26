@@ -5,18 +5,6 @@ import { drainRequests, publishSnapshot, pullSnapshotIfNewer } from "../lib/gith
 
 const SYNC_INTERVAL_MS = 120_000; // 2 minutes
 
-// Query keys refreshed after a sync brings in new data.
-const REFRESH_KEYS = [
-  "projects",
-  "open-samples",
-  "open-sections",
-  "processing-batches",
-  "section-slides",
-  "sample-timeline",
-  "extra-slides",
-  "stain-requests",
-];
-
 export interface SyncState {
   syncing: boolean;
   error: string | null;
@@ -40,8 +28,12 @@ export function useSync(config: SyncConfigPublic | null): SyncState {
   // Guard against overlapping runs (interval firing while a manual sync runs).
   const running = useRef(false);
 
+  // A viewer pull swaps the WHOLE SQLite image and a workstation drain can touch
+  // any table, so invalidate every query rather than a hand-maintained subset —
+  // an incomplete list left the viewer's slide-stack columns (Staining / Ready
+  // for Imaging) and the Logs stale after a pull.
   const invalidateAll = useCallback(() => {
-    for (const key of REFRESH_KEYS) qc.invalidateQueries({ queryKey: [key] });
+    qc.invalidateQueries();
   }, [qc]);
 
   const runCycle = useCallback(async () => {
