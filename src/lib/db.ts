@@ -1269,7 +1269,15 @@ export async function syncAssayWorkflowStep(
 ): Promise<void> {
   const db = await getDb();
   const timestamp = complete ? nowTimestamp() : null;
+  // Steps: 0 Deparaffinized, 1 Stained/IHC, 2 Coverslipped (+refrax), 3 Dried.
   if (sortOrder === 0) {
+    await db.execute(
+      `UPDATE slides SET stage_deparaffinized_at = ?
+        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+      [timestamp, sectionRequestId, assayType],
+    );
+    await db.execute(`UPDATE section_requests SET stage_deparaffinized_at = ? WHERE id = ?`, [timestamp, sectionRequestId]);
+  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_stained_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1277,7 +1285,7 @@ export async function syncAssayWorkflowStep(
     );
     const sectionColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
     await db.execute(`UPDATE section_requests SET ${sectionColumn} = ? WHERE id = ?`, [timestamp, sectionRequestId]);
-  } else if (sortOrder === 1) {
+  } else if (sortOrder === 2) {
     await db.execute(
       `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1287,7 +1295,7 @@ export async function syncAssayWorkflowStep(
       `UPDATE section_requests SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
       [timestamp, timestamp, sectionRequestId],
     );
-  } else if (sortOrder === 2) {
+  } else if (sortOrder === 3) {
     await db.execute(
       `UPDATE slides SET stage_dried_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1304,7 +1312,7 @@ export async function syncAssayWorkflowStep(
   if (assayTypes.length === 0) return;
   const completion = await Promise.all(
     assayTypes.map((row) =>
-      checklistComplete("section_request", sectionRequestId, `${row.assay_type}_workflow_v3`),
+      checklistComplete("section_request", sectionRequestId, `${row.assay_type}_workflow_v4`),
     ),
   );
   if (completion.every(Boolean)) {
@@ -2029,7 +2037,15 @@ export async function syncAssayStackWorkflowStep(
 ): Promise<void> {
   const db = await getDb();
   const timestamp = complete ? nowTimestamp() : null;
+  // Steps: 0 Deparaffinized, 1 Stained/IHC, 2 Coverslipped (+refrax), 3 Dried.
   if (sortOrder === 0) {
+    await db.execute(
+      `UPDATE slides SET stage_deparaffinized_at = ?
+        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+      [timestamp, stackId, assayType],
+    );
+    await db.execute(`UPDATE slide_stacks SET stage_deparaffinized_at = ? WHERE id = ?`, [timestamp, stackId]);
+  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_stained_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2037,7 +2053,7 @@ export async function syncAssayStackWorkflowStep(
     );
     const stackColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
     await db.execute(`UPDATE slide_stacks SET ${stackColumn} = ? WHERE id = ?`, [timestamp, stackId]);
-  } else if (sortOrder === 1) {
+  } else if (sortOrder === 2) {
     await db.execute(
       `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2047,7 +2063,7 @@ export async function syncAssayStackWorkflowStep(
       `UPDATE slide_stacks SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
       [timestamp, timestamp, stackId],
     );
-  } else if (sortOrder === 2) {
+  } else if (sortOrder === 3) {
     await db.execute(
       `UPDATE slides SET stage_dried_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2064,7 +2080,7 @@ export async function syncAssayStackWorkflowStep(
   if (assayTypes.length === 0) return;
   const completion = await Promise.all(
     assayTypes.map((row) =>
-      checklistComplete("slide_stack", stackId, `${row.assay_type}_workflow_v3`),
+      checklistComplete("slide_stack", stackId, `${row.assay_type}_workflow_v4`),
     ),
   );
   if (completion.every(Boolean)) await updateSlideStackStage(stackId, "ready_for_imaging");

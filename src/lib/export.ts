@@ -9,7 +9,7 @@ import {
   listProjects,
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
-import { STAGES } from "./stages";
+import { BLOCK_TIMELINE_STAGES } from "./stages";
 import { duplicateLabel, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
@@ -25,7 +25,10 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
   ["Needs Decalc", (s) => (s.needs_decalcification ? "Yes" : "No")],
   ["Priority", (s) => (s.is_priority ? "Yes" : "No")],
   ["Current Stage", (s) => s.current_stage],
-  ...STAGES.map(
+  // Block-level physical events only — the downstream slide stages (Stained,
+  // Deparaffinized, Imaged, …) are never stamped on a block, so they'd be empty
+  // columns here; they live in the Slides / Cut Orders sheets.
+  ...BLOCK_TIMELINE_STAGES.map(
     (stage): [string, Accessor<Sample>] => [
       stage.label,
       (s) => (s as unknown as Record<string, string | null>)[stage.column] ?? "",
@@ -56,9 +59,9 @@ const SECTION_COLUMNS: Array<[string, Accessor<SectionRequest>]> = [
   ["Needs Sectioning", (row) => row.stage_needs_sectioning_at ?? ""],
   ["Sectioned", (row) => row.stage_sectioned_at ?? ""],
   ["Stain Requested", (row) => row.stage_stain_requested_at ?? ""],
+  ["Deparaffinized", (row) => row.stage_deparaffinized_at ?? ""],
   ["Stained", (row) => row.stage_stained_at ?? ""],
   ["IHC Complete", (row) => row.stage_ihc_at ?? ""],
-  ["Refrax", (row) => row.stage_refrax_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
   ["Dried", (row) => row.stage_dried_at ?? ""],
   ["Ready for Imaging", (row) => row.stage_ready_for_imaging_at ?? ""],
@@ -80,8 +83,8 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Current Stage", (row) => row.current_stage],
   ["Cut", (row) => row.stage_cut_at ?? ""],
   ["Stain Requested", (row) => row.stage_stain_requested_at ?? ""],
+  ["Deparaffinized", (row) => row.stage_deparaffinized_at ?? ""],
   ["Stained", (row) => row.stage_stained_at ?? ""],
-  ["Refrax", (row) => row.stage_refrax_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
   ["Dried", (row) => row.stage_dried_at ?? ""],
   ["Ready for Imaging", (row) => row.stage_ready_for_imaging_at ?? ""],

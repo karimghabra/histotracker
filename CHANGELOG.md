@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.7 - 2026-07-26
+
+- **Deparaffinization is now tracked.** It was a stage that appeared in the
+  timelines and exports but was never actually recorded (always blank). It's now
+  the first step of the stain/IHC protocol checklist, so it gets a real timestamp
+  and shows in order (Deparaffinized → Stained → Coverslipped → Dried) on the
+  slide/section/stack timelines and in the exports. **Schema change** (adds
+  `stage_deparaffinized_at` to the slides table) — deploy this build to every
+  workstation and viewer together (additive, so it's sync-safe).
+- **Removed dead/redundant export columns.** The "Refrax" column was always an
+  exact duplicate of "Coverslipped" (one step set both) and is dropped. The
+  Samples sheet no longer lists slide-level stage columns (Stained, Imaged,
+  Analyzed, …) that are never stamped on a block — those live in the Slides and
+  Cut Orders sheets.
+
 ## 0.4.6 - 2026-07-26
 
 Bug fixes from 0.4.5 testing (issues #55–#57):

@@ -9,9 +9,9 @@ import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 
 const STACK_TIMELINE_KEYS = new Set([
+  "deparaffinized",
   "stained",
   "ihc_complete",
-  "refrax_complete",
   "coverslipped",
   "dried",
   "ready_for_imaging",
@@ -204,9 +204,9 @@ export function StackDetailsDrawer({
           <ProtocolChecklist
             scopeType="slide_stack"
             scopeId={stack.id}
-            stageKey="stain_workflow_v3"
+            stageKey="stain_workflow_v4"
             protocolName="Stain workflow"
-            labels={["Stained", "Coverslipped", "Dried"]}
+            labels={["Deparaffinized", "Stained", "Coverslipped", "Dried"]}
             batchScopeIds={stainStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "stain", sortOrder, complete))).then(() => undefined)
@@ -217,9 +217,9 @@ export function StackDetailsDrawer({
           <ProtocolChecklist
             scopeType="slide_stack"
             scopeId={stack.id}
-            stageKey="ihc_workflow_v3"
+            stageKey="ihc_workflow_v4"
             protocolName="IHC workflow"
-            labels={["IHC stained", "Coverslipped", "Dried"]}
+            labels={["Deparaffinized", "IHC stained", "Coverslipped", "Dried"]}
             batchScopeIds={ihcStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "ihc", sortOrder, complete))).then(() => undefined)

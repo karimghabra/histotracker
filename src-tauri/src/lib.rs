@@ -135,6 +135,12 @@ pub fn run() {
             sql: include_str!("../migrations/0019_preselected_stains.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "slide_deparaffinized",
+            sql: include_str!("../migrations/0020_slide_deparaffinized.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

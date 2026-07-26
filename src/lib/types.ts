@@ -141,6 +141,7 @@ export interface Slide {
   stage_cut_at: string | null;
   stage_stain_requested_at: string | null;
   stage_staining_started_at: string | null;
+  stage_deparaffinized_at: string | null;
   stage_stained_at: string | null;
   stage_refrax_at: string | null;
   stage_coverslipped_at: string | null;
