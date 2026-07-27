@@ -117,8 +117,9 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   }).toPass();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
 
-  // The flag clears once the H&E is cut (request fulfilled).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  // The flag clears once the H&E is cut (request fulfilled). The drawer stays
+  // open from the cut, so it reflects the cleared flag directly (re-clicking the
+  // tile would now DE-select it — #61).
   await expect(page.getByText(/Stains preselected/i)).toHaveCount(0);
 
   // Re-request H&E: no extras exist, so it must flag the block AGAIN and the

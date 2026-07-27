@@ -24,8 +24,13 @@ async function seedSampleWithSlides(page: Page) {
   await page.getByRole("button", { name: "Placed in ethanol" }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await drag(page, "EE-0001", "Processor");
-  await page.getByRole("button", { name: "Start Batch" }).click();
-  await expect(page.getByText("Batch 1", { exact: true })).toBeVisible();
+  // A background refetch can momentarily blank the active operator and no-op the
+  // Start-Batch click, so retry until the batch actually appears.
+  await expect(async () => {
+    const btn = page.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 15000 });
   await drag(page, "Batch 1", "Needs Embedding");
   await drag(page, "EE-0001", "Embedded Inventory");
 
