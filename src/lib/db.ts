@@ -71,9 +71,48 @@ function guardWrites(db: Database): Database {
 
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
-    dbPromise = Database.load(DB_URL).then(guardWrites);
+    dbPromise = Database.load(DB_URL)
+      .then(async (db) => {
+        await ensureRuntimeSchema(db);
+        return db;
+      })
+      .then(guardWrites);
   }
   return dbPromise;
+}
+
+/**
+ * Additively converge the few late-added columns the frontend depends on.
+ *
+ * tauri-plugin-sql runs the numbered migrations exactly once — at plugin build
+ * time, against whatever file exists then. But this app swaps the live SQLite
+ * file out from under the connection at runtime: undo/redo restore a whole-file
+ * image ({@link restoreDb}) and the sync viewer swaps in a downloaded snapshot,
+ * both via close → overwrite → `Database.load()`. That reopen does NOT re-run
+ * migrations, so a file that predates a column can end up live with the current
+ * frontend. Concretely, this is what made clicking the "Deparaffinized" protocol
+ * step silently do nothing: the step-0 UPDATE hit `slides.stage_deparaffinized_at`
+ * on a pre-0020 image and threw, aborting the toggle before it refreshed (#58).
+ *
+ * Each check is a cheap PRAGMA; the ALTER fires only on a file missing the
+ * column. Additive only — never destructive — so it is safe on any image and
+ * stays consistent with the append-only, schema-is-the-wire-format contract
+ * (docs/shared_data_sync.md §1). Runs on the raw handle before the read-only
+ * write guard, so a viewer that receives an older image still converges.
+ */
+async function ensureRuntimeSchema(db: Database): Promise<void> {
+  await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
+}
+
+async function ensureColumn(
+  db: Database,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  const cols = await db.select<Array<{ name: string }>>(`PRAGMA table_info(${table})`);
+  if (cols.some((c) => c.name === column)) return;
+  await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
 /**

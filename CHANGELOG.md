@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.8 - 2026-07-26
+
+- **Fixed: clicking the "Deparaffinized" protocol step did nothing** on databases
+  that predate 0.4.7 (issue #58). The 0.4.7 schema change adds a column to the
+  slides table, but the app swaps the SQLite file out from under itself at
+  runtime — undo/redo restore a whole-file image and the sync viewer swaps in a
+  downloaded snapshot — and re-opening the file does not re-run migrations. So an
+  older image could go live under the new build, the step's write hit a missing
+  column and threw, and the checkbox silently stayed unchecked. The app now
+  additively converges that column on every database (re)open, and a failed
+  protocol step surfaces the error instead of looking like a dead checkbox.
+
 ## 0.4.7 - 2026-07-26
 
 - **Deparaffinization is now tracked.** It was a stage that appeared in the

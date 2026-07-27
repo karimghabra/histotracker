@@ -42,29 +42,38 @@ export function ProtocolChecklist({
     }
     setError(null);
     const item = items.find((candidate) => candidate.id === itemId);
-    // Snapshot BEFORE the step so Undo peels back one protocol step (and the
-    // staining→imaging scatter it triggers) at a time, instead of jumping to the
-    // last board-level action (#56).
-    const before = await snapshotDb();
-    window.localStorage.setItem("histometer-active-operator", operator.trim());
-    await setChecklistItemComplete(itemId, value, operator.trim());
     const scopeIds = [...new Set([scopeId, ...batchScopeIds])];
-    if (item) {
-      for (const targetScopeId of scopeIds) {
-        if (targetScopeId === scopeId) continue;
-        const targetItems = await ensureChecklist({
-          scopeType,
-          scopeId: targetScopeId,
-          stageKey,
-          protocolName,
-          labels,
-        });
-        const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
-        if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+    try {
+      // Snapshot BEFORE the step so Undo peels back one protocol step (and the
+      // staining→imaging scatter it triggers) at a time, instead of jumping to
+      // the last board-level action (#56).
+      const before = await snapshotDb();
+      window.localStorage.setItem("histometer-active-operator", operator.trim());
+      await setChecklistItemComplete(itemId, value, operator.trim());
+      if (item) {
+        for (const targetScopeId of scopeIds) {
+          if (targetScopeId === scopeId) continue;
+          const targetItems = await ensureChecklist({
+            scopeType,
+            scopeId: targetScopeId,
+            stageKey,
+            protocolName,
+            labels,
+          });
+          const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
+          if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+        }
+        if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
+        record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, snapshot: before });
       }
-      if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
-      record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, snapshot: before });
+    } catch (err) {
+      // Never fail silently: a step whose stage write throws (e.g. a DB opened
+      // on an image missing a stage column) must surface, not look like a dead
+      // checkbox (#58). The refresh below still runs so the UI reflects DB truth.
+      setError(err instanceof Error ? err.message : "Could not record this step.");
     }
+    // Always refresh — even after a failure — so the checkbox mirrors what
+    // actually persisted rather than a stale render.
     await qc.invalidateQueries({ queryKey });
     await Promise.all(scopeIds.map((id) => qc.invalidateQueries({ queryKey: ["protocol-checklist", scopeType, id, stageKey] })));
     await qc.invalidateQueries({ queryKey: ["open-sections"] });

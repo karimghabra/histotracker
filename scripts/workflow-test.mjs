@@ -1361,6 +1361,45 @@ invariant("downstream UI and actions address durable stack IDs", () => {
     "stack moves are undoable via the whole-DB snapshot");
 });
 
+issue(58, "opening a pre-0020 image converges slides.stage_deparaffinized_at so the step doesn't die", () => {
+  // Port of ensureRuntimeSchema/ensureColumn — src/lib/db.ts. The app swaps the
+  // SQLite file at runtime (undo restore, sync viewer) and plugin-sql only runs
+  // migrations at startup, so a live file can predate a column. Build a DB the
+  // way an app upgraded to 0.4.6 (v19) would look — every migration EXCEPT 0020.
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  for (const file of readdirSync(MIGRATIONS_DIR).sort()) {
+    if (!file.endsWith(".sql") || file.startsWith("0020")) continue;
+    db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+  }
+  const hasCol = () =>
+    db.prepare(`PRAGMA table_info(slides)`).all().some((c) => c.name === "stage_deparaffinized_at");
+  assert(!hasCol(), "precondition: the pre-0020 image is missing the column");
+
+  const stampDepar = () =>
+    db.prepare(
+      `UPDATE slides SET stage_deparaffinized_at = ? WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+    ).run("2026-01-01 09:00", 1, "stain");
+  // Before convergence the Deparaffinized step-0 write throws — this is exactly
+  // what made the checkbox silently do nothing.
+  let threw = false;
+  try { stampDepar(); } catch { threw = true; }
+  assert(threw, "without the column the deparaffinize write throws");
+
+  // ensureColumn(): additive, guarded by table_info — a no-op when present.
+  if (!hasCol()) db.exec(`ALTER TABLE slides ADD COLUMN stage_deparaffinized_at TEXT`);
+  assert(hasCol(), "convergence adds the missing column");
+  stampDepar(); // now succeeds — the step can persist and the checkbox checks
+  db.close();
+});
+
+invariant("getDb converges the deparaffinized column on every (re)open", () => {
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  assert(db.includes("ensureRuntimeSchema"), "getDb must run a runtime schema guard");
+  assert(/ensureColumn\(\s*db,\s*"slides",\s*"stage_deparaffinized_at"/.test(db),
+    "the guard must ensure slides.stage_deparaffinized_at");
+});
+
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
