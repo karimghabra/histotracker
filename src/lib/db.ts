@@ -101,7 +101,13 @@ export function getDb(): Promise<Database> {
  * write guard, so a viewer that receives an older image still converges.
  */
 async function ensureRuntimeSchema(db: Database): Promise<void> {
+  // Register EVERY additively-added column that current runtime queries read or
+  // write. Anything missing here becomes a silent failure the moment an older
+  // image is opened (undo restore, sync pull, or a REVERT TO AN OLDER BACKUP).
+  // A new migration that adds such a column MUST add a matching line below —
+  // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
+  await ensureColumn(db, "samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''");
 }
 
 async function ensureColumn(

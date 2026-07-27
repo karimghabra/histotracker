@@ -1,5 +1,6 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod backup;
 mod sync;
 
 /// Write raw bytes to an absolute path chosen by the user via the save dialog.
@@ -154,6 +155,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             save_file,
             read_file,
+            backup::backup_dir_path,
+            backup::backup_write,
+            backup::backup_list,
+            backup::backup_read,
+            backup::backup_delete,
+            backup::backup_prune,
             sync::sync_config_get,
             sync::sync_config_set,
             sync::sync_set_last_version,

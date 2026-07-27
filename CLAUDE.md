@@ -47,7 +47,17 @@ future regression into a red test instead of a shipped bug.
   invalidates queries, and records an **undo/redo** command (`src/lib/undo.ts`).
 - `src/components/Board.tsx` — the drag-and-drop board.
 - `src-tauri/migrations/NNNN_*.sql` — schema; **append-only, numbered**. Never
-  edit an applied migration; add a new one.
+  edit an applied migration; add a new one. Register it in `src-tauri/src/lib.rs`
+  (the migration list is explicit, not auto-discovered). **Additive only** — new
+  migrations `ADD COLUMN`/`CREATE TABLE`; never drop/rename a column a shipped
+  build still reads (backups, sync, and undo all restore raw DB *images*, so an
+  older image must stay openable). If the new column is read/written at runtime,
+  also add it to `ensureRuntimeSchema()` in `src/lib/db.ts` — `getDb()` converges
+  it on every DB (re)open, which is what keeps updates compatible with existing
+  databases and older backups. See `docs/shared_data_sync.md` §1a.
+- `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
+  robust local DB backups (atomic write, validation, rotation) taken every N
+  hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
 
 ## Docs worth reading
 

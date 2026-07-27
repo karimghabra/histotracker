@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.9 - 2026-07-27
+
+- **Automatic database backups.** The workstation now saves a full backup of the
+  database every 3 hours during the working day (defaults to 07:00–19:00, Mon–Fri,
+  keeping the newest 48 — all configurable), plus one on launch if a backup is
+  overdue. Backups are robust: each is a consistent, checkpointed image, written
+  atomically (temp file → flush → rename) and verified, so a crash can never leave
+  a half-written backup.
+- **Revert to a backup.** A new **Backups** button (next to Manage) opens a panel
+  listing every backup with its time and size. “Back up now” takes one on demand;
+  “Revert” restores the whole database to that point — and first takes a safety
+  backup of the current state, so a revert is itself reversible.
+- **Reverting an older backup is safe across updates.** Restoring a backup taken
+  by an earlier build runs it through the schema-convergence guard, so any columns
+  a newer version added are filled in automatically — no “missing column” errors.
+- **Updates stay compatible with existing databases.** Documented and enforced the
+  contract: migrations are additive only, and every column the app reads at runtime
+  is converged on open. See `docs/shared_data_sync.md` §1a.
+
 ## 0.4.8 - 2026-07-26
 
 - **Fixed: clicking the "Deparaffinized" protocol step did nothing** on databases

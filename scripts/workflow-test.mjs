@@ -1393,11 +1393,19 @@ issue(58, "opening a pre-0020 image converges slides.stage_deparaffinized_at so 
   db.close();
 });
 
-invariant("getDb converges the deparaffinized column on every (re)open", () => {
+invariant("getDb converges late-added runtime columns on every (re)open", () => {
+  // Forward-compat contract: every additive column current queries depend on is
+  // re-asserted after any DB file swap (undo/sync/backup-revert). If you add a
+  // migration with a new runtime column, add it to ensureRuntimeSchema AND here.
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   assert(db.includes("ensureRuntimeSchema"), "getDb must run a runtime schema guard");
-  assert(/ensureColumn\(\s*db,\s*"slides",\s*"stage_deparaffinized_at"/.test(db),
-    "the guard must ensure slides.stage_deparaffinized_at");
+  const converged = [
+    /ensureColumn\(\s*db,\s*"slides",\s*"stage_deparaffinized_at"/,
+    /ensureColumn\(\s*db,\s*"samples",\s*"preselected_stains"/,
+  ];
+  for (const re of converged) {
+    assert(re.test(db), `ensureRuntimeSchema must converge ${re}`);
+  }
 });
 
 // ---------------------------------------------------------------------------

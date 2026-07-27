@@ -31,6 +31,29 @@ still reads — extra columns are ignored, and viewers never write). They are
 will break. The only real failure mode is schema drift *between* live instances,
 which "deploy everywhere together" eliminates.
 
+### 1a. Additive migrations + runtime convergence (backward compatibility)
+
+The same "the schema is the wire format" rule governs **backups** (a backup is a
+raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image
+restore). All three swap a DB *file* under the live connection, and
+`tauri-plugin-sql` only runs migrations **once at startup** — a reopened file is
+never re-migrated. So an image that predates a column can go live under a newer
+build (e.g. reverting to an older backup after an update).
+
+Two rules keep updates compatible with existing databases:
+
+1. **Migrations are additive.** New numbered migration files only `ADD COLUMN` /
+   `CREATE TABLE`; never edit an applied migration and never drop/rename a column
+   a shipped build still reads. Adding a nullable column (or one with a DEFAULT)
+   is safe for every older image.
+2. **Every additive column current code reads/writes is registered in
+   `ensureRuntimeSchema()`** (`src/lib/db.ts`), which `getDb()` runs on *every*
+   (re)open. It `PRAGMA table_info`-checks and `ADD COLUMN`s only what's missing —
+   a no-op on an up-to-date DB, and the thing that makes opening/reverting an
+   older image safe. **When you add such a column, add a matching line there** (and
+   to the harness invariant "getDb converges late-added runtime columns"). This is
+   what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
+
 ### Safe to change (sync is unaffected)
 - All UI, components, board layout, styling, hooks
 - Business/workflow logic, validation, new features, bug fixes

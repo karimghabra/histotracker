@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Palette, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
+import { CloudOff, DatabaseBackup, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Palette, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
@@ -13,6 +13,7 @@ import { BatchStartDialog } from "./components/BatchStartDialog";
 import { ProcessingBatchDetailsDrawer } from "./components/ProcessingBatchDetailsDrawer";
 import { ExtraSlideDetailsDrawer } from "./components/ExtraSlideDetailsDrawer";
 import { ManageDialog } from "./components/ManageDialog";
+import { BackupsDialog } from "./components/BackupsDialog";
 import { SetupScreen } from "./components/SetupScreen";
 import { RequestStainDialog } from "./components/RequestStainDialog";
 import { RequestsInbox } from "./components/RequestsInbox";
@@ -20,6 +21,7 @@ import { Button } from "./components/ui";
 import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
 import { useActions } from "./hooks/useActions";
 import { useSync } from "./hooks/useSync";
+import { useBackupScheduler } from "./hooks/useBackupScheduler";
 import { useUndoStore } from "./lib/undo";
 import { hydrateUndoHistory } from "./lib/undoPersist";
 import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
@@ -58,6 +60,12 @@ export default function App() {
     if (syncConfig) setViewerReadOnly(syncConfig.role === "viewer");
   }, [syncConfig]);
 
+  // Automatic local database backups — only the authoritative workstation backs
+  // up (a viewer's DB is a read-only mirror). Announces scheduled/launch backups.
+  useBackupScheduler(Boolean(syncConfig?.configured) && !isViewer, () =>
+    flash("Database backed up"),
+  );
+
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
   const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
@@ -70,6 +78,7 @@ export default function App() {
   const [showNewProject, setShowNewProject] = useState(false);
   const [showNewSample, setShowNewSample] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
+  const [showBackups, setShowBackups] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [showRequestStain, setShowRequestStain] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
@@ -170,7 +179,7 @@ export default function App() {
   // Escape closes an open detail drawer, matching how dialogs already dismiss.
   // Skip when a modal is open (it handles its own Escape) or while typing.
   const modalOpen =
-    showNewProject || showNewSample || showUsers || showRequests || showRequestStain ||
+    showNewProject || showNewSample || showUsers || showBackups || showRequests || showRequestStain ||
     showSetup || pendingBatchSampleIds !== null;
   const drawerOpen =
     selectedSampleId !== null || selectedSectionId !== null || selectedStackId !== null ||
@@ -457,6 +466,9 @@ export default function App() {
                 <Button variant="subtle" className="px-2" title="Manage users, projects & stains" onClick={() => setShowUsers(true)}>
                   <Users size={15} /> Manage
                 </Button>
+                <Button variant="subtle" className="px-2" title="Database backups & revert" onClick={() => setShowBackups(true)}>
+                  <DatabaseBackup size={15} /> Backups
+                </Button>
                 <Button variant="subtle" className="relative px-2" title="Incoming stain requests" onClick={() => setShowRequests(true)}>
                   <Inbox size={15} /> Requests
                   {openRequestCount > 0 && (
@@ -656,6 +668,15 @@ export default function App() {
 
       {showNewProject && <NewProjectDialog users={users.filter((user) => user.is_active)} onClose={() => setShowNewProject(false)} />}
       {showUsers && <ManageDialog users={users} activeUser={activeUser} onClose={() => setShowUsers(false)} />}
+      {showBackups && (
+        <BackupsDialog
+          onClose={() => setShowBackups(false)}
+          onReverted={() => {
+            void qc.invalidateQueries();
+            flash("Reverted to backup");
+          }}
+        />
+      )}
       {showNewSample && selectedProject && (
         <NewSampleDialog project={selectedProject} onClose={() => setShowNewSample(false)} />
       )}
