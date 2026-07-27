@@ -142,6 +142,12 @@ pub fn run() {
             sql: include_str!("../migrations/0020_slide_deparaffinized.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "schema_meta",
+            sql: include_str!("../migrations/0021_schema_meta.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

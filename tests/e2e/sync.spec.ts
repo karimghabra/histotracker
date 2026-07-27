@@ -221,11 +221,11 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   // tick before the next click instead of firing all three at once.
   await column(ws, "Staining / IHC").getByText("Alcian Blue").first().click();
   await ws.getByLabel("Active operator").fill("Alex");
-  const steps = ["Deparaffinized", "Stained", "Coverslipped", "Dried"];
+  const steps = ["Stained", "Coverslipped", "Dried"];
   for (let i = 0; i < steps.length; i += 1) {
     await ws.getByRole("button", { name: steps[i], exact: true }).click();
     if (i < steps.length - 1) {
-      await expect(ws.getByText(new RegExp(`${i + 1}/4 complete`))).toBeVisible({ timeout: 10000 });
+      await expect(ws.getByText(new RegExp(`${i + 1}/3 complete`))).toBeVisible({ timeout: 10000 });
     }
   }
   await expect(column(ws, "Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });

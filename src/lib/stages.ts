@@ -20,7 +20,6 @@ export const STAGES: StageDef[] = [
   { key: "needs_sectioning", label: "Needs Sectioning", column: "stage_needs_sectioning_at" },
   { key: "sectioned", label: "Sectioned / Slides Ready", column: "stage_sectioned_at" },
   { key: "stain_requested", label: "Needs Stains / IHC", column: "stage_stain_requested_at" },
-  { key: "deparaffinized", label: "Deparaffinized", column: "stage_deparaffinized_at" },
   { key: "stained", label: "Stained", column: "stage_stained_at" },
   { key: "ihc_complete", label: "IHC Complete", column: "stage_ihc_at" },
   { key: "pictures_taken", label: "Pictures Taken", column: "stage_pictures_taken_at" },
@@ -77,7 +76,7 @@ export const BOARD_QUEUES: QueueDef[] = [
   // Pre-assigned slides skip a separate assignment step (issues #34, #38): this
   // column is now purely the Extras inventory. Key kept for board wiring.
   { key: "slide_assignment", title: "Extras", stages: [], entryStage: "", lane: 1 },
-  { key: "staining", title: "Staining / IHC", stages: ["stain_requested", "stained", "deparaffinized", "ihc_complete"], entryStage: "stain_requested", lane: 1 },
+  { key: "staining", title: "Staining / IHC", stages: ["stain_requested", "stained", "ihc_complete"], entryStage: "stain_requested", lane: 1 },
   { key: "analysis_pending", title: "Ready for Imaging", stages: ["ready_for_imaging", "pictures_taken"], entryStage: "ready_for_imaging", lane: 1 },
 ];
 
@@ -102,7 +101,6 @@ export const SECTION_STAGES: StageDef[] = [
   { key: "sectioned", label: "Sectioned / Slides Ready", column: "stage_sectioned_at" },
   { key: "assignment_required", label: "Slide Assignment Required", column: "stage_assignment_required_at" },
   { key: "stain_requested", label: "Needs Stains / IHC", column: "stage_stain_requested_at" },
-  { key: "deparaffinized", label: "Deparaffinized", column: "stage_deparaffinized_at" },
   { key: "stained", label: "Stained", column: "stage_stained_at" },
   { key: "ihc_complete", label: "IHC Complete", column: "stage_ihc_at" },
   { key: "refrax_complete", label: "Refrax Complete", column: "stage_refrax_at" },
@@ -146,7 +144,6 @@ export const SECTION_STAGE_TO_QUEUE: Record<string, string> = {
   assignment_required: "needs_sectioning",
   stain_requested: "staining",
   stained: "staining",
-  deparaffinized: "staining",
   ihc_complete: "staining",
   refrax_complete: "staining",
   coverslipped: "staining",

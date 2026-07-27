@@ -345,10 +345,9 @@ export function SectionDetailsDrawer({
           <ProtocolChecklist
             scopeType="section_request"
             scopeId={section.id}
-            stageKey="stain_workflow_v4"
+            stageKey="stain_workflow_v5"
             protocolName="Stain workflow"
             labels={[
-              "Deparaffinized",
               "Stained",
               "Coverslipped",
               "Dried",
@@ -363,10 +362,9 @@ export function SectionDetailsDrawer({
           <ProtocolChecklist
             scopeType="section_request"
             scopeId={section.id}
-            stageKey="ihc_workflow_v4"
+            stageKey="ihc_workflow_v5"
             protocolName="IHC workflow"
             labels={[
-              "Deparaffinized",
               "IHC stained",
               "Coverslipped",
               "Dried",

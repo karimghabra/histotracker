@@ -343,6 +343,22 @@ function makeApi(db) {
         nextOrdinal++;
       }
     }
+    // Cutting fulfils outstanding requests: trim one entry per preassigned slide.
+    const cut = [];
+    for (const g of groups) {
+      if (g.assay_type && g.assay_name) {
+        for (let i = 0; i < Math.max(1, g.duplicates); i++) cut.push({ assay_type: g.assay_type, assay_name: g.assay_name });
+      }
+    }
+    if (cut.length) {
+      const pre = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
+      const remaining = pre.preselected_stains ? JSON.parse(pre.preselected_stains) : [];
+      for (const r of cut) {
+        const idx = remaining.findIndex((a) => a.assay_type === r.assay_type && a.assay_name.toLowerCase() === r.assay_name.toLowerCase());
+        if (idx >= 0) remaining.splice(idx, 1);
+      }
+      run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [remaining.length ? JSON.stringify(remaining) : "", sampleId]);
+    }
     return ids;
   }
 
@@ -471,15 +487,10 @@ function makeApi(db) {
 
   // Port of assignExtraSlideToAssay() — src/lib/db.ts. Stack membership owns
   // downstream grouping; the original section remains immutable cut provenance.
-  // Port of requestStainForSample() — src/lib/db.ts (issue #2). Extra first,
-  // else flag the block; the agent is recorded on the sample for the flag.
+  // Port of requestStainForSample() — src/lib/db.ts. Extra first (fulfils the
+  // request immediately, nothing appended); else append an OUTSTANDING request
+  // to the multiset (duplicates allowed) so the block is flagged for a cut.
   function requestStainForSample(sampleId, assayType, assayName) {
-    const row = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
-    const current = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
-    if (!current.some((a) => a.assay_type === assayType && a.assay_name.toLowerCase() === assayName.toLowerCase())) {
-      current.push({ assay_type: assayType, assay_name: assayName });
-      run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [JSON.stringify(current), sampleId]);
-    }
     const extra = get(
       `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
@@ -500,6 +511,10 @@ function makeApi(db) {
           WHERE id = ?`, [rack.id, assayType, assayName, assayName, now(), extra.id]);
       return { target: "extra", slideId: extra.id, stackId: rack.id, createdStackId };
     }
+    const row = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
+    const current = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+    current.push({ assay_type: assayType, assay_name: assayName }); // duplicates allowed
+    run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [JSON.stringify(current), sampleId]);
     return { target: "block", slideId: null, stackId: null, createdStackId: null };
   }
 
@@ -681,19 +696,35 @@ function stainOneSlide(api, sampleId, assayType, assayName) {
   return api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id;
 }
 
-// The "needs staining" flag, computed PER stain (issue #41): a preselected agent
-// that has not yet been produced (reached staining) is still pending, even if
-// other stains for the sample already entered staining.
+// The "needs staining" flag is the block's OUTSTANDING requests directly:
+// preselected_stains as a multiset, trimmed by createSectionRequests as cuts
+// fulfil them (new model — issues #41/#62/#66).
 function pendingFlag(api, sampleId) {
   const row = api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
   const preselected = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
-  if (!preselected.length) return "";
-  const produced = new Set(api.all(
-    `SELECT DISTINCT sl.assay_name AS n FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-      WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.stage_stain_requested_at IS NOT NULL`,
-    [sampleId]).map((r) => String(r.n || "").toLowerCase()));
-  const pending = preselected.filter((a) => !produced.has(String(a.assay_name).toLowerCase()));
-  return pending.length ? JSON.stringify(pending) : "";
+  return preselected.length ? JSON.stringify(preselected) : "";
+}
+
+// Port of reconcileStainRequests() — src/lib/db.ts. One-time data translation
+// from the old (untrimmed) to the new (outstanding-only) preselected_stains.
+function reconcileStainRequests(api) {
+  const done = api.get(`SELECT value FROM schema_meta WHERE key = 'stain_requests_reconciled'`);
+  if (done && done.value === "1") return;
+  for (const s of api.all(`SELECT id, preselected_stains FROM samples WHERE preselected_stains <> ''`)) {
+    const chosen = s.preselected_stains ? JSON.parse(s.preselected_stains) : [];
+    if (!chosen.length) continue;
+    const produced = new Set(api.all(
+      `SELECT DISTINCT sl.assay_name AS n FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assay_name <> ''`, [s.id])
+      .map((r) => String(r.n).toLowerCase()));
+    const outstanding = chosen.filter((a) => !produced.has(String(a.assay_name).toLowerCase()));
+    if (outstanding.length !== chosen.length) {
+      api.run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`,
+        [outstanding.length ? JSON.stringify(outstanding) : "", s.id]);
+    }
+  }
+  api.run(`INSERT INTO schema_meta (key, value) VALUES ('stain_requests_reconciled', '1')
+             ON CONFLICT(key) DO UPDATE SET value = '1'`);
 }
 
 invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras (#1/#4)", () => {
@@ -796,7 +827,7 @@ issue(31, "undo/redo of an imaging move is a whole-DB swap (no ghost tile)", () 
     "undo swaps the entire DB back, so scattered imaging stacks are never stranded");
 });
 
-invariant("the needs-staining flag clears once a stain enters staining (#1/#2)", () => {
+invariant("the needs-staining flag clears once the requested stain is CUT (#1/#2)", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "flagged", {
@@ -805,11 +836,69 @@ invariant("the needs-staining flag clears once a stain enters staining (#1/#2)",
   api.markEmbedded(id);
   assert(pendingFlag(api, id) !== "", "flag present at embedded inventory");
   const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [id]).sectioning_plan);
-  const [section] = api.createSectionRequests(id, plan.filter((g) => g.assay_name));
-  assert(pendingFlag(api, id) !== "", "flag still present before staining");
-  api.sectionToAssignment(section);
-  api.startAssayWork(section); // stain enters the reagents
-  eq(pendingFlag(api, id), "", "flag clears once the stain enters staining");
+  // Cutting the H&E fulfils the outstanding request → the flag clears at CUT,
+  // not at staining-entry (a physical slide now exists for it).
+  api.createSectionRequests(id, plan.filter((g) => g.assay_name));
+  eq(pendingFlag(api, id), "", "flag clears once the requested stain is cut");
+});
+
+// #62/#66 — the outstanding-requests multiset allows duplicates and re-requests.
+issue(62, "requesting the same/already-cut agent queues another outstanding slide", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "multi"); // no creation stains, no extras
+  api.markEmbedded(id);
+  // Same agent twice with no free extras → two outstanding H&E requests.
+  eq(api.requestStainForSample(id, "stain", "H&E").target, "block", "1st H&E flags the block");
+  eq(api.requestStainForSample(id, "stain", "H&E").target, "block", "2nd H&E flags the block");
+  eq(JSON.parse(pendingFlag(api, id)).filter((a) => a.assay_name === "H&E").length, 2,
+    "two outstanding H&E slides queued (was deduped to one before)");
+  // Cut ONE H&E → one outstanding remains; the other still flags.
+  api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  eq(JSON.parse(pendingFlag(api, id)).filter((a) => a.assay_name === "H&E").length, 1,
+    "cutting one H&E trims one outstanding request");
+  // Cut the last H&E → flag clears. Then re-request H&E (no extras): re-flags.
+  api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  eq(pendingFlag(api, id), "", "cutting the last H&E clears the flag");
+  eq(api.requestStainForSample(id, "stain", "H&E").target, "block", "re-request with no extra flags the block");
+  assert(JSON.parse(pendingFlag(api, id)).some((a) => a.assay_name === "H&E"),
+    "re-requesting an already-produced agent flags the block again (#41/#62)");
+});
+
+// Data-compat translation (schema_meta): an OLD-model DB kept every chosen agent
+// in preselected_stains untrimmed; the one-time reconcile trims produced agents.
+issue(62, "stain-request reconciliation trims produced agents once (data translation)", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "legacy", {
+    preselectedStains: [
+      { assay_type: "stain", assay_name: "H&E" },
+      { assay_type: "stain", assay_name: "Safranin O" },
+    ],
+  });
+  api.markEmbedded(id);
+  // Simulate OLD-model data: an H&E slide was cut, but preselected still lists BOTH
+  // (old builds never trimmed). Insert the produced slide WITHOUT trimming.
+  const sr = Number(api.run(
+    `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
+     VALUES (?, 1, 'H&E', 'needs_sectioning', ?)`, [id, "2026-01-01 08:00"]).lastInsertRowid);
+  api.run(
+    `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
+     VALUES (?, 1, 'EE-0001-A', 'stain', 'stain', 'H&E', 1, 2, 'IgG', 'assigned')`, [sr]);
+  api.run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`,
+    [JSON.stringify([{ assay_type: "stain", assay_name: "H&E" }, { assay_type: "stain", assay_name: "Safranin O" }]), id]);
+  eq(JSON.parse(api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [id]).preselected_stains).length, 2,
+    "precondition: old-model untrimmed (both listed)");
+
+  reconcileStainRequests(api);
+  const after = JSON.parse(api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [id]).preselected_stains || "[]");
+  eq(after.length, 1, "produced H&E trimmed");
+  eq(after[0].assay_name, "Safranin O", "the uncut agent stays outstanding");
+  // Idempotent: a fresh re-request after reconcile is NOT clobbered by re-running.
+  api.requestStainForSample(id, "stain", "H&E"); // re-request → outstanding again
+  reconcileStainRequests(api); // marker already set → no-op
+  assert(JSON.parse(api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [id]).preselected_stains)
+    .some((a) => a.assay_name === "H&E"), "re-run does not wipe a legitimate re-request");
 });
 
 // #41 — a stain requested AFTER an earlier one is already in staining must still

@@ -5,6 +5,26 @@ import type { SectionRequest } from "../lib/types";
 import { SECTION_STAGE_LABELS } from "../lib/stages";
 import { cn } from "../lib/utils";
 
+/** Collapse a group's per-slide dispositions into a compact tally:
+ *  "H&E · 3× Extra", "2× H&E · SafO · 2× Extra" (issue #63). */
+function compactSummary(sections: SectionRequest[]): string {
+  const counts = new Map<string, number>();
+  let extras = 0;
+  for (const s of sections) {
+    for (const token of (s.slide_summary ?? "").split(" · ").map((t) => t.trim()).filter(Boolean)) {
+      if (token === "Extra") {
+        extras += 1;
+        continue;
+      }
+      const label = token.replace(/^Stain:\s*/, "").replace(/^IHC:\s*/, "IHC ");
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+  }
+  const parts = [...counts.entries()].map(([label, n]) => (n > 1 ? `${n}× ${label}` : label));
+  if (extras > 0) parts.push(`${extras}× Extra`);
+  return parts.join(" · ");
+}
+
 export function SectionCard({
   section,
   groupedSections,
@@ -36,11 +56,11 @@ export function SectionCard({
   const visibleSlideCount = isDownstream
     ? grouped.reduce((count, item) => count + (item.assay_slide_count ?? 0), 0)
     : grouped.reduce((count, item) => count + (item.slide_count ?? 0), 0);
+  // Needs-sectioning cards show a COMPACT tally — each agent once, with a count,
+  // plus "N× Extra" — instead of repeating "Extra · Extra · Extra" (#63).
   const visibleSummary = isDownstream
     ? [...new Set(grouped.flatMap((item) => (item.assay_slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
-    : isGrouped
-      ? [...new Set(grouped.flatMap((item) => (item.slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
-      : section.slide_summary;
+    : compactSummary(grouped);
 
   return (
     <div

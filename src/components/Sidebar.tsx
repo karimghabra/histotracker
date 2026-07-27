@@ -2,6 +2,7 @@ import { LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Table2 } f
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
+import { APP_VERSION } from "../lib/version";
 
 export type AppView = "board" | "logs";
 
@@ -108,6 +109,12 @@ export function Sidebar({
             </button>
           );
         })}
+      </div>
+
+      <div className={cn("shrink-0 border-t border-line/60 py-2 text-ink-faint", collapsed ? "px-1 text-center" : "px-5")}>
+        <span className="text-[10px] font-medium tabular-nums" title="Histometer version">
+          {collapsed ? APP_VERSION : `Histometer v${APP_VERSION}`}
+        </span>
       </div>
     </aside>
   );

@@ -69,7 +69,6 @@ const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide; fallback?: key
   // stage_cut_at is stamped in local time at cut; created_at (UTC) is a fallback
   // for older slides so their Cut step still shows.
   { label: "Cut", column: "stage_cut_at", fallback: "created_at" },
-  { label: "Deparaffinized", column: "stage_deparaffinized_at" },
   { label: "Stained", column: "stage_stained_at" },
   { label: "Coverslipped", column: "stage_coverslipped_at" },
   { label: "Imaged", column: "stage_pictures_taken_at" },

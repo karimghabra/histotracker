@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0 - 2026-07-27
+
+Issue sweep — stain requests, deparaffinization, and several UI fixes.
+
+- **Stain requests now behave correctly (#41/#62/#66).** An embedded block's
+  "needs stain" flag and the Send-for-Cutting prefill are driven by a proper
+  *outstanding-requests* list: you can request the **same agent twice** (it
+  queues two slides), and **re-requesting an agent that was already cut** flags
+  the block again and prefills the dialog. Cutting a slide clears exactly the
+  request it fulfils. **Existing databases are auto-translated on first open** (a
+  one-time reconcile trims already-produced agents), and the change adds no new
+  columns — it stays compatible with older builds and backups.
+- **Deparaffinization removed (#59).** It was dropped as a tracked protocol step;
+  the protocol is back to Stained/IHC → Coverslipped → Dried, and it no longer
+  appears in timelines or exports. The database column is retained so older
+  data/backups still load.
+- **Needs-sectioning tiles show a compact tally (#63)** — e.g. "H&E · 3× Extra"
+  instead of repeating "Extra" once per slide.
+- **The app now shows its version (#68)** — at the bottom of the sidebar.
+- **Undo/redo of the move into Ready for Imaging leaves no ghost tile (#31).**
+
 ## 0.4.9 - 2026-07-27
 
 - **Automatic database backups.** The workstation now saves a full backup of the

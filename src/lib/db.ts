@@ -74,6 +74,7 @@ export function getDb(): Promise<Database> {
     dbPromise = Database.load(DB_URL)
       .then(async (db) => {
         await ensureRuntimeSchema(db);
+        await reconcileStainRequests(db);
         return db;
       })
       .then(guardWrites);
@@ -108,6 +109,59 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
   await ensureColumn(db, "samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''");
+  // Marker table for one-time data translations (see reconcileStainRequests).
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
+  );
+}
+
+/**
+ * One-time DATA translation for the stain-request model change.
+ *
+ * `preselected_stains` used to hold EVERY agent ever chosen/requested for a
+ * block, with the "needs stain" flag derived as (preselected − produced). The
+ * new model treats the column as the block's OUTSTANDING requests directly:
+ * requests append (duplicates allowed) and a cut trims what it fulfils. Existing
+ * databases carry the old, untrimmed shape — so without translation an already
+ * cut-and-stained block would light up "needs stain" forever.
+ *
+ * This runs exactly once per database image (guarded by a marker in schema_meta,
+ * which — unlike app_settings — rides WITH the image, so reverting an old backup
+ * re-translates it while a translated image is left alone). It rewrites each
+ * block's list to (chosen − already-produced), matching what the old flag showed.
+ */
+async function reconcileStainRequests(db: Database): Promise<void> {
+  const done = await db.select<Array<{ value: string }>>(
+    `SELECT value FROM schema_meta WHERE key = 'stain_requests_reconciled'`,
+  );
+  if (done[0]?.value === "1") return;
+
+  const samples = await db.select<Array<{ id: number; preselected_stains: string }>>(
+    `SELECT id, preselected_stains FROM samples WHERE preselected_stains <> ''`,
+  );
+  for (const s of samples) {
+    const chosen = parsePreselectedStains(s.preselected_stains);
+    if (chosen.length === 0) continue;
+    // Agents already cut as a stain slide for this block are fulfilled.
+    const producedRows = await db.select<Array<{ assay_name: string }>>(
+      `SELECT DISTINCT sl.assay_name FROM slides sl
+         JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assay_name <> ''`,
+      [s.id],
+    );
+    const produced = new Set(producedRows.map((r) => r.assay_name.toLowerCase()));
+    const outstanding = chosen.filter((a) => !produced.has(a.assay_name.toLowerCase()));
+    if (outstanding.length !== chosen.length) {
+      await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [
+        outstanding.length ? JSON.stringify(outstanding) : "",
+        s.id,
+      ]);
+    }
+  }
+  await db.execute(
+    `INSERT INTO schema_meta (key, value) VALUES ('stain_requests_reconciled', '1')
+       ON CONFLICT(key) DO UPDATE SET value = '1'`,
+  );
 }
 
 async function ensureColumn(
@@ -412,28 +466,20 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
 
 export async function listOpenSamples(): Promise<Sample[]> {
   const db = await getDb();
-  // `produced_stains` = the agents that already have a slide in (or past) the
-  // staining stage. The needs-stain flag is computed PER stain: a preselected
-  // agent that hasn't been produced yet is still pending — so requesting a fresh
-  // stain flags the block even after earlier stains have entered staining (#41).
-  const rows = await db.select<Array<Sample & { produced_stains: string | null }>>(
-    `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
-            (SELECT GROUP_CONCAT(DISTINCT sl.assay_name)
-               FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-              WHERE sr.sample_id = s.id AND sl.purpose = 'stain'
-                AND sl.stage_stain_requested_at IS NOT NULL) AS produced_stains
+  // The needs-stain flag is simply the block's OUTSTANDING stain requests
+  // (`preselected_stains`, treated as a multiset): agents chosen at creation or
+  // requested since, minus the ones already fulfilled by a cut (trimmed in
+  // createSectionRequests). A duplicate request queues a second slide (#62/#66),
+  // and re-requesting an already-produced agent flags the block again (#41).
+  const rows = await db.select<Array<Sample>>(
+    `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0
       ORDER BY s.is_priority DESC, s.prioritized_at DESC, s.date_added ASC, s.id ASC`,
   );
-  return rows.map((row) => {
-    const { produced_stains, ...sample } = row;
-    const preselected = parsePreselectedStains(sample.preselected_stains);
-    const produced = new Set(
-      String(produced_stains ?? "").split(",").map((n) => n.trim().toLowerCase()).filter(Boolean),
-    );
-    const pending = preselected.filter((a) => !produced.has(a.assay_name.toLowerCase()));
+  return rows.map((sample) => {
+    const pending = parsePreselectedStains(sample.preselected_stains);
     return { ...sample, pending_stains: pending.length ? JSON.stringify(pending) : "" } as Sample;
   });
 }
@@ -1314,15 +1360,9 @@ export async function syncAssayWorkflowStep(
 ): Promise<void> {
   const db = await getDb();
   const timestamp = complete ? nowTimestamp() : null;
-  // Steps: 0 Deparaffinized, 1 Stained/IHC, 2 Coverslipped (+refrax), 3 Dried.
+  // Steps: 0 Stained/IHC, 1 Coverslipped (+refrax), 2 Dried. (Deparaffinization
+  // was dropped as a tracked step — #59; the column is retained for compat.)
   if (sortOrder === 0) {
-    await db.execute(
-      `UPDATE slides SET stage_deparaffinized_at = ?
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, sectionRequestId, assayType],
-    );
-    await db.execute(`UPDATE section_requests SET stage_deparaffinized_at = ? WHERE id = ?`, [timestamp, sectionRequestId]);
-  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_stained_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1330,7 +1370,7 @@ export async function syncAssayWorkflowStep(
     );
     const sectionColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
     await db.execute(`UPDATE section_requests SET ${sectionColumn} = ? WHERE id = ?`, [timestamp, sectionRequestId]);
-  } else if (sortOrder === 2) {
+  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1340,7 +1380,7 @@ export async function syncAssayWorkflowStep(
       `UPDATE section_requests SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
       [timestamp, timestamp, sectionRequestId],
     );
-  } else if (sortOrder === 3) {
+  } else if (sortOrder === 2) {
     await db.execute(
       `UPDATE slides SET stage_dried_at = ?
         WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -1357,7 +1397,7 @@ export async function syncAssayWorkflowStep(
   if (assayTypes.length === 0) return;
   const completion = await Promise.all(
     assayTypes.map((row) =>
-      checklistComplete("section_request", sectionRequestId, `${row.assay_type}_workflow_v4`),
+      checklistComplete("section_request", sectionRequestId, `${row.assay_type}_workflow_v5`),
     ),
   );
   if (completion.every(Boolean)) {
@@ -1479,7 +1519,48 @@ export async function createSectionRequests(
     [sampleId, `Cut ${slideCount} slide${slideCount === 1 ? "" : "s"}: ${planSummary}`, JSON.stringify(groups), timestamp],
   );
   await db.execute(`UPDATE samples SET sectioning_plan = '' WHERE id = ?`, [sampleId]);
+
+  // Cutting FULFILS outstanding stain requests: remove from the block's
+  // preselected/requested multiset one entry per preassigned slide actually cut,
+  // so the "needs stain" flag clears exactly when a physical slide exists for it
+  // (issues #41/#62/#66). Extras don't fulfil a request. See listOpenSamples,
+  // where pending_stains == the (untrimmed) outstanding multiset.
+  const cut: Array<{ assay_type: string; assay_name: string }> = [];
+  for (const g of groups) {
+    if (g.assay_type && g.assay_name) {
+      for (let i = 0; i < Math.max(1, g.duplicates); i += 1) {
+        cut.push({ assay_type: g.assay_type, assay_name: g.assay_name });
+      }
+    }
+  }
+  if (cut.length > 0) {
+    const preRows = await db.select<Array<{ preselected_stains: string }>>(
+      `SELECT preselected_stains FROM samples WHERE id = ?`,
+      [sampleId],
+    );
+    const remaining = removeFromRequests(parsePreselectedStains(preRows[0]?.preselected_stains), cut);
+    await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [
+      remaining.length ? JSON.stringify(remaining) : "",
+      sampleId,
+    ]);
+  }
   return ids;
+}
+
+/** Remove up to one entry per `toRemove` item from an outstanding-requests list
+ *  (case-insensitive match on type+name), returning what stays outstanding. */
+function removeFromRequests(
+  current: Array<{ assay_type: string; assay_name: string }>,
+  toRemove: Array<{ assay_type: string; assay_name: string }>,
+): Array<{ assay_type: string; assay_name: string }> {
+  const remaining = [...current];
+  for (const r of toRemove) {
+    const idx = remaining.findIndex(
+      (a) => a.assay_type === r.assay_type && a.assay_name.toLowerCase() === r.assay_name.toLowerCase(),
+    );
+    if (idx >= 0) remaining.splice(idx, 1);
+  }
+  return remaining;
 }
 
 
@@ -1683,7 +1764,7 @@ export async function listStainSlidesForSections(sectionIds: number[]): Promise<
 // The substages a cross-sample stain rack occupies while it moves through the
 // reagents. Downstream stages (ready_for_imaging onward) are per-sample.
 const STAIN_RACK_STAGES = [
-  "stain_requested", "stained", "deparaffinized", "ihc_complete",
+  "stain_requested", "stained", "ihc_complete",
   "refrax_complete", "coverslipped", "dried",
 ];
 
@@ -1879,7 +1960,6 @@ async function attachSectionStainSlidesToRacks(sectionId: number): Promise<void>
 const STACK_STAGE_COLUMNS: Record<string, string> = {
   stain_requested: "stage_stain_requested_at",
   stained: "stage_stained_at",
-  deparaffinized: "stage_deparaffinized_at",
   ihc_complete: "stage_ihc_at",
   refrax_complete: "stage_refrax_at",
   coverslipped: "stage_coverslipped_at",
@@ -2082,15 +2162,9 @@ export async function syncAssayStackWorkflowStep(
 ): Promise<void> {
   const db = await getDb();
   const timestamp = complete ? nowTimestamp() : null;
-  // Steps: 0 Deparaffinized, 1 Stained/IHC, 2 Coverslipped (+refrax), 3 Dried.
+  // Steps: 0 Stained/IHC, 1 Coverslipped (+refrax), 2 Dried. (Deparaffinization
+  // was dropped as a tracked step — #59; the column is retained for compat.)
   if (sortOrder === 0) {
-    await db.execute(
-      `UPDATE slides SET stage_deparaffinized_at = ?
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, stackId, assayType],
-    );
-    await db.execute(`UPDATE slide_stacks SET stage_deparaffinized_at = ? WHERE id = ?`, [timestamp, stackId]);
-  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_stained_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2098,7 +2172,7 @@ export async function syncAssayStackWorkflowStep(
     );
     const stackColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
     await db.execute(`UPDATE slide_stacks SET ${stackColumn} = ? WHERE id = ?`, [timestamp, stackId]);
-  } else if (sortOrder === 2) {
+  } else if (sortOrder === 1) {
     await db.execute(
       `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2108,7 +2182,7 @@ export async function syncAssayStackWorkflowStep(
       `UPDATE slide_stacks SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
       [timestamp, timestamp, stackId],
     );
-  } else if (sortOrder === 3) {
+  } else if (sortOrder === 2) {
     await db.execute(
       `UPDATE slides SET stage_dried_at = ?
         WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
@@ -2125,7 +2199,7 @@ export async function syncAssayStackWorkflowStep(
   if (assayTypes.length === 0) return;
   const completion = await Promise.all(
     assayTypes.map((row) =>
-      checklistComplete("slide_stack", stackId, `${row.assay_type}_workflow_v4`),
+      checklistComplete("slide_stack", stackId, `${row.assay_type}_workflow_v5`),
     ),
   );
   if (completion.every(Boolean)) await updateSlideStackStage(stackId, "ready_for_imaging");
@@ -2168,16 +2242,10 @@ export async function requestStainForSample(input: {
 }> {
   const db = await getDb();
   const assayName = input.assayName.trim();
-  const rows = await db.select<Array<{ preselected_stains: string }>>(
-    `SELECT preselected_stains FROM samples WHERE id = ?`,
-    [input.sampleId],
-  );
-  const current = parsePreselectedStains(rows[0]?.preselected_stains);
-  if (!current.some((a) => a.assay_type === input.assayType && a.assay_name.toLowerCase() === assayName.toLowerCase())) {
-    current.push({ assay_type: input.assayType, assay_name: assayName });
-    await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [JSON.stringify(current), input.sampleId]);
-  }
-  // Pull from an available extra first.
+  // Pull from an available extra first — that fulfils the request immediately
+  // (the extra becomes this stain and enters Staining), so nothing is added to
+  // the outstanding multiset. Only when no extra is free does the request rest
+  // on the block as an outstanding cut request.
   const extras = await db.select<Array<{ id: number }>>(
     `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
@@ -2206,6 +2274,20 @@ export async function requestStainForSample(input: {
       createdStackId: openRack ? null : stackId,
     };
   }
+  // No free extra: append an outstanding request (duplicates allowed, so asking
+  // for the same agent twice queues two slides — #62/#66). This flags the block
+  // for a fresh cut and prefills the Send-for-Cutting dialog with every
+  // outstanding agent, including agents already produced on an earlier cut.
+  const rows = await db.select<Array<{ preselected_stains: string }>>(
+    `SELECT preselected_stains FROM samples WHERE id = ?`,
+    [input.sampleId],
+  );
+  const current = parsePreselectedStains(rows[0]?.preselected_stains);
+  current.push({ assay_type: input.assayType, assay_name: assayName });
+  await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [
+    JSON.stringify(current),
+    input.sampleId,
+  ]);
   return { target: "block", slideId: null, stackId: null, createdStackId: null };
 }
 
