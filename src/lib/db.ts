@@ -109,6 +109,8 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
   await ensureColumn(db, "samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "slides", "depth_label", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "slides", "depth_note", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(
     `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
@@ -464,6 +466,53 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
   return res.lastInsertId ?? 0;
 }
 
+/**
+ * Move a sample to a different project (#60). The sample is re-identified under
+ * the target project — a fresh project_sample_number and a re-minted
+ * `<NEWCODE>-NNNN` sample_code — and its slides' codes are updated to match the
+ * new parent prefix so nothing shows a stale project code. Returns the codes for
+ * a confirmation message.
+ */
+export async function changeSampleProject(
+  sampleId: number,
+  newProjectId: number,
+): Promise<{ oldCode: string; newCode: string }> {
+  const db = await getDb();
+  const sampleRows = await db.select<Array<{ sample_code: string; project_id: number }>>(
+    `SELECT sample_code, project_id FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const sample = sampleRows[0];
+  if (!sample) throw new Error("Sample not found.");
+  const oldCode = sample.sample_code;
+  if (sample.project_id === newProjectId) return { oldCode, newCode: oldCode };
+
+  const projRows = await db.select<Array<{ code: string }>>(
+    `SELECT code FROM projects WHERE id = ?`,
+    [newProjectId],
+  );
+  const newProjectCode = projRows[0]?.code;
+  if (!newProjectCode) throw new Error("Target project not found.");
+
+  const number = await nextSampleNumber(newProjectId);
+  const newCode = `${newProjectCode.trim().toUpperCase()}-${String(number).padStart(4, "0")}`;
+  await db.execute(
+    `UPDATE samples SET project_id = ?, project_sample_number = ?, sample_code = ? WHERE id = ?`,
+    [newProjectId, number, newCode, sampleId],
+  );
+  // Re-prefix this sample's slide codes (EE-0001-A → XX-0003-A) so physical
+  // labels and the board/logs stay consistent with the new parent code.
+  await db.execute(
+    `UPDATE slides SET slide_code = ? || SUBSTR(slide_code, ?)
+       WHERE section_request_id IN (SELECT id FROM section_requests WHERE sample_id = ?)
+         AND slide_code LIKE ?`,
+    [newCode, oldCode.length + 1, sampleId, `${oldCode}-%`],
+  );
+  // Keep any outstanding stain requests addressable by the new codes too.
+  await db.execute(`UPDATE stain_requests SET sample_code = ? WHERE sample_code = ?`, [newCode, oldCode]);
+  return { oldCode, newCode };
+}
+
 export async function listOpenSamples(): Promise<Sample[]> {
   const db = await getDb();
   // The needs-stain flag is simply the block's OUTSTANDING stain requests
@@ -721,6 +770,22 @@ export async function setSampleNotes(sampleId: number, notes: string): Promise<v
 export async function setSlideNotes(slideId: number, notes: string): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE slides SET notes = ? WHERE id = ?`, [notes, slideId]);
+}
+
+/** Tag a set of slides as a depth grouping (#69): a shared label ("surface",
+ *  "100um deep", …) plus an optional note. An empty label clears the tag. */
+export async function setSlidesDepthTag(
+  slideIds: number[],
+  label: string,
+  note: string,
+): Promise<void> {
+  if (slideIds.length === 0) return;
+  const db = await getDb();
+  const placeholders = slideIds.map(() => "?").join(", ");
+  await db.execute(
+    `UPDATE slides SET depth_label = ?, depth_note = ? WHERE id IN (${placeholders})`,
+    [label.trim(), note.trim(), ...slideIds],
+  );
 }
 
 // ---- Processing batches ----------------------------------------------------

@@ -6,7 +6,7 @@ import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useSampleTimelineEvents } from "../hooks/useData";
+import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
 
 export function SampleDetailsDrawer({
   sample,
@@ -31,9 +31,11 @@ export function SampleDetailsDrawer({
     setExhaustedSamples,
     editTimestamp,
     requestStain,
+    changeProject,
   } = useActions();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
   const { data: catalog = [] } = useAssayCatalog();
+  const { data: projects = [] } = useProjects(true);
   const [showSectioning, setShowSectioning] = useState(false);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -104,6 +106,28 @@ export function SampleDetailsDrawer({
             />
           </>
         )}
+
+        <div className="mb-3">
+          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">Project</h3>
+          <select
+            aria-label="Sample project"
+            value={sample.project_id}
+            onChange={(event) => {
+              const target = Number(event.target.value);
+              if (target && target !== sample.project_id) void changeProject(sample.id, target);
+            }}
+            className="w-full rounded-lg border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-brand"
+          >
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name} ({project.code})
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-ink-faint">
+            Moving a sample re-numbers it under the new project (its slide labels update too).
+          </p>
+        </div>
 
         {sample.sample_description && (
           <Section title="Description">{sample.sample_description}</Section>

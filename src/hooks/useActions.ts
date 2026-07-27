@@ -31,6 +31,7 @@ import {
   setBlockExhausted,
   setSampleNotes,
   setSlideNotes,
+  setSlidesDepthTag,
   setPickedUp,
   setSamplePriority,
   setSectionTimestamp,
@@ -39,6 +40,7 @@ import {
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
   updateSampleDetails,
+  changeSampleProject as changeSampleProjectDb,
   updateSampleStage,
   updateSectioningPlan,
   updateSectionStage,
@@ -239,10 +241,30 @@ export function useActions() {
     [commit],
   );
 
+  const changeProject = useCallback(
+    async (sampleId: number, newProjectId: number) => {
+      const before = await getSample(sampleId);
+      if (!before) return;
+      await commit(`Move ${before.sample_code} to another project`, () =>
+        changeSampleProjectDb(sampleId, newProjectId),
+      );
+    },
+    [commit],
+  );
+
   const editSampleNotes = useCallback(
     (sampleId: number, notes: string) => commit("Edit sample notes", () => setSampleNotes(sampleId, notes)),
     [commit],
   );
+  const tagSlidesDepth = useCallback(
+    (slideIds: number[], label: string, note: string) =>
+      commit(
+        label.trim() ? `Tag ${slideIds.length} slide(s) · ${label.trim()}` : `Clear depth tag`,
+        () => setSlidesDepthTag(slideIds, label, note),
+      ),
+    [commit],
+  );
+
   const editSlideNotes = useCallback(
     (slideId: number, notes: string) => commit("Edit slide notes", () => setSlideNotes(slideId, notes)),
     [commit],
@@ -612,8 +634,10 @@ export function useActions() {
     editBatchStart,
     editTimestamp,
     saveDetails,
+    changeProject,
     editSampleNotes,
     editSlideNotes,
+    tagSlidesDepth,
     saveSectioningPlan,
     removeSample,
     removeSamples,

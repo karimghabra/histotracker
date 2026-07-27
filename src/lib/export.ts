@@ -25,9 +25,10 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
   ["Needs Decalc", (s) => (s.needs_decalcification ? "Yes" : "No")],
   ["Priority", (s) => (s.is_priority ? "Yes" : "No")],
   ["Current Stage", (s) => s.current_stage],
+  ["Exhausted", (s) => (s.block_exhausted ? "Yes" : "No")],
   // Block-level physical events only — the downstream slide stages (Stained,
-  // Deparaffinized, Imaged, …) are never stamped on a block, so they'd be empty
-  // columns here; they live in the Slides / Cut Orders sheets.
+  // Imaged, …) are never stamped on a block, so they'd be empty columns here;
+  // they live in the Slides / Cut Orders sheets.
   ...BLOCK_TIMELINE_STAGES.map(
     (stage): [string, Accessor<Sample>] => [
       stage.label,
@@ -88,6 +89,8 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Ready for Imaging", (row) => row.stage_ready_for_imaging_at ?? ""],
   ["Pictures Taken", (row) => row.stage_pictures_taken_at ?? ""],
   ["Analyzed", (row) => row.stage_analyzed_at ?? ""],
+  ["Depth Group", (row) => row.depth_label ?? ""],
+  ["Depth Note", (row) => row.depth_note ?? ""],
   ["Location", (row) => row.location],
   ["Notes", (row) => row.notes],
 ];
@@ -143,7 +146,7 @@ export type LogExportRow = { sample: Sample; slides: Slide[] };
 const slideCutAt = (sl: Slide): string => sl.stage_cut_at ?? sl.created_at ?? "";
 
 const LOGS_HEADERS = [
-  "Project", "Sample ID", "Description", "Sample Stage", "Date Added",
+  "Project", "Sample ID", "Description", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
   "Slide Notes", "Sample Notes",
@@ -159,10 +162,12 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       sample.sample_code,
       sample.sample_description ?? "",
       sample.current_stage ?? "",
+      sample.block_exhausted ? "Yes" : "No",
       (sample.date_added ?? "").slice(0, 10),
     ];
     if (slides.length === 0) {
-      out.push([...base, "", "", "", "", "", "", "", "", "", sample.overall_notes ?? ""]);
+      // 9 empty slide-stage cells + empty Slide Notes, then Sample Notes.
+      out.push([...base, ...Array(10).fill(""), sample.overall_notes ?? ""]);
       continue;
     }
     for (const sl of slides) {

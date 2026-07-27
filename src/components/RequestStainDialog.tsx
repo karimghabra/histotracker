@@ -65,17 +65,20 @@ export function RequestStainDialog({
       </p>
 
       <Field label="Sample">
-        <TextInput
-          list="request-sample-codes"
+        {/* A dropdown, not free text — no need to type the code (#64). */}
+        <select
           value={sampleCode}
           onChange={(e) => setSampleCode(e.target.value)}
-          placeholder="e.g. LIV-0007"
-        />
-        <datalist id="request-sample-codes">
-          {sampleCodes.map((code) => (
-            <option key={code} value={code} />
+          className="w-full rounded-lg border border-line bg-white px-2 py-2 text-sm text-ink outline-none focus:border-brand"
+        >
+          <option value="">Choose a sample…</option>
+          {(defaultSampleCode && !sampleCodes.includes(defaultSampleCode)
+            ? [defaultSampleCode, ...sampleCodes]
+            : sampleCodes
+          ).map((code) => (
+            <option key={code} value={code}>{code}</option>
           ))}
-        </datalist>
+        </select>
       </Field>
 
       <Field label="Specific slide (optional)">

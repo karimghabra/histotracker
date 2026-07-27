@@ -81,6 +81,7 @@ export default function App() {
   const [showBackups, setShowBackups] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [showRequestStain, setShowRequestStain] = useState(false);
+  const [requestStainCode, setRequestStainCode] = useState<string | undefined>(undefined);
   const [showSetup, setShowSetup] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [pendingBatchSampleIds, setPendingBatchSampleIds] = useState<number[] | null>(null);
@@ -595,7 +596,12 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           {view === "logs" ? (
             <div className="min-w-0 flex-1 overflow-hidden p-3">
-              <LogsView />
+              <LogsView
+                onRequestStain={(code) => {
+                  setRequestStainCode(code);
+                  setShowRequestStain(true);
+                }}
+              />
             </div>
           ) : (
           <>
@@ -725,8 +731,12 @@ export default function App() {
           operatorName={syncConfig.operator_name}
           sampleCodes={requestSampleCodes}
           catalog={assayCatalog}
+          defaultSampleCode={requestStainCode}
           onSubmitted={(message) => flash(message)}
-          onClose={() => setShowRequestStain(false)}
+          onClose={() => {
+            setShowRequestStain(false);
+            setRequestStainCode(undefined);
+          }}
         />
       )}
       {showSetup && (

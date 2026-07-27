@@ -644,13 +644,21 @@ invariant("all 18 migrations apply and expected tables exist", () => {
   // Migration 0017 adds the planned-run column (issues #4, #24).
   const batchCols = api.all(`PRAGMA table_info(processing_batches)`).map((r) => r.name);
   assert(batchCols.includes("planned_start_at"), "processing_batches must gain planned_start_at");
-  // Migration 0018: slide_stacks gains the agent-rack shape; depth is gone (#5).
+  // Migration 0018: slide_stacks gains the agent-rack shape; the old cut-DEPTH
+  // model is gone (#5). (Note: 0022 adds unrelated depth_label/depth_note tags.)
   const stackCols = api.all(`PRAGMA table_info(slide_stacks)`).map((r) => r.name);
   assert(stackCols.includes("kind") && stackCols.includes("assay_name"), "slide_stacks must gain kind/assay_name");
+  const removedDepthCols = ["cut_depth_um", "cut_depth_index", "depth_duplicate_ordinal"];
   for (const t of ["slides", "section_requests", "slide_stacks", "samples"]) {
     const cols = api.all(`PRAGMA table_info(${t})`).map((r) => r.name.toLowerCase());
-    assert(!cols.some((c) => c.includes("depth")), `${t} must have no depth columns`);
+    for (const gone of removedDepthCols) {
+      assert(!cols.includes(gone), `${t} must not have the removed cut-depth column ${gone}`);
+    }
   }
+  // The depth TAG columns (0022) do exist on slides.
+  const slideCols = api.all(`PRAGMA table_info(slides)`).map((r) => r.name);
+  assert(slideCols.includes("depth_label") && slideCols.includes("depth_note"),
+    "slides must have the depth-tag columns (0022, #69)");
 });
 
 invariant("sample codes auto-increment per project and are zero-padded", () => {

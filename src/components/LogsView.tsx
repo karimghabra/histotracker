@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
+import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
@@ -185,7 +186,17 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
   );
 }
 
-export function LogsView() {
+export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: string) => void } = {}) {
+  const { tagSlidesDepth } = useActions();
+  const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
+  const [showDepthDialog, setShowDepthDialog] = useState(false);
+  const toggleSlideSelect = (id: number) =>
+    setSelectedSlideIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const { data: samples = [] } = useAllSamples();
   const { data: slides = [] } = useAllSlides();
   const { data: catalog = [] } = useAssayCatalog(true);
@@ -525,13 +536,87 @@ export function LogsView() {
                   stainFilter={stain === "all" ? null : stain}
                   onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
+                  onRequestStain={onRequestStain}
+                  selectedSlideIds={selectedSlideIds}
+                  onToggleSlideSelect={toggleSlideSelect}
                 />
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {/* Depth-tagging action bar — appears when slides are selected (#69). */}
+      {selectedSlideIds.size > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2 shadow-xl">
+            <span className="text-xs font-medium text-ink">
+              {selectedSlideIds.size} slide{selectedSlideIds.size === 1 ? "" : "s"} selected
+            </span>
+            <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
+              <Tag size={13} /> Tag depth
+            </Button>
+            <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSelectedSlideIds(new Set())}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {showDepthDialog && (
+        <DepthTagDialog
+          count={selectedSlideIds.size}
+          onApply={async (label, note) => {
+            await tagSlidesDepth([...selectedSlideIds], label, note);
+            setSelectedSlideIds(new Set());
+            setShowDepthDialog(false);
+          }}
+          onClose={() => setShowDepthDialog(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function DepthTagDialog({
+  count,
+  onApply,
+  onClose,
+}: {
+  count: number;
+  onApply: (label: string, note: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={`Tag ${count} slide${count === 1 ? "" : "s"} at a depth`} onClose={onClose} width="max-w-sm">
+      <p className="mb-3 text-xs text-ink-faint">
+        Group these slides under a depth label (e.g. “surface”, “100µm deep”), with an optional note.
+        Leave the label empty and apply to clear an existing tag.
+      </p>
+      <Field label="Depth label">
+        <TextInput autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. 100µm deep" />
+      </Field>
+      <Field label="Note (optional)">
+        <TextArea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Context…" />
+      </Field>
+      <div className="mt-2 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button
+          variant="primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await onApply(label, note);
+            setBusy(false);
+          }}
+        >
+          <Tag size={14} /> {busy ? "Applying…" : "Apply tag"}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -549,6 +634,9 @@ function FragmentRow({
   stainFilter,
   onlyMatching,
   colCount,
+  onRequestStain,
+  selectedSlideIds,
+  onToggleSlideSelect,
 }: {
   sample: Sample;
   agents: string[];
@@ -563,6 +651,9 @@ function FragmentRow({
   stainFilter: string | null;
   onlyMatching: boolean;
   colCount: number;
+  onRequestStain?: (sampleCode: string) => void;
+  selectedSlideIds: Set<number>;
+  onToggleSlideSelect: (id: number) => void;
 }) {
   const { editSampleNotes, editSlideNotes } = useActions();
   const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
@@ -608,6 +699,14 @@ function FragmentRow({
         <td className="px-2 py-1.5">
           <div className="flex items-center gap-2">
             <span className="whitespace-nowrap text-ink-soft">{phaseLabel}</span>
+            {sample.block_exhausted === 1 && (
+              <span
+                className="whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                title="Block exhausted — no sample left to cut"
+              >
+                Exhausted
+              </span>
+            )}
             {progress.total > 0 && (
               <span className="flex items-center gap-1" title={`${progress.done}/${progress.total} analyzed`}>
                 <span className="h-1.5 w-10 overflow-hidden rounded-full bg-line">
@@ -637,6 +736,17 @@ function FragmentRow({
       {open && (
         <tr>
           <td colSpan={colCount} className="bg-surface px-4 py-3">
+            {onRequestStain && (
+              <div className="mb-3">
+                <button
+                  onClick={() => onRequestStain(sample.sample_code)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
+                >
+                  <Send size={13} /> Request stain for {sample.sample_code}
+                </button>
+              </div>
+            )}
+
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
@@ -670,21 +780,38 @@ function FragmentRow({
                   const slideOpen = openSlides.has(slide.id);
                   return (
                     <div key={slide.id} className={cn(match && "bg-amber-100/50")}>
-                      <button
-                        type="button"
-                        onClick={() => toggleSlide(slide.id)}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[11px] hover:bg-brand/5"
-                      >
-                        {slideOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                        <span className="font-medium text-ink">{slide.slide_code}</span>
-                        {slide.assay_type && (
-                          <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
-                            {slide.assay_type}
-                          </span>
-                        )}
-                        <span className="text-ink-soft">{agentLabel(slide)}</span>
-                        <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
-                      </button>
+                      <div className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-brand/5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select slide ${slide.slide_code}`}
+                          checked={selectedSlideIds.has(slide.id)}
+                          onChange={() => onToggleSlideSelect(slide.id)}
+                          className="h-3 w-3 shrink-0 accent-[var(--color-brand)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => toggleSlide(slide.id)}
+                          className="flex flex-1 items-center gap-2 text-left"
+                        >
+                          {slideOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                          <span className="font-medium text-ink">{slide.slide_code}</span>
+                          {slide.assay_type && (
+                            <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
+                              {slide.assay_type}
+                            </span>
+                          )}
+                          <span className="text-ink-soft">{agentLabel(slide)}</span>
+                          {slide.depth_label && (
+                            <span
+                              className="rounded-full bg-violet-100 px-1.5 text-[9px] font-medium text-violet-700"
+                              title={slide.depth_note || undefined}
+                            >
+                              {slide.depth_label}
+                            </span>
+                          )}
+                          <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
+                        </button>
+                      </div>
                       {slideOpen && (
                         <div className="space-y-2 px-3 pb-2 pl-7">
                           <Timeline events={recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE)} />

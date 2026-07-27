@@ -151,6 +151,9 @@ export interface Slide {
   stage_analyzed_at: string | null;
   location: string;
   notes: string;
+  /** Depth grouping label ("surface", "100um deep", …) + note (#69). */
+  depth_label: string;
+  depth_note: string;
   created_at: string;
   parent_code?: string;
   project_code?: string;

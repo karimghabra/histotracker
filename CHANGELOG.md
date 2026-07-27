@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 - 2026-07-27
+
+Second issue batch — project moves, easier stain requests, exhaustion visibility,
+and depth tagging.
+
+- **Move a sample to a different project (#60).** The sample drawer has a Project
+  dropdown; changing it re-numbers the sample under the new project and updates
+  its slide labels to match.
+- **Request a stain from the Logs view (#64).** Expand a sample and click
+  “Request stain for …”. The request dialog opens with the sample already
+  selected — and its Sample field is now a dropdown, so no more typing the code.
+- **Block exhaustion is shown in the Logs (#65)** — an “Exhausted” badge on the
+  sample’s stage — and in exports (#67, a new “Exhausted” column on the Samples
+  and Logs exports).
+- **Depth tagging (#69).** Select multiple slides in the Logs view and tag them
+  as a depth grouping (e.g. “100µm deep”) with a note; the tag shows on each
+  slide and is included in exports. **Schema change** (adds `depth_label` /
+  `depth_note` to the slides table) — additive, so older data and backups keep
+  loading; deploy this build to every workstation and viewer together.
+
 ## 0.5.1 - 2026-07-27
 
 - **Tiles can be de-selected (#61).** Click a selected tile again (or un-tick its
