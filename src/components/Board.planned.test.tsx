@@ -45,6 +45,7 @@ describe("Board — a planned run appears in the Processor window (issues #4, #2
         onSectionSelectionChange={noop}
         onSelectStack={noop}
         onStackSelectionChange={noop}
+        onCloseDrawers={noop}
         onSelectExtraSlideSample={noop}
         onMoveSamples={noop}
         onMoveSections={noop}

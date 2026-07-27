@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-07-27
+
+- **Tiles can be de-selected (#61).** Click a selected tile again (or un-tick its
+  checkbox) to de-select it — and de-selecting now closes the detail panel
+  instead of re-opening it.
+
 ## 0.5.0 - 2026-07-27
 
 Issue sweep — stain requests, deparaffinization, and several UI fixes.

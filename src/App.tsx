@@ -616,6 +616,13 @@ export default function App() {
               onSelectStack={selectStack}
               onStackSelectionChange={setSelectedStackIds}
               onSelectExtraSlideSample={selectExtraSlideSample}
+              onCloseDrawers={() => {
+                setSelectedSampleId(null);
+                setSelectedSectionId(null);
+                setSelectedStackId(null);
+                setSelectedBatchId(null);
+                setSelectedExtraSampleId(null);
+              }}
               onMoveSamples={(sampleIds, stageKey) => {
                 void moveSamples(sampleIds, stageKey).catch((error) => flash(String(error)));
               }}

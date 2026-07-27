@@ -94,6 +94,9 @@ export function Board({
   stacks,
   batches,
   extraSlides,
+  selectedSampleId,
+  selectedSectionId,
+  selectedStackId,
   onSelectSample,
   onSampleSelectionChange,
   onSelectSection,
@@ -101,6 +104,7 @@ export function Board({
   onSelectStack,
   onStackSelectionChange,
   onSelectExtraSlideSample,
+  onCloseDrawers,
   onMoveSamples,
   onMoveSections,
   onMoveStacks,
@@ -126,6 +130,8 @@ export function Board({
   onSelectStack: (id: number) => void;
   onStackSelectionChange: (ids: number[]) => void;
   onSelectExtraSlideSample: (sampleId: number) => void;
+  /** Clear the open detail drawer (used when a tile is de-selected, #61). */
+  onCloseDrawers: () => void;
   onMoveSamples: (sampleIds: number[], stageKey: string) => void;
   onMoveSections: (sectionIds: number[], stageKey: string) => void;
   onMoveStacks: (stackIds: number[], stageKey: string) => void;
@@ -349,6 +355,13 @@ export function Board({
       });
       blockAnchor.current = id;
     } else {
+      // Plain click on the already-open tile → de-select and close the panel,
+      // rather than re-opening it (#61).
+      if (selectedSampleId === id && selectedBlocks.size === 1 && selectedBlocks.has(id)) {
+        setSelectedBlocks(new Set());
+        onCloseDrawers();
+        return;
+      }
       setSelectedBlocks(new Set([id]));
       blockAnchor.current = id;
     }
@@ -361,6 +374,7 @@ export function Board({
     const target = samples.find((sample) => sample.id === id);
     if (!target) return;
     const targetQueue = STAGE_TO_QUEUE[target.current_stage];
+    const wasSelected = selectedBlocks.has(id);
     setSelectedBlocks((current) => {
       const sameQueue = [...current].every((sampleId) => {
         const sample = samples.find((candidate) => candidate.id === sampleId);
@@ -372,7 +386,12 @@ export function Board({
       return next;
     });
     blockAnchor.current = id;
-    onSelectSample(id);
+    // Ticking a box opens the panel; un-ticking the open tile closes it (#61).
+    if (wasSelected) {
+      if (selectedSampleId === id) onCloseDrawers();
+    } else {
+      onSelectSample(id);
+    }
   }
 
   // Select a whole sample's Needs Sectioning group (issue #37): plain click
@@ -400,6 +419,13 @@ export function Board({
       });
       sectionGroupAnchor.current = repId;
     } else {
+      // Re-click on the open group → de-select + close the panel (#61).
+      if (selectedSectionId != null && ids.includes(selectedSectionId) &&
+          selectedSections.size === ids.length && ids.every((id) => selectedSections.has(id))) {
+        setSelectedSections(new Set());
+        onCloseDrawers();
+        return;
+      }
       setSelectedSections(new Set(ids));
       sectionGroupAnchor.current = repId;
     }
@@ -412,6 +438,7 @@ export function Board({
   function toggleSectionGroup(ids: number[]) {
     setSelectedBlocks(new Set());
     setSelectedStacks(new Set());
+    const wasSelected = ids.every((id) => selectedSections.has(id));
     setSelectedSections((current) => {
       const next = new Set(current);
       const allSelected = ids.every((id) => next.has(id));
@@ -422,7 +449,12 @@ export function Board({
       return next;
     });
     sectionGroupAnchor.current = ids[0] ?? null;
-    if (ids[0] != null) onSelectSection(ids[0]);
+    // Un-ticking the open group closes its panel; ticking opens it (#61).
+    if (wasSelected) {
+      if (selectedSectionId != null && ids.includes(selectedSectionId)) onCloseDrawers();
+    } else if (ids[0] != null) {
+      onSelectSection(ids[0]);
+    }
   }
 
   function selectStack(id: number, event: MouseEvent<HTMLDivElement>) {
@@ -439,6 +471,12 @@ export function Board({
       });
       stackAnchor.current = id;
     } else {
+      // Re-click on the open stack → de-select + close the panel (#61).
+      if (selectedStackId === id && selectedStacks.size === 1 && selectedStacks.has(id)) {
+        setSelectedStacks(new Set());
+        onCloseDrawers();
+        return;
+      }
       setSelectedStacks(new Set([id]));
       stackAnchor.current = id;
     }
