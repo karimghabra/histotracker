@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { launchOptions } from "./playwright.config";
 
 // Standalone config for the screenshot/tutorial walkthrough. Kept OUT of the
 // main e2e suite (which uses testDir ./tests/e2e) so it never gates a release —
@@ -15,7 +16,7 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     viewport: { width: 1440, height: 900 },
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], launchOptions } }],
   webServer: {
     command: "npx vite --config vite.config.playwright.ts",
     url: `http://localhost:${PORT}`,

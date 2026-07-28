@@ -5,6 +5,13 @@ import { defineConfig, devices } from "@playwright/test";
 // UI regression checks — distinct from the jsdom vitest suite.
 const PORT = 5599;
 
+// Some sandboxes ship a pre-installed Chromium whose build number doesn't match
+// the one this Playwright version would download (and can't fetch a new one).
+// Point CHROMIUM_PATH at that binary to use it instead; unset everywhere else,
+// so a normal `npx playwright install` checkout is unaffected.
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH;
+export const launchOptions = CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {};
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
@@ -20,7 +27,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", use: { ...devices["Desktop Chrome"], launchOptions } },
   ],
   webServer: {
     command: "npx vite --config vite.config.playwright.ts",
