@@ -20,13 +20,19 @@ test("Manage → Projects: rename and delete", async ({ page }) => {
   await seed(page);
   await page.getByRole("button", { name: "Manage" }).click();
   await page.getByRole("button", { name: "Projects", exact: true }).click();
-  await expect(page.getByText("Enthesis Engineering")).toBeVisible();
+  // Scope to the dialog's own row format ("<code> · <name>"): the bare name
+  // also renders in the sidebar project list, so an unscoped getByText is
+  // ambiguous once that list has loaded.
+  await expect(page.getByText("EE · Enthesis Engineering")).toBeVisible();
 
   // Rename it (the new name shows in both the dialog and the sidebar).
   await page.getByTitle("Edit").first().click();
-  await page.getByRole("textbox").nth(1).fill("Renamed Lab"); // 0 = Code, 1 = Name
+  // Address the field by its label rather than a textbox index — the index
+  // silently drifts when the panel gains an input, and a wrong guess here
+  // renames the Code instead, which still "passes" a loose text assertion.
+  await page.getByLabel("Name", { exact: true }).fill("Renamed Lab");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("Renamed Lab").first()).toBeVisible();
+  await expect(page.getByText("EE · Renamed Lab")).toBeVisible();
 
   // Delete it (no samples → allowed).
   await page.getByTitle("Delete project").click();

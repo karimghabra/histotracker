@@ -18,6 +18,55 @@ cd src-tauri && cargo check
 `pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All four
 should pass before pushing.
 
+## Driving the real UI — Playwright (`tests/e2e/`)
+
+```bash
+pnpm test:e2e                                  # whole suite
+npx playwright test tests/e2e/logs.spec.ts     # one file
+npx playwright test -g "rename and delete"     # one test by title
+pnpm test:e2e:headed                           # watch it run
+pnpm test:e2e:ui                               # interactive picker/inspector
+npx playwright show-trace test-results/<dir>/trace.zip
+```
+
+These run the **real app** — real `db.ts`, real hooks, real components — in
+Chromium. `vite.config.playwright.ts` aliases `@tauri-apps/plugin-sql` to a
+sql.js shim (`src/test/browser-sql-shim.ts`) that loads the **actual
+migrations**, so the schema can't drift; `tauri dev` and production are
+untouched. That config also stubs a fake GitHub remote, so **workstation↔viewer
+sync is drivable** from two browser contexts against one shared store
+(`sync.spec.ts`).
+
+Conventions worth copying:
+
+- `page.goto("/?freshdb=1")` starts from a clean DB (honoured once per load, so
+  a restore/undo reopen doesn't wipe itself).
+- Seed helpers at the top of `workflow.spec.ts` (`seedSample`,
+  `completePreprocessing`), and a `dragOnto()` that clears dnd-kit's 5px
+  activation threshold — reuse them rather than re-deriving the drag.
+- Prefer **label/role locators over positional ones**. `getByRole("textbox")
+  .nth(1)` silently retargets when a panel gains an input; `Field` renders a
+  wrapping `<label>`, so `getByLabel("Name", { exact: true })` is stable.
+- Several bare names render in *both* the sidebar and a dialog — scope to the
+  dialog's own format (e.g. `"EE · Enthesis Engineering"`) or you'll trip
+  strict mode once the sidebar list loads.
+
+`playwright.showcase.config.ts` → `tests/tutorial/` regenerates the tutorial
+screenshots (`docs/tutorial/img/`). It's deliberately a separate `testDir` so it
+never gates a release; run it on demand with
+`npx playwright test --config playwright.showcase.config.ts`.
+
+If the environment ships a Chromium whose build number doesn't match the pinned
+`@playwright/test` (common in sandboxes and CI images that can't download one),
+point both configs at it — otherwise they behave exactly as before:
+
+```bash
+CHROMIUM_PATH=/opt/pw-browsers/chromium pnpm test:e2e
+```
+
+Note the e2e suite is **not** part of CI (`.github/workflows/test.yml`); it's a
+local correctness tool, so run it yourself when touching board/drawer/sync UI.
+
 ## The test harness — keep it green, keep it in sync
 
 `scripts/workflow-test.mjs` loads the **real** migrations
