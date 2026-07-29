@@ -29,6 +29,8 @@ import {
   revertSectionToStage,
   revertToStage,
   setBlockExhausted,
+  setSampleArchived,
+  setSamplesArchived,
   setSampleNotes,
   setSlideNotes,
   setSlidesDepthTag,
@@ -584,6 +586,29 @@ export function useActions() {
     [commit],
   );
 
+  // #74 — archiving is a reversible flag, not a delete, so it rides the normal
+  // undo stack and never touches numbering.
+  const setArchived = useCallback(
+    async (sampleId: number, archived: boolean) => {
+      const before = await getSample(sampleId);
+      if (!before) return;
+      await commit(
+        archived ? `Archive ${before.sample_code}` : `Unarchive ${before.sample_code}`,
+        () => setSampleArchived(sampleId, archived),
+      );
+    },
+    [commit],
+  );
+
+  const setArchivedSamples = useCallback(
+    (sampleIds: number[], archived: boolean) =>
+      commit(
+        `${archived ? "Archive" : "Unarchive"} ${sampleIds.length} sample${sampleIds.length === 1 ? "" : "s"}`,
+        () => setSamplesArchived(sampleIds, archived),
+      ),
+    [commit],
+  );
+
   const togglePriority = useCallback(
     async (sampleId: number) => {
       const before = await getSample(sampleId);
@@ -664,6 +689,8 @@ export function useActions() {
     markSectionAnalyzed: (sectionId: number) => moveSection(sectionId, "analyzed"),
     setExhausted,
     setExhaustedSamples,
+    setArchived,
+    setArchivedSamples,
     togglePriority,
     undo,
     redo,

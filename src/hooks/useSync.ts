@@ -56,7 +56,12 @@ export function useSync(config: SyncConfigPublic | null): SyncState {
         const result = await pullSnapshotIfNewer();
         if (result.updated) {
           invalidateAll();
-          setLastMessage("Pulled latest snapshot");
+          // Say WHO the incoming changes came from when the manifest records it (#77).
+          setLastMessage(
+            result.publishedBy
+              ? `Pulled latest snapshot — changes by ${result.publishedBy}`
+              : "Pulled latest snapshot",
+          );
         } else {
           setLastMessage("Up to date");
         }

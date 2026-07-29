@@ -197,6 +197,13 @@
   --color-ink-soft: #766887; --color-ink-faint: #a194b0; --color-line: #e5d8f0;
   --color-brand: #a052b2; --color-brand-strong: #7e3a91; --color-lane-a: #d05f9b; --color-lane-b: #5d9fc5;
 }
+/* Matcha (#78) — soft whisked-green light theme: stone-cream paper, deep tea
+   ink, and the two lanes split across matcha green and bamboo. */
+:root[data-theme="matcha"] {
+  --color-surface: #eaf0dc; --color-panel: #f8fbf0; --color-ink: #2b3a22;
+  --color-ink-soft: #61734f; --color-ink-faint: #8fa07b; --color-line: #d3e0bd;
+  --color-brand: #6f9438; --color-brand-strong: #52732a; --color-lane-a: #7ea546; --color-lane-b: #4f9678;
+}
 :root[data-theme="cobalt"] {
   --color-surface: #0a1730; --color-panel: #122344; --color-ink: #eff5ff;
   --color-ink-soft: #b7c8e7; --color-ink-faint: #7e94bd; --color-line: #304a75;

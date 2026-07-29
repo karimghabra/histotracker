@@ -7,6 +7,8 @@ import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
+import { cn } from "../lib/utils";
+import { useReadOnly } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
   sample,
@@ -32,7 +34,11 @@ export function SampleDetailsDrawer({
     editTimestamp,
     requestStain,
     changeProject,
+    saveDetails,
   } = useActions();
+  // Viewers mirror the workstation read-only; the write controls below are
+  // hidden rather than left to fail silently (#72).
+  const readOnly = useReadOnly();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
   const { data: catalog = [] } = useAssayCatalog();
   const { data: projects = [] } = useProjects(true);
@@ -41,6 +47,9 @@ export function SampleDetailsDrawer({
   const [draft, setDraft] = useState("");
   const [requestAgent, setRequestAgent] = useState("");
   const [requestFlash, setRequestFlash] = useState<string | null>(null);
+  const [requestFailed, setRequestFailed] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
 
   const showPreprocessing =
     (STAGE_ORDER[sample.current_stage] ?? 99) <= STAGE_ORDER["processing_started"];
@@ -129,9 +138,73 @@ export function SampleDetailsDrawer({
           </p>
         </div>
 
-        {sample.sample_description && (
-          <Section title="Description">{sample.sample_description}</Section>
-        )}
+        {/* Descriptions are typed in a hurry at intake and often need correcting
+            later (#79). Editing routes through saveDetails, so it lands on the
+            undo stack like every other mutation. */}
+        <div className="mb-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+              Description
+            </h3>
+            {!editingDescription && !readOnly && (
+              <button
+                type="button"
+                aria-label="Edit description"
+                className="rounded p-0.5 text-ink-faint transition hover:bg-brand/10 hover:text-brand"
+                onClick={() => {
+                  setDescriptionDraft(sample.sample_description ?? "");
+                  setEditingDescription(true);
+                }}
+              >
+                <Pencil size={12} />
+              </button>
+            )}
+          </div>
+          {editingDescription ? (
+            <div>
+              <textarea
+                aria-label="Sample description"
+                autoFocus
+                rows={2}
+                value={descriptionDraft}
+                onChange={(event) => setDescriptionDraft(event.target.value)}
+                className="w-full rounded-md border border-line bg-panel px-2 py-1 text-xs text-ink outline-none focus:border-brand"
+              />
+              <div className="mt-1 flex gap-1">
+                <Button
+                  className="px-2 py-0.5 text-[11px]"
+                  onClick={() => {
+                    void saveDetails(sample.id, {
+                      sample_description: descriptionDraft,
+                      processing_type: sample.processing_type,
+                      fixative_agent: sample.fixative_agent,
+                      needs_decalcification: sample.needs_decalcification === 1,
+                      cut_notes: sample.cut_notes ?? "",
+                      slide_notes: sample.slide_notes ?? "",
+                      stains: sample.stains ?? "",
+                      preselected_stains: [],
+                      overall_notes: sample.overall_notes ?? "",
+                    });
+                    setEditingDescription(false);
+                  }}
+                >
+                  Save
+                </Button>
+                <Button
+                  variant="subtle"
+                  className="px-2 py-0.5 text-[11px]"
+                  onClick={() => setEditingDescription(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-ink-soft">
+              {sample.sample_description || <span className="text-ink-faint">No description</span>}
+            </p>
+          )}
+        </div>
         {sample.needs_decalcification === 1 && !sample.decalc_completed_at && isPreprocessing && (
           <p className="mb-3 inline-block rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
             Requires decalcification
@@ -142,6 +215,15 @@ export function SampleDetailsDrawer({
         {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
         {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}
 
+        {/* Cutting and stain requests are workstation actions. A viewer sees the
+            cutting plan and existing tags, but cannot drive the bench (#72). */}
+        {readOnly ? (
+          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+            Read-only viewer — cutting and stain requests are made on the workstation.
+            Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
+          </p>
+        ) : (
+        <>
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
             Cutting
@@ -179,24 +261,44 @@ export function SampleDetailsDrawer({
               disabled={!requestAgent}
               onClick={async () => {
                 const [assayType, assayName] = requestAgent.split("::");
-                const result = await requestStain(sample.id, assayType as "stain" | "ihc", assayName);
-                setRequestAgent("");
-                setRequestFlash(
-                  result.target === "extra"
-                    ? `${assayName} pulled from an extra slide → now in Staining`
-                    : `${assayName} flagged on the block — a new cut is needed`,
-                );
+                // The request can be legitimately refused — e.g. an exhausted
+                // block with no extras left to fulfil it (#70). Surface the
+                // reason instead of failing silently.
+                try {
+                  const result = await requestStain(sample.id, assayType as "stain" | "ihc", assayName);
+                  setRequestAgent("");
+                  setRequestFailed(false);
+                  setRequestFlash(
+                    result.target === "extra"
+                      ? `${assayName} pulled from an extra slide → now in Staining`
+                      : `${assayName} flagged on the block — a new cut is needed`,
+                  );
+                } catch (error) {
+                  setRequestFailed(true);
+                  setRequestFlash(error instanceof Error ? error.message : String(error));
+                }
               }}
             >
               Request
             </Button>
           </div>
-          {requestFlash && <p className="mt-1 text-[11px] text-brand">{requestFlash}</p>}
+          {requestFlash && (
+            <p
+              role={requestFailed ? "alert" : undefined}
+              className={cn("mt-1 text-[11px]", requestFailed ? "text-red-600" : "text-brand")}
+            >
+              {requestFlash}
+            </p>
+          )}
         </div>
+        </>
+        )}
 
         <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-ink-faint">
           Timeline
-          <span className="ml-2 font-normal normal-case text-ink-faint/70">click a time to edit</span>
+          {!readOnly && (
+            <span className="ml-2 font-normal normal-case text-ink-faint/70">click a time to edit</span>
+          )}
         </h3>
         <ol className="space-y-1">
           {BLOCK_TIMELINE_STAGES.map((stage) => {
@@ -235,6 +337,9 @@ export function SampleDetailsDrawer({
                       Clear
                     </button>
                   </span>
+                ) : readOnly ? (
+                  // A viewer reads the timeline; it cannot restamp it (#72).
+                  <span className="px-1 text-ink-faint">{at ?? "—"}</span>
                 ) : (
                   <button
                     onClick={() => beginEdit(stage.column, at)}
@@ -263,6 +368,9 @@ export function SampleDetailsDrawer({
         </ol>
       </div>
 
+      {/* Every control in this footer writes, so the whole bar is a workstation
+          affordance (#72). */}
+      {!readOnly && (
       <div className="border-t border-line px-4 py-3">
         {isPreprocessing && !processingReady && (
           <p className="mb-2 text-xs text-amber-700">
@@ -329,6 +437,7 @@ export function SampleDetailsDrawer({
         </Button>
         </div>
       </div>
+      )}
 
       {showSectioning && (
         <SectioningPlanDialog

@@ -57,6 +57,10 @@ export interface Sample {
   block_exhausted: number; // 0 | 1
   is_priority: number; // 0 | 1
   prioritized_at: string | null;
+  /** Set = archived and hidden by default; NULL = live. Restorable (#74). */
+  archived_at: string | null;
+  /** High-water mark of slide letters ever issued — never reused (#73). */
+  slides_issued?: number;
 
   created_at: string;
 
@@ -193,6 +197,9 @@ export interface SlideStack {
   has_stain?: number;
   has_ihc?: number;
   slide_summary?: string;
+  /** Comma-delimited distinct assay agents in the stack — used by the Ready for
+   *  Imaging stain filter (#82). */
+  agent_names?: string;
   member_sample_codes?: string;
 }
 

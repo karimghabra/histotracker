@@ -16,9 +16,12 @@ import { ManageDialog } from "./components/ManageDialog";
 import { BackupsDialog } from "./components/BackupsDialog";
 import { SetupScreen } from "./components/SetupScreen";
 import { RequestStainDialog } from "./components/RequestStainDialog";
+import { ReadOnlyProvider } from "./lib/readOnly";
+import { useIdleLogout } from "./hooks/useIdleLogout";
+import { mergePendingRequests, prunePendingRequests } from "./lib/pendingRequests";
 import { RequestsInbox } from "./components/RequestsInbox";
-import { Button } from "./components/ui";
-import { useActiveUser, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
+import { Button, Field, Modal } from "./components/ui";
+import { useActiveUser, useAllSamples, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
 import { useActions } from "./hooks/useActions";
 import { useSync } from "./hooks/useSync";
 import { useBackupScheduler } from "./hooks/useBackupScheduler";
@@ -32,6 +35,7 @@ export default function App() {
   const qc = useQueryClient();
   const { data: projects = [] } = useProjects(true);
   const { data: samples = [] } = useOpenSamples();
+  const { data: allSamples = [] } = useAllSamples();
   const { data: sections = [] } = useOpenSections();
   const { data: stacks = [] } = useOpenSlideStacks();
   const { data: batches = [] } = useProcessingBatches();
@@ -117,6 +121,15 @@ export default function App() {
   useEffect(() => {
     if (activeUser) window.localStorage.setItem("histometer-active-operator", activeUser.name);
   }, [activeUser]);
+
+  // #76 — drop the session after a spell of no interaction, so the next person
+  // at a shared bench machine isn't silently attributed the previous one's work.
+  // Remember who it was, purely to address the sign-back-in prompt by name.
+  const [idleSignedOut, setIdleSignedOut] = useState<string | null>(null);
+  useIdleLogout(Boolean(activeUser) && !isViewer, () => {
+    setIdleSignedOut(activeUser?.name ?? "");
+    selectUser.mutate(null);
+  });
 
   // Default the sidebar selection to the first active project.
   useEffect(() => {
@@ -257,6 +270,20 @@ export default function App() {
     for (const section of sections) if (section.parent_code) codes.add(section.parent_code);
     return [...codes].sort();
   }, [samples, sections]);
+  // Exhausted blocks can't be cut again, so the request dialog refuses them (#70).
+  // Sourced from ALL samples, not the open board list — listOpenSamples filters
+  // exhausted blocks out, yet their code still reaches the dropdown via sections
+  // that are still in flight, which is exactly the case being guarded.
+  const exhaustedSampleCodes = useMemo(
+    () => allSamples.filter((sample) => sample.block_exhausted === 1).map((sample) => sample.sample_code),
+    [allSamples],
+  );
+
+  // Once a submitted request comes back in a snapshot, drop the local echo so
+  // it isn't shown twice (#71).
+  useEffect(() => {
+    if (isViewer) prunePendingRequests(stainRequests);
+  }, [isViewer, stainRequests]);
 
   // Surface background sync failures without stealing focus.
   useEffect(() => {
@@ -399,6 +426,10 @@ export default function App() {
   }
 
   return (
+    // Viewer instances are read-only mirrors; the mutating surfaces below read
+    // this and hide themselves rather than firing writes the data layer will
+    // reject (#72).
+    <ReadOnlyProvider value={isViewer}>
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
         projects={projects}
@@ -498,6 +529,7 @@ export default function App() {
                 <option value="rose">☀ Rose Quartz</option>
                 <option value="sunset">☀ Sunset Agar</option>
                 <option value="mint">☀ Mint Cleanroom</option>
+                <option value="matcha">☀ Matcha Tea</option>
                 <option value="solarized">☀ Solarized Slide</option>
                 <option value="arctic">☀ Arctic Bloom</option>
                 <option value="sakura">☀ Sakura Lab</option>
@@ -711,7 +743,10 @@ export default function App() {
       {showRequests && (
         <RequestsInbox
           title={isViewer ? "Requests" : "Stain requests"}
-          requests={stainRequests}
+          // A viewer's own submissions only reach the database after the
+          // workstation drains them and the viewer pulls the next snapshot, so
+          // show the locally-remembered ones until then (#71).
+          requests={isViewer ? mergePendingRequests(stainRequests) : stainRequests}
           mineFilterName={isViewer ? syncConfig.operator_name : undefined}
           onSetStatus={
             isViewer
@@ -730,6 +765,7 @@ export default function App() {
         <RequestStainDialog
           operatorName={syncConfig.operator_name}
           sampleCodes={requestSampleCodes}
+          exhaustedSampleCodes={exhaustedSampleCodes}
           catalog={assayCatalog}
           defaultSampleCode={requestStainCode}
           onSubmitted={(message) => flash(message)}
@@ -746,7 +782,42 @@ export default function App() {
           onCancel={() => setShowSetup(false)}
         />
       )}
+      {/* #76 — say plainly that the session lapsed, and offer the way back in.
+          Dismissable: work can continue unsigned, it is just recorded that way. */}
+      {idleSignedOut !== null && (
+        <Modal title="Signed out for inactivity" onClose={() => setIdleSignedOut(null)} width="max-w-sm">
+          <p className="mb-3 text-xs text-ink-soft">
+            {idleSignedOut
+              ? `${idleSignedOut} was signed out after 30 minutes without activity.`
+              : "The session was signed out after 30 minutes without activity."}{" "}
+            Sign back in so your changes are attributed to you — until then they are recorded as unsigned.
+          </p>
+          <Field label="Sign in as">
+            <select
+              aria-label="Sign back in"
+              defaultValue=""
+              onChange={(event) => {
+                if (!event.target.value) return;
+                selectUser.mutate(Number(event.target.value));
+                setIdleSignedOut(null);
+              }}
+              className="w-full rounded-lg border border-line bg-white px-2 py-2 text-sm text-ink outline-none focus:border-brand"
+            >
+              <option value="">Choose a user…</option>
+              {users.filter((user) => user.is_active).map((user) => (
+                <option key={user.id} value={user.id}>{user.name}</option>
+              ))}
+            </select>
+          </Field>
+          <div className="mt-3 flex justify-end">
+            <Button variant="ghost" onClick={() => setIdleSignedOut(null)}>
+              Continue unsigned
+            </Button>
+          </div>
+        </Modal>
+      )}
     </div>
+    </ReadOnlyProvider>
   );
 }
 

@@ -7,6 +7,7 @@ import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
+import { useReadOnly } from "../lib/readOnly";
 import { duplicateLabel } from "../lib/utils";
 
 const STATUS_ONLY_STAGES = new Set(["needs_sectioning", "assignment_required", "stain_requested"]);
@@ -109,6 +110,8 @@ export function SectionDetailsDrawer({
     setSlidePicturesTaken,
     completeSectionImaging,
   } = useActions();
+  // A viewer reads the cutting plan and its progress, but drives none of it (#72).
+  const readOnly = useReadOnly();
   // A Needs-Sectioning card groups every cut group of a sample, so the drawer
   // shows the slides of ALL grouped sections, not just the primary one (#55).
   const drawerSections = selectedSections.length > 0 ? selectedSections : [section];
@@ -223,7 +226,7 @@ export function SectionDetailsDrawer({
           </div>
         )}
 
-        {showAssignments && (
+        {showAssignments && !readOnly && (
           <section className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
@@ -341,16 +344,23 @@ export function SectionDetailsDrawer({
           </section>
         )}
 
-        {section.current_stage === "stain_requested" && selectedAssayTypes.includes("stain") && (
+        {/* Ticking a protocol step writes, so it is workstation-only (#72). */}
+        {readOnly && section.current_stage === "stain_requested" && (
+          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+            Read-only viewer — the stain protocol is run on the workstation.
+          </p>
+        )}
+        {!readOnly && section.current_stage === "stain_requested" && selectedAssayTypes.includes("stain") && (
           <ProtocolChecklist
             scopeType="section_request"
             scopeId={section.id}
             stageKey="stain_workflow_v5"
             protocolName="Stain workflow"
+            // Drying is no longer a tracked step (#80); see StackDetailsDrawer
+            // for why the _v5 stage_key is deliberately kept.
             labels={[
               "Stained",
               "Coverslipped",
-              "Dried",
             ]}
             batchScopeIds={stainingBatchIds.filter((id) => id !== section.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
@@ -358,7 +368,7 @@ export function SectionDetailsDrawer({
             }
           />
         )}
-        {section.current_stage === "stain_requested" && selectedAssayTypes.includes("ihc") && (
+        {!readOnly && section.current_stage === "stain_requested" && selectedAssayTypes.includes("ihc") && (
           <ProtocolChecklist
             scopeType="section_request"
             scopeId={section.id}
@@ -367,7 +377,6 @@ export function SectionDetailsDrawer({
             labels={[
               "IHC stained",
               "Coverslipped",
-              "Dried",
             ]}
             batchScopeIds={stainingBatchIds.filter((id) => id !== section.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
@@ -401,6 +410,8 @@ export function SectionDetailsDrawer({
                       Set
                     </button>
                   </span>
+                ) : readOnly ? (
+                  <span className="px-1 text-ink-faint">{at ?? "—"}</span>
                 ) : (
                   <button
                     onClick={() => beginEdit(stage.column, at)}
@@ -417,6 +428,8 @@ export function SectionDetailsDrawer({
         {error && <p className="mt-3 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-700">{error}</p>}
       </div>
 
+      {/* Every control in this footer writes — workstation only (#72). */}
+      {!readOnly && (
       <div className="border-t border-line px-4 py-3">
         {(section.current_stage === "assignment_required" || section.current_stage === "sectioned") &&
           (dirtyCount > 0 || !allAssigned) && (
@@ -485,6 +498,7 @@ export function SectionDetailsDrawer({
         </Button>
         </div>
       </div>
+      )}
     </div>
   );
 }

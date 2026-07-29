@@ -91,19 +91,44 @@ export function Sidebar({
               key={p.id}
               onClick={() => onSelectProject(p.id)}
               title={collapsed ? `${p.name} (${p.code})` : undefined}
+              aria-current={active ? "true" : undefined}
+              // The active project decides which project a new sample lands in,
+              // so it has to be unmistakable at a glance — a dim tint was being
+              // missed and samples were created under the wrong project (#84).
+              // Solid brand fill + a left accent bar + weight, not tint alone.
               className={cn(
-                "mb-1 flex w-full items-center justify-between rounded-lg py-2 text-left transition",
-                collapsed ? "justify-center px-1" : "px-3",
-                active ? "bg-brand/15 text-ink" : "hover:bg-brand/8",
+                "relative mb-1 flex w-full items-center justify-between rounded-lg py-2 text-left transition",
+                collapsed ? "justify-center pl-2 pr-1" : "pl-4 pr-3",
+                active
+                  ? "bg-brand/45 text-ink ring-2 ring-brand shadow-sm before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1.5 before:rounded-l-lg before:bg-brand-strong"
+                  : "opacity-80 hover:opacity-100 hover:bg-brand/8",
               )}
             >
               {collapsed ? (
-                <span className="text-xs font-semibold">{p.code.slice(0, 3).toUpperCase()}</span>
+                <span className={cn("text-xs", active ? "font-bold text-ink" : "font-semibold")}>
+                  {p.code.slice(0, 3).toUpperCase()}
+                </span>
               ) : <span className="min-w-0">
-                <span className="block truncate text-sm font-medium">{p.name}</span>
-                <span className="block text-xs text-ink-faint">{p.code}</span>
+                <span className={cn("block truncate text-sm", active ? "font-bold" : "font-medium")}>
+                  {p.name}
+                </span>
+                <span className="mt-0.5 flex items-center gap-1.5">
+                  <span className={cn("text-xs", active ? "font-semibold text-ink" : "text-ink-faint")}>
+                    {p.code}
+                  </span>
+                  {active && (
+                    // text-surface, not text-white: brand-strong is a LIGHT tone
+                    // in the dark themes, where white would wash out.
+                    <span className="rounded-sm bg-brand-strong px-1 py-px text-[9px] font-bold uppercase tracking-wider text-surface">
+                      Active
+                    </span>
+                  )}
+                </span>
               </span>}
-              {!collapsed && <span className="ml-2 shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-[11px] text-brand-strong">
+              {!collapsed && <span className={cn(
+                "ml-2 shrink-0 rounded-full px-2 py-0.5 text-[11px]",
+                active ? "bg-brand-strong font-semibold text-surface" : "bg-brand/10 text-brand-strong",
+              )}>
                 {p.sample_count ?? 0}
               </span>}
             </button>

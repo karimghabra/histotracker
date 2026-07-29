@@ -322,6 +322,150 @@ A second wave of issues filed after the first pass. Status as of 0.2.5:
   `ProcessingBatchRow` awaiting-pickup style strengthened to a clear glow.
 
 UI-only fixes (#13, #15, #17, #19) and the undo fix (#16) are validated by
-type-check + code review; the data-layer fix (#12) has a harness gate. Still
-open from this wave: **#14** (imaging merge) and **#18** (board relayout),
-alongside the earlier **#4, #8, #11** and #5's deferred board layout.
+type-check + code review; the data-layer fix (#12) has a harness gate.
+
+> **Status correction (2026-07-28):** this section used to say #14 and #18 were
+> still open, alongside #4, #8, #11 and #5's deferred board layout. All of those
+> are now **closed** on GitHub — the text was stale. Verified with
+> `gh issue view`; the only outstanding issues were #70–#84, covered below.
+
+---
+
+## Third wave (#70–#84) — status as of 0.6.1
+
+Fixed and gated in this pass:
+
+- **#81 — staining stacks must be keyed by stain AND substage · ✅ fixed.**
+  *Root cause:* there are two ways a rack advances. A board move goes through
+  `updateSlideStackStage`, which sets `current_stage`. The **protocol checkbox**
+  goes through `syncAssayStackWorkflowStep`, which stamps only the substage
+  timestamp (`stage_stained_at` …) and deliberately leaves `current_stage` at
+  `'stain_requested'` until the whole checklist is ticked. `getOpenStainRack`
+  matched on `current_stage` alone, so a rack that was stained-but-not-
+  coverslipped still read as an open loading rack and absorbed newly-moved
+  samples. *Fix:* `getOpenStainRack` (`db.ts`) additionally requires every
+  substage stamp to be NULL. *Data repair:* `splitContaminatedStainRacks()` runs
+  once per image (marker `stain_racks_split_81` in `schema_meta`) and moves
+  already-merged late arrivals — identifiable because their own
+  `stage_stained_at` is NULL while the rack's is set — into a fresh rack.
+  *Tests:* harness `issue #81` ×2 (behaviour + translation), both verified to
+  fail without the fix; Playwright `issues-70-84.spec.ts` drives the reporter's
+  exact sequence and also fails without the fix.
+- **#70 — no stain request to an exhausted sample · ✅ fixed.**
+  `requestStainForSample` refuses when the block is exhausted **and** no free
+  extra can fulfil the request (that path flags the block for a cut that can
+  never happen). A request an existing extra satisfies is still allowed — the
+  slide is already cut. The drawer now catches and displays the refusal.
+  Harness gate `issue #70` covers both branches.
+- **#79 — editable sample descriptions · ✅ fixed.** The drawer's Description
+  section is editable and routes through the existing `saveDetails` action, so
+  it records an undo command. No schema change (`updateSampleDetails` already
+  wrote the column; it simply had no UI).
+- **#75 — Logs slide ordering · ✅ fixed.**
+  *Root cause:* `slides.slide_ordinal` is a **per-section** counter that restarts
+  at 1 for each cut group (`createSectionRequests`), while `slide_code` is issued
+  from a **per-sample** running counter (`nextOrdinal`). `listAllSlides` orders by
+  `slide_ordinal` with no tie-break, so as soon as a sample has a second cut group
+  its slides interleave — A, E, B, F, … A single-cut sample is coincidentally
+  ordered correctly, which is why this looks fine in simple cases.
+  *Fix:* `compareSlideCodes` (`utils.ts`) sorts by parent code, then label
+  **length**, then alphabetically — so A…Z precede AA, matching the bijective
+  base-26 labels `duplicateLabel` issues. Applied where slides are grouped, so the
+  table, drill-down and exports agree.
+  *Test note:* the Playwright case **must** create two cut groups. An earlier
+  version of it used a single cut and passed even with the fix reverted — it was
+  verified vacuous and rewritten. It now fails without the fix.
+- **#82 — filter Ready for Imaging by project and stain · ✅ fixed.**
+  `listOpenSlideStacks` now also returns `agent_names` (a plain delimited agent
+  list) so the filter is exact rather than parsed out of display text.
+- **#84 — active project clarity · ✅ fixed.** Solid fill + accent bar + weight
+  + an "active" label, and `aria-current` for tests.
+- **#78 — matcha theme · ✅ fixed.** Additive CSS block + picker entry.
+
+Second pass — the remaining eight, all now fixed:
+
+- **#73 / #83 — removing slides · ✅ fixed.** *Root cause:* slide letters were
+  issued from `COUNT(slides for this sample) + 1` in **two** places
+  (`createSectionRequests`, `ensureSlidesForSectionRequest`), so deleting a slide
+  handed its letter to the next cut. Because `slides.slide_code` is UNIQUE this
+  did not merely renumber — it **threw `UNIQUE constraint failed`** and the cut
+  died. *Fix:* migration `0023` adds `samples.slides_issued`, a high-water mark;
+  both paths now issue from `nextSlideLetter()` and `deleteSlide()` freezes the
+  mark *before* removing the row (essential on pre-0023 images, where the mark
+  reads 0 and the live count is still governing). #83 is the same operation
+  surfaced from the Extras inventory drawer. Harness gates: `issue #73` ×2, both
+  verified to fail without the fix; Playwright drives the reporter's exact
+  "delete C → next is E" sequence.
+- **#74 — archive samples · ✅ fixed.** `samples.archived_at` (same migration).
+  `listOpenSamples` hides archived blocks; the Logs view hides them behind a
+  **Show archived** toggle, badges them, and offers Archive/Restore with a
+  confirmation. Reversible, undoable, and no renumbering.
+- **#72 — viewer read-only · ✅ fixed.** New `ReadOnlyContext` consumed by the
+  Logs view and by **every** panel that writes: sample, extras, **staining rack**
+  (`StackDetailsDrawer`), **cut group** (`SectionDetailsDrawer`) and
+  **processing run** (`ProcessingBatchDetailsDrawer`). The rack and cut-group
+  panels matter most — they hold the protocol checkboxes, which write on every
+  tick and are the likeliest way to hit the reported hanging spinner. A first
+  pass gated only the sample/extras/Logs surfaces and left those two open; the
+  e2e suite now covers the rack panel specifically and was verified to fail when
+  the gating is removed. The data-layer `guardWrites` stays as the backstop it
+  was meant to be.
+- **#71 — viewer request desync · ✅ fixed.** *Root cause:* a viewer's request is
+  uploaded as a repo file; nothing is written locally (a viewer **cannot** write
+  — `guardWrites` — and every pull REPLACES the whole SQLite image anyway). So
+  "My requests" stayed empty until drain → publish → pull completed, and the
+  request vanished silently if any step failed. *Fix:* `lib/pendingRequests.ts`
+  keeps the viewer's own submissions in localStorage (which survives the image
+  swap), merges them into the inbox, and prunes by uuid once the real row
+  arrives. Unit + Playwright coverage, including the no-duplicate case.
+- **#80 — remove drying · ✅ fixed, without the translation feared below.** The
+  key realisation: `ensureChecklist` keys on `stage_key` and **reuses an existing
+  run**, so simply shortening the label list changes NEW runs only. Keeping the
+  `_v5` key (rather than bumping to `_v6`, which would orphan in-flight racks
+  with a fresh empty checklist) means racks already mid-protocol keep their three
+  steps and finish normally. The `sortOrder === 2` handlers are deliberately
+  retained to serve exactly those legacy runs — do not "clean them up".
+- **#77 — snapshot attribution · ✅ fixed.** `SnapshotManifest` gains optional
+  `published_by` / `published_by_install` (optional, so old and new builds
+  interoperate); the viewer reports "changes by …" after a pull.
+- **#76 — idle auto log-out · ✅ fixed.** `useIdleLogout` drops the session after
+  30 minutes of no real input (mouse *movement* deliberately excluded) and App
+  prompts to sign back in. Unit-tested with fake timers.
+
+Earlier analysis, retained for context:
+
+- **#80 — remove drying.** Deliberately *not* rushed. The three protocol steps
+  live in `checklist_items` rows created by `ensureChecklist`, which is keyed on
+  `stage_key` (`stain_workflow_v5` / `ihc_workflow_v5`) and **reuses an existing
+  run**. So shortening the label list only affects *new* runs; in-flight racks
+  keep their three-item checklist. Bumping to `_v6` instead would orphan the
+  progress of every rack currently mid-protocol. The correct fix is a one-time
+  translation that deletes the `Dried` item from existing v5 runs **and**
+  advances any rack whose remaining steps are already complete — and that
+  advance is the stain-rack *scatter* (each slide rejoins its sample's imaging
+  stack), which must be reimplemented in raw SQL because the translation runs
+  inside `getDb()` and so cannot call `updateSlideStackStage`. Worth doing
+  properly; the column itself stays per the append-only contract.
+- **#73 / #83 — removing extra slides.** #73 requires deletion that does *not*
+  renumber: the next slide after deleting C must be E, so the next ordinal must
+  come from `MAX(slide_ordinal)` (or a per-sample high-water mark), not
+  `COUNT(*)`. Check `slideCodeFor`/`ensureSlidesForSectionRequest` before
+  changing. #83 is the same operation surfaced from the extras inventory.
+- **#74 — archive samples.** Needs one additive column (e.g.
+  `samples.archived_at`), a matching `ensureRuntimeSchema` line, default-hidden
+  filtering in Logs, and a "show archived" toggle. Explicitly must not renumber.
+- **#71 — viewer request desync.** The reporter sees a request that flags the
+  slide on the workstation but never reaches the viewer's "my requests" or
+  cutting plan. Start at `githubSync.ts` / `useSync.ts` and
+  `reconcileStainRequests`: the synced payload is the whole SQLite image, so the
+  question is whether the request is written to a table that is published, and
+  whether the viewer's pull happens before or after it is reconciled.
+- **#72 — viewer read-only gating.** `setViewerReadOnly` + `guardWrites` already
+  reject writes at the data layer, which is why the reporter sees "perpetual
+  loading" — the UI still offers the controls and then swallows the rejection.
+  The fix is UI-level: hide/disable depth tagging, slide adds and stain requests
+  when read-only.
+- **#76 / #77 — auto log-out and manifest attribution.** #77 is largely
+  presentational: `audit_events` already records `user_id` (migrations 0010 /
+  0011); it needs surfacing in the manifest view. #76 is new behaviour (idle
+  timer + re-login prompt) and interacts with #77's attribution.

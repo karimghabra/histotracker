@@ -154,6 +154,12 @@ pub fn run() {
             sql: include_str!("../migrations/0022_slide_depth_tags.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 23,
+            description: "slide_sequence_and_archive",
+            sql: include_str!("../migrations/0023_slide_sequence_and_archive.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

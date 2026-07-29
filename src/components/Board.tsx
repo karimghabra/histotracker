@@ -158,6 +158,9 @@ export function Board({
   const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
   const [extraSlidesFilter, setExtraSlidesFilter] = useState<string>("all");
   const [extraSlidesSort, setExtraSlidesSort] = useState<ExtraSlidesSort>("sample_id");
+  // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
+  const [imagingProjectFilter, setImagingProjectFilter] = useState<string>("all");
+  const [imagingStainFilter, setImagingStainFilter] = useState<string>("all");
   const [topLaneHeight, setTopLaneHeight] = useState(
     () => Number(window.localStorage.getItem("histometer-board-top-height") ?? "50"),
   );
@@ -281,6 +284,32 @@ export function Board({
     }
     return sortEmbedded(items, embeddedSort);
   }, [blocksByQueue, embeddedFilter, embeddedSort]);
+
+  // ---- Ready for Imaging filters (#82) ----
+  const agentsOf = (stack: SlideStack): string[] =>
+    (stack.agent_names ?? "").split(",").map((a) => a.trim()).filter(Boolean);
+
+  const imagingStacks = stacksByQueue.analysis_pending ?? [];
+  const projectsInImaging = useMemo(
+    () => [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
+    [imagingStacks],
+  );
+  const stainsInImaging = useMemo(
+    () => [...new Set(imagingStacks.flatMap(agentsOf))].sort((a, b) => a.localeCompare(b)),
+    [imagingStacks],
+  );
+  const displayedImagingStacks = useMemo(() => {
+    let items = imagingStacks;
+    if (imagingProjectFilter !== "all") {
+      items = items.filter((stack) => stack.project_code === imagingProjectFilter);
+    }
+    if (imagingStainFilter !== "all") {
+      items = items.filter((stack) =>
+        agentsOf(stack).some((a) => a.toLowerCase() === imagingStainFilter.toLowerCase()),
+      );
+    }
+    return items;
+  }, [imagingStacks, imagingProjectFilter, imagingStainFilter]);
 
   const projectsInExtraSlides = useMemo(() => {
     return [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
@@ -645,26 +674,58 @@ export function Board({
                       );
                     }
 
+                    // Ready for Imaging renders the FILTERED set (#82); every
+                    // other downstream queue renders its stacks unfiltered.
+                    const isImaging = queueKey === "analysis_pending";
+                    const visibleStacks = isImaging ? displayedImagingStacks : stackItems;
                     const groups = queueKey === "needs_sectioning" ? needsSectioningGroups : [];
                     const groupSelectedCount = groups.filter((group) =>
                       group.every((section) => selectedSections.has(section.id)),
                     ).length;
                     const selectedCount = isDownstream
-                      ? stackItems.filter((stack) => selectedStacks.has(stack.id)).length
+                      ? visibleStacks.filter((stack) => selectedStacks.has(stack.id)).length
                       : groupSelectedCount;
                     return (
                       <QueueColumn
                         key={queueKey}
                         queue={queue}
-                        count={isDownstream ? stackItems.length : groups.length}
+                        count={isDownstream ? visibleStacks.length : groups.length}
                         selectedCount={selectedCount}
+                        headerExtra={
+                          isImaging && (projectsInImaging.length > 0 || stainsInImaging.length > 0) ? (
+                            <div className="flex gap-1">
+                              <select
+                                aria-label="Filter imaging by project"
+                                className={selectClass}
+                                value={imagingProjectFilter}
+                                onChange={(event) => setImagingProjectFilter(event.target.value)}
+                              >
+                                <option value="all">All Projects</option>
+                                {projectsInImaging.map((code) => (
+                                  <option key={code} value={code}>{code}</option>
+                                ))}
+                              </select>
+                              <select
+                                aria-label="Filter imaging by stain"
+                                className={selectClass}
+                                value={imagingStainFilter}
+                                onChange={(event) => setImagingStainFilter(event.target.value)}
+                              >
+                                <option value="all">All Stains</option>
+                                {stainsInImaging.map((name) => (
+                                  <option key={name} value={name}>{name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : undefined
+                        }
                         onToggleAll={
                           isDownstream
-                            ? stackItems.length > 0
+                            ? visibleStacks.length > 0
                               ? () => {
                                   setSelectedBlocks(new Set());
                                   setSelectedSections(new Set());
-                                  setSelectedStacks(selectedCount === stackItems.length ? new Set() : new Set(stackItems.map((stack) => stack.id)));
+                                  setSelectedStacks(selectedCount === visibleStacks.length ? new Set() : new Set(visibleStacks.map((stack) => stack.id)));
                                 }
                               : undefined
                             : groups.length > 0
@@ -681,7 +742,7 @@ export function Board({
                         }
                       >
                         {isDownstream
-                          ? stackItems.map((stack) => (
+                          ? visibleStacks.map((stack) => (
                               <StackCard
                                 key={stack.id}
                                 stack={stack}

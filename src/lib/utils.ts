@@ -38,3 +38,28 @@ export function duplicateLabel(ordinal: number): string {
   }
   return label;
 }
+
+/**
+ * Order slide codes the way the bench reads them (issue #75).
+ *
+ * A slide code is `<parent>-<label>` where the label is the bijective base-26
+ * sequence from {@link duplicateLabel} (A…Z, AA, AB…). A plain string compare
+ * gets that wrong at the wrap — it sorts "AA" before "B" — so compare the parent
+ * first, then the label by LENGTH and only then alphabetically. For labels of
+ * equal length that is exactly alphabetical order, which is what was asked for,
+ * and across lengths it keeps Z before AA instead of burying the 27th slide in
+ * the middle of the list.
+ */
+export function compareSlideCodes(a: string, b: string): number {
+  const split = (code: string) => {
+    const at = code.lastIndexOf("-");
+    return at === -1 ? { parent: code, label: "" } : { parent: code.slice(0, at), label: code.slice(at + 1) };
+  };
+  const left = split(a ?? "");
+  const right = split(b ?? "");
+  return (
+    left.parent.localeCompare(right.parent, undefined, { numeric: true, sensitivity: "base" }) ||
+    left.label.length - right.label.length ||
+    left.label.localeCompare(right.label, undefined, { sensitivity: "base" })
+  );
+}

@@ -1,7 +1,7 @@
 {
   "name": "histometer",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "test": "node scripts/workflow-test.mjs",
     "test:staining": "node scripts/staining-stack-harness.mjs",
+    "test:legacy": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs",
     "test:ui": "vitest run",
     "dev:browser": "vite --config vite.config.playwright.ts",
     "test:e2e": "playwright test",

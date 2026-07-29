@@ -308,11 +308,7 @@ function makeApi(db) {
     const ts = now();
     const ids = [];
     const parentCode = get(`SELECT sample_code FROM samples WHERE id = ?`, [sampleId]).sample_code;
-    let nextOrdinal = (get(
-      `SELECT COUNT(sl.id) AS n FROM slides sl
-         JOIN section_requests sr ON sr.id = sl.section_request_id WHERE sr.sample_id = ?`,
-      [sampleId],
-    ).n ?? 0) + 1;
+    let nextOrdinal = nextSlideLetter(sampleId);
     for (const g of groups) {
       const dup = Math.max(1, g.duplicates);
       const preassigned = Boolean(g.assay_type && g.assay_name);
@@ -343,6 +339,7 @@ function makeApi(db) {
         nextOrdinal++;
       }
     }
+    recordSlidesIssued(sampleId, nextOrdinal - 1);
     // Cutting fulfils outstanding requests: trim one entry per preassigned slide.
     const cut = [];
     for (const g of groups) {
@@ -383,17 +380,59 @@ function makeApi(db) {
     );
   }
 
+  // Port of nextSlideLetter()/recordSlidesIssued()/deleteSlide() — src/lib/db.ts.
+  // Letters come from a high-water mark, never a live count, so a deleted slide
+  // never hands its letter to the next cut (#73). The MAX() against the live
+  // count is the compatibility path for images predating samples.slides_issued.
+  function nextSlideLetter(sampleId) {
+    const row = get(
+      `SELECT COALESCE((SELECT slides_issued FROM samples WHERE id = ?), 0) AS issued,
+              (SELECT COUNT(sl.id) FROM slides sl
+                 JOIN section_requests sr ON sr.id = sl.section_request_id
+                WHERE sr.sample_id = ?) AS used`,
+      [sampleId, sampleId]);
+    return Math.max(row?.issued ?? 0, row?.used ?? 0) + 1;
+  }
+  function recordSlidesIssued(sampleId, lastLetter) {
+    run(`UPDATE samples SET slides_issued = MAX(COALESCE(slides_issued, 0), ?) WHERE id = ?`,
+        [lastLetter, sampleId]);
+  }
+  // Freeze the mark BEFORE the row goes, so an old image can't reissue a letter
+  // belonging to a slide that still exists.
+  function deleteSlide(slideId) {
+    const row = get(
+      `SELECT sr.sample_id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sl.id = ?`, [slideId]);
+    if (row) recordSlidesIssued(row.sample_id, nextSlideLetter(row.sample_id) - 1);
+    run(`DELETE FROM slides WHERE id = ?`, [slideId]);
+  }
+
+  // Port of getOpenStainRack() — src/lib/db.ts. A rack only accepts new members
+  // while it is still LOADING: at stain_requested with no substage work recorded.
+  // The protocol checkboxes (syncAssayStackWorkflowStep) stamp a substage
+  // timestamp without moving current_stage, so the timestamps — not the stage
+  // alone — are what close a rack to newcomers (issue #81).
+  function openStainRack(assayType, assayName) {
+    return get(
+      `SELECT id FROM slide_stacks
+        WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
+          AND current_stage = 'stain_requested' AND closed_at IS NULL
+          AND stage_stained_at IS NULL
+          AND stage_ihc_at IS NULL
+          AND stage_refrax_at IS NULL
+          AND stage_coverslipped_at IS NULL
+          AND stage_dried_at IS NULL
+        ORDER BY id ASC LIMIT 1`,
+      [assayType, assayName]);
+  }
+
   // Load a section's stain slides into their agents' cross-sample racks.
   function attachSectionStainSlidesToRacks(sectionId) {
     const agents = all(
       `SELECT DISTINCT assay_type, assay_name FROM slides
         WHERE section_request_id = ? AND purpose = 'stain'`, [sectionId]);
     for (const agent of agents) {
-      let rack = get(
-        `SELECT id FROM slide_stacks
-          WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
-            AND current_stage = 'stain_requested' AND closed_at IS NULL`,
-        [agent.assay_type, agent.assay_name]);
+      let rack = openStainRack(agent.assay_type, agent.assay_name);
       if (!rack) {
         const created = run(
           `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
@@ -497,9 +536,7 @@ function makeApi(db) {
         ORDER BY sl.id LIMIT 1`, [sampleId]);
     if (extra) {
       // The extra enters staining immediately (#39): join the agent's rack.
-      let rack = get(
-        `SELECT id FROM slide_stacks WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
-            AND current_stage = 'stain_requested' AND closed_at IS NULL`, [assayType, assayName]);
+      let rack = openStainRack(assayType, assayName);
       const createdStackId = rack ? null : Number(run(
         `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
          VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`, [assayType, assayName, now()]).lastInsertRowid);
@@ -510,6 +547,12 @@ function makeApi(db) {
                 stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
           WHERE id = ?`, [rack.id, assayType, assayName, assayName, now(), extra.id]);
       return { target: "extra", slideId: extra.id, stackId: rack.id, createdStackId };
+    }
+    // An exhausted block cannot be cut again, so a request with no free extra to
+    // fulfil it would flag the block forever — refuse it (#70).
+    const ex = get(`SELECT block_exhausted, sample_code FROM samples WHERE id = ?`, [sampleId]);
+    if (ex && ex.block_exhausted === 1) {
+      throw new Error(`${ex.sample_code} is marked exhausted and has no extra slides left`);
     }
     const row = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
     const current = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
@@ -529,11 +572,7 @@ function makeApi(db) {
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
     // The extra joins the cross-sample loading rack for its agent.
-    let rack = get(
-      `SELECT id FROM slide_stacks
-        WHERE kind = 'stain' AND assay_type = ? AND assay_name = ?
-          AND current_stage = 'stain_requested' AND closed_at IS NULL`,
-      [assayType, assayName]);
+    let rack = openStainRack(assayType, assayName);
     const createdStackId = rack ? null : Number(run(
       `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
        VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
@@ -620,12 +659,28 @@ function makeApi(db) {
     }
   }
 
+  // Port of syncAssayStackWorkflowStep() step 0 — src/lib/db.ts. This is the
+  // "Stained / IHC complete" protocol CHECKBOX. It deliberately stamps only the
+  // substage timestamp and leaves current_stage at 'stain_requested' (the stack
+  // only advances once every checklist step is ticked), which is precisely why
+  // the rack lookup cannot key off current_stage alone (issue #81).
+  function tickStainedCheckbox(stackId, assayType = "stain") {
+    const ts = now();
+    run(
+      `UPDATE slides SET stage_stained_at = ?
+        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+      [ts, stackId, assayType]);
+    const stackColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
+    run(`UPDATE slide_stacks SET ${stackColumn} = ? WHERE id = ?`, [ts, stackId]);
+  }
+
   return {
     db, run, all, get,
     seedProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
-    updateProcessingBatchStart, moveSlideStack,
+    updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
+    deleteSlide, nextSlideLetter,
     planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
     requestStainForSample, snapshotDb, restoreDb,
   };
@@ -734,6 +789,72 @@ function reconcileStainRequests(api) {
   api.run(`INSERT INTO schema_meta (key, value) VALUES ('stain_requests_reconciled', '1')
              ON CONFLICT(key) DO UPDATE SET value = '1'`);
 }
+
+// Port of splitContaminatedStainRacks() — src/lib/db.ts. One-time repair for
+// racks that ALREADY merged under the old lookup rule (#81). Within a rack that
+// has been stained, a member whose own stage_stained_at is NULL can only have
+// arrived after the tick, so it is moved to a fresh loading rack.
+function splitContaminatedStainRacks(api) {
+  const done = api.get(`SELECT value FROM schema_meta WHERE key = 'stain_racks_split_81'`);
+  if (done && done.value === "1") return;
+  const contaminated = api.all(
+    `SELECT ss.id, ss.assay_type, ss.assay_name
+       FROM slide_stacks ss
+      WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
+        AND ss.current_stage = 'stain_requested'
+        AND (ss.stage_stained_at IS NOT NULL OR ss.stage_ihc_at IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM slides sl
+                     WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
+                       AND sl.stage_stained_at IS NULL)`);
+  for (const rack of contaminated) {
+    const strays = api.all(
+      `SELECT id FROM slides WHERE stack_id = ? AND purpose = 'stain' AND stage_stained_at IS NULL`,
+      [rack.id]);
+    if (!strays.length) continue;
+    const fresh = Number(api.run(
+      `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+       VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+      [rack.assay_type, rack.assay_name, "2026-01-01 09:00"]).lastInsertRowid);
+    for (const s of strays) api.run(`UPDATE slides SET stack_id = ? WHERE id = ?`, [fresh, s.id]);
+  }
+  api.run(`INSERT INTO schema_meta (key, value) VALUES ('stain_racks_split_81', '1')
+             ON CONFLICT(key) DO UPDATE SET value = '1'`);
+}
+
+// #81 data repair — an EXISTING database already carries merged racks; opening it
+// with the new build must pull the late arrivals back out into their own rack.
+issue(81, "an already-merged rack is split on open (data translation)", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "stained first"); api.markEmbedded(a.id);
+  const b = api.addSample(p, "EE", "merged in wrongly"); api.markEmbedded(b.id);
+
+  const rack = stainOneSlide(api, a.id, "stain", "SafO");
+  api.tickStainedCheckbox(rack, "stain");
+  // Simulate the OLD buggy behaviour: B stains into its own rack under the fixed
+  // rule, then we force it into the stained rack and drop the now-empty one —
+  // reproducing exactly the shape an existing database already holds.
+  const rackB = stainOneSlide(api, b.id, "stain", "SafO");
+  const bSlide = api.get(
+    `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.purpose = 'stain' ORDER BY sl.id LIMIT 1`, [b.id]);
+  api.run(`UPDATE slides SET stack_id = ? WHERE id = ?`, [rack, bSlide.id]);
+  api.run(`DELETE FROM slide_stacks WHERE id = ?`, [rackB]);
+  eq(api.all(`SELECT id FROM slides WHERE stack_id = ?`, [rack]).length, 2,
+     "precondition: the two samples are merged in one rack");
+
+  splitContaminatedStainRacks(api);
+  eq(api.all(`SELECT id FROM slides WHERE stack_id = ?`, [rack]).length, 1,
+     "the stained rack keeps only its true original member");
+  const moved = api.get(`SELECT stack_id FROM slides WHERE id = ?`, [bSlide.id]).stack_id;
+  assert(moved !== rack, "the late arrival moved to its own rack");
+  eq(api.get(`SELECT current_stage FROM slide_stacks WHERE id = ?`, [moved]).current_stage,
+     "stain_requested", "the split-out rack is a fresh loading rack");
+  // Idempotent: re-running does not keep splitting.
+  splitContaminatedStainRacks(api);
+  eq(api.all(`SELECT id FROM slide_stacks WHERE kind = 'stain' AND assay_name = 'SafO'`).length, 2,
+     "re-run is a no-op");
+});
 
 invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras (#1/#4)", () => {
   for (const [n, expectedExtras] of [[0, 4], [1, 3], [2, 2], [3, 2], [4, 2]]) {
@@ -964,6 +1085,114 @@ invariant("a later same-agent rack stays SEPARATE and never merges", () => {
   api.moveSlideStack(rackB, "stained");
   eq(api.all(`SELECT id FROM slide_stacks WHERE kind = 'stain' AND current_stage = 'stained'`).length, 2,
      "two SafO racks coexist at the same substage without merging");
+});
+
+// #73 — the reporter's rule, verbatim: "if slide C is created, then slide D is
+// created, then slide C is deleted, the next new slide should still be slide E."
+// A deleted letter is burned; it never comes back.
+issue(73, "deleting a slide does not hand its letter to the next cut", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "letters");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [{ duplicates: 4 }]); // A B C D
+  const codes = () => api.all(
+    `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? ORDER BY sl.id`, [id]).map((r) => r.c);
+  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-C,EE-0001-D", "four slides A–D");
+
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
+  api.deleteSlide(c.id);
+  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-D", "C is gone, D untouched");
+
+  api.createSectionRequests(id, [{ duplicates: 1 }]);
+  assert(codes().includes("EE-0001-E"), "the next slide is E, not a recycled C");
+  eq(codes().filter((x) => x === "EE-0001-D").length, 1, "D was not duplicated");
+});
+
+// #73 — the same must hold on a database created BEFORE samples.slides_issued
+// existed, where the mark reads 0 and the live count is still governing. Without
+// freezing the mark at delete time, removing C from A–D leaves count=3 and the
+// next cut reissues "D" — colliding with a slide that is still there.
+issue(73, "an existing database cannot reissue a letter after a delete", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "legacy letters");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [{ duplicates: 4 }]);
+  // Simulate a pre-0023 image: the mark was never written.
+  api.run(`UPDATE samples SET slides_issued = 0 WHERE id = ?`, [id]);
+
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
+  api.deleteSlide(c.id);
+  api.createSectionRequests(id, [{ duplicates: 1 }]);
+  const codes = api.all(
+    `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ?`, [id]).map((r) => r.c);
+  eq(new Set(codes).size, codes.length, "no duplicate slide codes after the delete");
+  assert(codes.includes("EE-0001-E"), "the sequence continues at E");
+});
+
+// #70 — an exhausted block has no tissue left, so a stain request that would
+// need a fresh cut must be refused rather than flagging the block forever. A
+// request an already-cut extra can satisfy is still fine.
+issue(70, "a stain cannot be requested from an exhausted block with no extras", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "spent block");
+  api.markEmbedded(id);
+  // Consume every extra so nothing is free, then mark the block exhausted.
+  api.run(`UPDATE slides SET current_stage = 'used' WHERE current_stage = 'extra'`);
+  api.run(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [id]);
+
+  let threw = false;
+  try { api.requestStainForSample(id, "stain", "SafO"); } catch { threw = true; }
+  assert(threw, "requesting a stain on an exhausted, extra-less block is refused");
+  eq(pendingFlag(api, id), "", "the exhausted block is not flagged for a cut it can never take");
+
+  // An exhausted block that still has a cut extra CAN fulfil the request: that
+  // slide already exists on the bench, so no new cut is needed.
+  const other = api.addSample(p, "EE", "spent but has an extra");
+  api.markEmbedded(other.id);
+  const [sec] = api.createSectionRequests(other.id, [{ duplicates: 2 }]);
+  api.sectionToAssignment(sec);
+  const slides = api.all(
+    `SELECT * FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`, [sec]);
+  api.assignSlide(slides[0].id, "stain", "stain", "H&E");
+  api.assignSlide(slides[1].id, "extra", "", "");
+  api.startAssayWork(sec); // the extra lands in inventory
+  eq(api.listExtraSlides().length, 1, "precondition: one free extra");
+  api.run(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [other.id]);
+  eq(api.requestStainForSample(other.id, "stain", "SafO").target, "extra",
+     "an existing extra still fulfils the request on an exhausted block");
+});
+
+// #81 — the SAME separation must hold when the rack advanced via the protocol
+// CHECKBOX rather than a board move. Ticking "Stained" stamps stage_stained_at
+// but leaves current_stage at 'stain_requested', so a rack lookup keyed on
+// current_stage alone still saw it as a loading rack: samples moved into
+// staining afterwards merged into the already-stained stack and could not be
+// separated again. A half-finished rack must be closed to newcomers.
+issue(81, "a rack whose Stained box is ticked does not absorb newly-moved samples", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "stained already"); api.markEmbedded(a.id);
+  const b = api.addSample(p, "EE", "arrives later"); api.markEmbedded(b.id);
+
+  const rackA = stainOneSlide(api, a.id, "stain", "SafO");
+  api.tickStainedCheckbox(rackA, "stain"); // stained, NOT yet coverslipped
+  eq(api.get(`SELECT current_stage FROM slide_stacks WHERE id = ?`, [rackA]).current_stage,
+     "stain_requested", "the checkbox leaves current_stage at stain_requested");
+
+  const rackB = stainOneSlide(api, b.id, "stain", "SafO");
+  assert(rackA !== rackB, "the newly-moved sample starts its own SafO rack");
+  eq(api.all(`SELECT id FROM slide_stacks WHERE kind = 'stain' AND assay_name = 'SafO'`).length, 2,
+     "the stained rack and the fresh loading rack coexist");
+  eq(api.all(`SELECT id FROM slides WHERE stack_id = ?`, [rackA]).length, 1,
+     "the already-stained rack keeps exactly its original member");
+  // And the fresh rack is still open, so a second newcomer joins IT, not rack A.
+  const c = api.addSample(p, "EE", "arrives later still"); api.markEmbedded(c.id);
+  eq(stainOneSlide(api, c.id, "stain", "SafO"), rackB, "later slides load into the open rack");
 });
 
 invariant("leaving staining scatters slides into per-sample imaging stacks", () => {

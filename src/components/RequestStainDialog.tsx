@@ -2,10 +2,13 @@ import { useState } from "react";
 import { Send } from "lucide-react";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { submitRequest } from "../lib/githubSync";
+import { addPendingRequest } from "../lib/pendingRequests";
+import { nowTimestamp } from "../lib/utils";
 
 export function RequestStainDialog({
   operatorName,
   sampleCodes,
+  exhaustedSampleCodes = [],
   catalog,
   defaultSampleCode,
   onSubmitted,
@@ -13,6 +16,8 @@ export function RequestStainDialog({
 }: {
   operatorName: string;
   sampleCodes: string[];
+  /** Blocks marked exhausted — they cannot be cut again (#70). */
+  exhaustedSampleCodes?: string[];
   catalog: Array<{ assay_type: string; name: string }>;
   defaultSampleCode?: string;
   onSubmitted: (message: string) => void;
@@ -26,9 +31,22 @@ export function RequestStainDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // An exhausted block has no tissue left to cut, so a request against it could
+  // never be fulfilled (#70). Catch it here, at the point of asking, rather than
+  // letting it sit unactioned in the workstation inbox.
+  const exhausted = new Set(exhaustedSampleCodes.map((c) => c.toUpperCase()));
+  const chosenIsExhausted = Boolean(sampleCode.trim()) && exhausted.has(sampleCode.trim().toUpperCase());
+
   async function submit() {
     if (!sampleCode.trim()) {
       setError("Choose the sample this request is for.");
+      return;
+    }
+    if (chosenIsExhausted) {
+      setError(
+        `${sampleCode.trim()} is marked exhausted — the block cannot be cut again, ` +
+          `so this request could not be fulfilled.`,
+      );
       return;
     }
     if (!agent) {
@@ -39,13 +57,24 @@ export function RequestStainDialog({
     setBusy(true);
     setError(null);
     try {
-      await submitRequest({
+      const uuid = await submitRequest({
         sampleCode: sampleCode.trim(),
         slideCode: slideCode.trim(),
         requestedAssay: assayName,
         assayType: assayType === "ihc" ? "ihc" : "stain",
         note: note.trim(),
         requesterName: operatorName,
+      });
+      // Remember it locally so "My requests" shows it straight away, instead of
+      // staying empty until the workstation drains and republishes (#71).
+      addPendingRequest({
+        uuid,
+        sample_code: sampleCode.trim(),
+        slide_code: slideCode.trim(),
+        requested_assay: assayName,
+        requester_name: operatorName,
+        note: note.trim(),
+        created_at: nowTimestamp(),
       });
       onSubmitted(`Requested ${assayName} for ${sampleCode.trim()}`);
       onClose();
@@ -76,9 +105,16 @@ export function RequestStainDialog({
             ? [defaultSampleCode, ...sampleCodes]
             : sampleCodes
           ).map((code) => (
-            <option key={code} value={code}>{code}</option>
+            <option key={code} value={code}>
+              {code}{exhausted.has(code.toUpperCase()) ? " — exhausted" : ""}
+            </option>
           ))}
         </select>
+        {chosenIsExhausted && (
+          <p role="alert" className="mt-1 text-[11px] text-red-600">
+            {sampleCode.trim()} is exhausted — the block cannot be cut again.
+          </p>
+        )}
       </Field>
 
       <Field label="Specific slide (optional)">

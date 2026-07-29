@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.7.0 - 2026-07-28
+
+Slide removal, archiving, and a genuinely read-only viewer.
+
+> **Schema change — deploy together.** This release adds two columns to
+> `samples` (`slides_issued`, `archived_at`). Both are additive, so existing
+> databases, backups and viewer snapshots keep loading, and older images
+> converge automatically on open. But the synced payload *is* the SQLite file
+> (`docs/shared_data_sync.md` §1), so **every workstation and viewer should be
+> updated to this build together.**
+>
+> This was tested rather than assumed: `scripts/make-legacy-db.mjs` builds a real
+> pre-0023 database (migrations 0001–0022, populated with bench-shaped data) and
+> `pnpm test:legacy` upgrades it by **both** routes — the plugin-sql migration and
+> the runtime `ensureRuntimeSchema()` convergence used when an image is swapped in
+> by undo or a sync pull — asserting no rows are lost either way. The same image is
+> then opened in the actual running app by `tests/e2e/legacy-db-upgrade.spec.ts`,
+> which checks it boots with a clean console, keeps every sample and slide code,
+> auto-repairs the merged staining rack, and supports archiving and slide removal.
+
+- **Slides can be removed at any point, and their letters are never reused
+  (#73, #83).** Extras can now be deleted from the Extras inventory (select →
+  **Remove**), alongside the existing removal from a stack. Letters used to come
+  from a live count of the sample's slides, so deleting slide C handed "C" to the
+  next cut — which, because slide codes are unique, actually **failed with a
+  database error** rather than merely renumbering. Letters now come from a
+  high-water mark: delete C and the next slide is E, as intended.
+- **Samples can be archived and restored (#74).** In the Logs view, expand a
+  sample and choose **Archive** — it asks first, and explains that nothing is
+  deleted. Archived samples drop off the board and out of the log by default;
+  tick **Show archived** to see them (they carry an *Archived* badge) and
+  restore any of them. No numbering changes, and the action is undoable.
+- **Viewer mode is properly read-only (#72).** Viewers could previously click
+  controls whose writes the data layer then rejected, leaving spinners that
+  never resolved. Depth tagging, stain requests, cutting, slide assignment and
+  removal, archiving, timeline edits and the sample-panel action bar are now
+  simply not offered on a viewer, which still sees cutting plans, timelines and
+  existing tags as before.
+- **A viewer's own stain requests show up immediately (#71).** A submitted
+  request was previously invisible on the requesting machine until the
+  workstation drained it, republished, and the viewer pulled the new snapshot —
+  up to two sync intervals — and disappeared without trace if any step failed.
+  The viewer now remembers its own submissions locally (outside the database
+  image, which is replaced wholesale on every pull), so **My requests**
+  populates straight away; the local copy is dropped once the real record
+  arrives, so nothing is ever listed twice.
+- **Drying is no longer a tracked step (#80).** The stain and IHC protocols are
+  now *Stained → Coverslipped*, and finishing those two moves the rack to Ready
+  for Imaging. Racks that were already part-way through the old three-step
+  protocol when this build lands keep their third step so they can be finished
+  as expected; only new racks get the shorter protocol.
+- **Snapshots record who published them (#77).** `manifest.json` now carries the
+  signed-in user (falling back to the workstation's operator name), and the
+  viewer's sync status reports "changes by …" after a pull.
+- **Idle auto log-out (#76).** After 30 minutes without interaction the signed-in
+  user is signed out and prompted to sign back in, so work on a shared bench
+  machine isn't attributed to whoever used it last. Mouse *movement* alone does
+  not count as activity. You can dismiss the prompt and continue unsigned —
+  changes are then recorded as unsigned, as before.
+
+## 0.6.1 - 2026-07-28
+
+Third issue batch — staining-rack separation, plus editing and filtering fixes.
+**No schema change:** this release adds no columns or tables, so existing
+databases, backups and viewer snapshots keep loading and older builds stay
+readable. One automatic data repair runs on first open (see #81).
+
+- **Samples moved into staining no longer merge with an already-stained stack
+  (#81).** A rack whose *Stained* box was ticked but which had not yet been
+  coverslipped still looked like an open “loading” rack, so newly-moved samples
+  were absorbed into it and could not be separated again. The rack is now closed
+  to newcomers as soon as any substage is recorded, so a half-finished rack and a
+  fresh one coexist. **Existing databases are repaired automatically on first
+  open:** slides that were wrongly merged into an already-stained rack are moved
+  back out into their own loading rack (one-time, idempotent, no schema change).
+- **Stains can no longer be requested from an exhausted block (#70)** when there
+  is no extra slide left to fulfil the request — that flag could never be
+  cleared. A request an already-cut extra *can* satisfy is still allowed, since
+  that slide physically exists regardless of the block being spent. Exhausted
+  blocks are now labelled “— exhausted” in the Request-a-stain dialog and the
+  request is refused there with the reason, instead of being accepted and then
+  quietly going nowhere; the bench drawer shows the reason too.
+- **Sample descriptions are editable (#79).** Click the pencil next to
+  Description in the sample drawer. The edit is undoable like any other change.
+- **Logs list a sample's slides alphabetically (#75)** — A, B, C… — in the table,
+  the drill-down, and the CSV/Excel exports. Slide 27 (AA) sorts after Z rather
+  than next to A.
+- **Ready for Imaging can be filtered by project and by stain (#82).**
+- **The active project is now obvious in the sidebar (#84).** The selected
+  project gets a strong brand fill, a solid outline, a left accent bar, bold
+  text and an **ACTIVE** badge, and the unselected ones are dimmed — so samples
+  are much less likely to be created under the wrong project. Checked in the
+  light, dark and matcha themes.
+- **New “Matcha Tea” theme (#78).**
+
 ## 0.6.0 - 2026-07-27
 
 Second issue batch — project moves, easier stain requests, exhaustion visibility,

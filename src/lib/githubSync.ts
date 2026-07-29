@@ -3,6 +3,7 @@ import {
   acknowledgeRequestsForSlide,
   assayTypeByName,
   findSampleIdByCode,
+  getActiveUser,
   getDbFilePath,
   insertStainRequest,
   requestStainForSample,
@@ -30,6 +31,15 @@ export interface SnapshotManifest {
   updated_at: string;
   db_asset: string;
   workbook_asset: string;
+  /**
+   * Who produced this snapshot (issue #77) — the signed-in lab user if there is
+   * one, else the workstation's configured operator name. Optional so a manifest
+   * written by an older build still parses, and so an older build reading a new
+   * manifest simply ignores it.
+   */
+  published_by?: string;
+  /** The workstation install that published it, for tracing a takeover. */
+  published_by_install?: string;
 }
 
 interface FileContent {
@@ -223,12 +233,20 @@ export async function publishSnapshot(): Promise<string> {
   await githubUploadReleaseAsset(RELEASE_TAG, DB_ASSET, dbBytes, DB_CONTENT_TYPE);
   await githubUploadReleaseAsset(RELEASE_TAG, WORKBOOK_ASSET, workbookBytes, XLSX_CONTENT_TYPE);
 
+  // Attribute the snapshot to the person at the bench, not just the machine
+  // (#77). The signed-in lab user is the truthful answer when there is one;
+  // fall back to the configured operator name for an unsigned workstation.
+  const signedIn = await getActiveUser().catch(() => null);
+  const publishedBy = signedIn?.name?.trim() || config.operator_name?.trim() || "";
+
   const version = newVersion();
   await writeManifest({
     version,
     updated_at: nowTimestamp(),
     db_asset: DB_ASSET,
     workbook_asset: WORKBOOK_ASSET,
+    ...(publishedBy ? { published_by: publishedBy } : {}),
+    ...(config.install_id ? { published_by_install: config.install_id } : {}),
   });
   await setLastSyncedVersion(version);
   return version;
@@ -239,6 +257,8 @@ export async function publishSnapshot(): Promise<string> {
 export interface PullResult {
   updated: boolean;
   version?: string;
+  /** Who published the snapshot just pulled, when the manifest records it (#77). */
+  publishedBy?: string;
 }
 
 /**
@@ -264,7 +284,7 @@ export async function pullSnapshotIfNewer(): Promise<PullResult> {
   await invoke("save_file", { path: dbPath, contents: Array.from(dbBytes) });
 
   await setLastSyncedVersion(manifest.version);
-  return { updated: true, version: manifest.version };
+  return { updated: true, version: manifest.version, publishedBy: manifest.published_by };
 }
 
 // ---- Requests: submit (viewer) + drain (workstation) ------------------------

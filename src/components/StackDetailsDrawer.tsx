@@ -7,6 +7,7 @@ import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
 import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
+import { useReadOnly } from "../lib/readOnly";
 
 const STACK_TIMELINE_KEYS = new Set([
   "stained",
@@ -37,6 +38,8 @@ export function StackDetailsDrawer({
     removeSlides,
   } = useActions();
   const { data: slides = [] } = useStackSlides(stack.id);
+  // A viewer reads the rack and its protocol progress; it cannot drive them (#72).
+  const readOnly = useReadOnly();
   const [error, setError] = useState<string | null>(null);
   const [selectingSlides, setSelectingSlides] = useState(false);
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
@@ -124,7 +127,7 @@ export function StackDetailsDrawer({
             <h3 className="text-xs font-semibold uppercase text-ink-faint">Assay slides</h3>
             <div className="flex items-center gap-1">
               <span className="mr-1 text-[11px] text-ink-soft">{slides.length} total</span>
-              {selectingSlides && selectedSlideIds.size > 0 && (
+              {!readOnly && selectingSlides && selectedSlideIds.size > 0 && (
                 <button
                   type="button"
                   title="Delete selected slides"
@@ -141,7 +144,7 @@ export function StackDetailsDrawer({
                   <Trash2 size={14} />
                 </button>
               )}
-              <button
+              {!readOnly && <button
                 type="button"
                 title={selectingSlides ? "Cancel slide selection" : "Select slides"}
                 aria-label={selectingSlides ? "Cancel slide selection" : "Select slides"}
@@ -152,7 +155,7 @@ export function StackDetailsDrawer({
                 className={`rounded-md p-1 ${selectingSlides ? "bg-brand text-white" : "text-ink-faint hover:bg-black/5 hover:text-ink"}`}
               >
                 <ListChecks size={14} />
-              </button>
+              </button>}
             </div>
           </div>
           <div className="space-y-1.5">
@@ -199,26 +202,37 @@ export function StackDetailsDrawer({
           )}
         </section>
 
-        {stack.current_stage === "stain_requested" && assayTypes.includes("stain") && (
+        {/* The protocol checkboxes write on every tick, so a viewer must not be
+            offered them — that is the hanging spinner in #72. */}
+        {readOnly && stack.current_stage === "stain_requested" && (
+          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+            Read-only viewer — the stain protocol is run on the workstation.
+          </p>
+        )}
+        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("stain") && (
           <ProtocolChecklist
             scopeType="slide_stack"
             scopeId={stack.id}
             stageKey="stain_workflow_v5"
             protocolName="Stain workflow"
-            labels={["Stained", "Coverslipped", "Dried"]}
+            // Drying is no longer tracked (#80). The stage_key stays at _v5 on
+            // purpose: ensureChecklist REUSES an existing run, so racks already
+            // mid-protocol keep the three steps they started with and finish the
+            // way the technician expects, while every new rack gets two.
+            labels={["Stained", "Coverslipped"]}
             batchScopeIds={stainStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "stain", sortOrder, complete))).then(() => undefined)
             }
           />
         )}
-        {stack.current_stage === "stain_requested" && assayTypes.includes("ihc") && (
+        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("ihc") && (
           <ProtocolChecklist
             scopeType="slide_stack"
             scopeId={stack.id}
             stageKey="ihc_workflow_v5"
             protocolName="IHC workflow"
-            labels={["IHC stained", "Coverslipped", "Dried"]}
+            labels={["IHC stained", "Coverslipped"]}
             batchScopeIds={ihcStackIds.filter((id) => id !== stack.id)}
             onStepChange={(sortOrder, complete, scopeIds) =>
               Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "ihc", sortOrder, complete))).then(() => undefined)
@@ -242,6 +256,7 @@ export function StackDetailsDrawer({
         {error && <p className="mt-3 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-700">{error}</p>}
       </div>
 
+      {!readOnly && (
       <div className="border-t border-line px-4 py-3">
         <div className="flex items-center gap-2">
           {stack.current_stage === "stain_requested" ? (
@@ -271,6 +286,7 @@ export function StackDetailsDrawer({
           </Button>
         </div>
       </div>
+      )}
     </div>
   );
 }

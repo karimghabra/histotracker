@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, CheckCircle2, Star, X } from "lucide-react";
+import { Archive, CheckCircle2, Star, Trash2, X } from "lucide-react";
 import type { Slide } from "../lib/types";
 import { useAssayCatalog } from "../hooks/useData";
 import { useActions } from "../hooks/useActions";
+import { useReadOnly } from "../lib/readOnly";
 import { Button } from "./ui";
 
 type AssaySelection = `${"stain" | "ihc"}:${string}`;
@@ -17,7 +18,8 @@ export function ExtraSlideDetailsDrawer({
   onClose: () => void;
 }) {
   const { data: catalog = [] } = useAssayCatalog();
-  const { assignExtraSlide } = useActions();
+  const { assignExtraSlide, removeSlides } = useActions();
+  const readOnly = useReadOnly();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [assays, setAssays] = useState<Record<number, AssaySelection | "">>({});
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +149,14 @@ export function ExtraSlideDetailsDrawer({
       </div>
 
       <div className="border-t border-line px-4 py-3">
+        {/* A viewer can inspect the inventory but not assign or remove slides —
+            those writes are rejected downstream and would just spin (#72). */}
+        {readOnly ? (
+          <p className="text-xs text-ink-faint">
+            Read-only viewer — slides are assigned and removed on the workstation.
+          </p>
+        ) : (
+        <>
         <p className="mb-2 text-xs text-ink-faint">
           Unselected slides remain available in Extra inventory.
         </p>
@@ -161,6 +171,40 @@ export function ExtraSlideDetailsDrawer({
             ? `Assign ${selectedSlides.length} selected slide${selectedSlides.length === 1 ? "" : "s"}`
             : "Select slides to assign"}
         </Button>
+        {/* Slides get mis-entered or physically lost, so they have to be
+            removable from the inventory too (#83/#73). The letters they used
+            stay burned — the next slide continues the sequence. */}
+        <Button
+          variant="subtle"
+          className="mt-2 w-full justify-center text-red-600"
+          disabled={selectedSlides.length === 0 || busy}
+          onClick={() => {
+            const codes = selectedSlides.map((slide) => slide.slide_code);
+            if (
+              !confirm(
+                `Remove ${codes.length === 1 ? codes[0] : `${codes.length} slides`} from the inventory?\n\n` +
+                  `This deletes the slide record. Slide letters are not reused, so the next slide cut ` +
+                  `will continue the sequence rather than take this one's letter.`,
+              )
+            ) {
+              return;
+            }
+            setBusy(true);
+            void removeSlides(selectedSlides.map((slide) => slide.id))
+              .catch((cause: unknown) => setError(String(cause)))
+              .finally(() => {
+                setSelected(new Set());
+                setBusy(false);
+              });
+          }}
+        >
+          <Trash2 size={15} />
+          {selectedSlides.length > 0
+            ? `Remove ${selectedSlides.length} slide${selectedSlides.length === 1 ? "" : "s"}`
+            : "Remove slides"}
+        </Button>
+        </>
+        )}
       </div>
     </div>
   );

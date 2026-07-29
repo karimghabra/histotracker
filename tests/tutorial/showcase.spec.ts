@@ -111,7 +111,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await shot(page, "12-staining-protocol");
 
   // Run the protocol to scatter into Ready for Imaging.
-  for (const step of ["Stained", "Coverslipped", "Dried"]) {
+  for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
   await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });

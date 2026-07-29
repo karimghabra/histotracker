@@ -2,6 +2,7 @@ import { CalendarClock, CheckCircle2, Clock3, FlaskConical, Pencil, Play, Plus, 
 import { useEffect, useState } from "react";
 import type { ProcessingBatch, Sample } from "../lib/types";
 import { parseTimestamp } from "../lib/utils";
+import { useReadOnly } from "../lib/readOnly";
 import { Button } from "./ui";
 
 function countdown(batch: ProcessingBatch, now: number): string {
@@ -41,9 +42,11 @@ export function ProcessingBatchDetailsDrawer({
   width?: number;
   onClose: () => void;
 }) {
+  // A viewer reads the run and its countdown, but cannot move or edit it (#72).
+  const readOnly = useReadOnly();
   const isPlanned = batch.status === "planned";
   const memberIds = samples.map((sample) => sample.id);
-  const canEditMembers = isPlanned && Boolean(onEditMembers);
+  const canEditMembers = isPlanned && Boolean(onEditMembers) && !readOnly;
   const [adding, setAdding] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [confirmAt, setConfirmAt] = useState(() =>
@@ -83,6 +86,7 @@ export function ProcessingBatchDetailsDrawer({
               <EditableStartRow
                 value={batch.started_at}
                 editable={
+                  !readOnly &&
                   (batch.current_stage === "processing_started" ||
                     batch.current_stage === "processed") && Boolean(onEditStart)
                 }
@@ -160,6 +164,7 @@ export function ProcessingBatchDetailsDrawer({
         )}
       </div>
 
+      {!readOnly && (
       <div className="border-t border-line px-4 py-3">
         {isPlanned ? (
           <>
@@ -198,6 +203,7 @@ export function ProcessingBatchDetailsDrawer({
           </Button>
         )}
       </div>
+      )}
     </aside>
   );
 }

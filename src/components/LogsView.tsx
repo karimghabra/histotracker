@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { cn } from "../lib/utils";
+import { cn, compareSlideCodes } from "../lib/utils";
+import { useReadOnly } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
 // hold the accurate per-stage stamps) and — before any slides exist — its own
@@ -188,6 +189,7 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
 
 export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: string) => void } = {}) {
   const { tagSlidesDepth } = useActions();
+  const readOnly = useReadOnly();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const [showDepthDialog, setShowDepthDialog] = useState(false);
   const toggleSlideSelect = (id: number) =>
@@ -213,6 +215,8 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [exportMsg, setExportMsg] = useState<string | null>(null);
+  // Archived samples are hidden by default and can be shown on demand (#74).
+  const [showArchived, setShowArchived] = useState(false);
   const phasesKey = [...phases].join(",");
   useEffect(() => setExportMsg(null), [project, stain, assayType, phasesKey, fromDate, toDate, search]);
 
@@ -223,6 +227,13 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       const list = map.get(key);
       if (list) list.push(slide);
       else map.set(key, [slide]);
+    }
+    // Slides arrive in insertion order, which drifts as extras are assigned and
+    // re-parented. Sort each sample's slides by code so the log always reads
+    // A, B, C… (issue #75). Done here so the table, the drill-down, and the
+    // CSV/Excel exports (which all read this map) agree.
+    for (const list of map.values()) {
+      list.sort((a, b) => compareSlideCodes(a.slide_code, b.slide_code));
     }
     return map;
   }, [slides]);
@@ -264,6 +275,8 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
       const { sample, slides: sampleSlides, agents, phase } = row;
+      // Archived samples stay out of the way unless explicitly asked for (#74).
+      if (!showArchived && sample.archived_at) return false;
       if (project !== "all" && sample.project_code !== project) return false;
       if (phases.size > 0 && !phases.has(phase)) return false;
       if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
@@ -289,7 +302,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       }
       return true;
     });
-  }, [rows, project, phases, assayType, stain, fromDate, toDate, search]);
+  }, [rows, project, phases, assayType, stain, fromDate, toDate, search, showArchived]);
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
@@ -433,6 +446,16 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
             Only matching slides
           </label>
         )}
+        {/* Archived samples are hidden by default; this brings them back (#74). */}
+        <label className="flex cursor-pointer items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+          />
+          Show archived
+        </label>
         <label className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-faint">
           Added
           <input
@@ -553,9 +576,15 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
             <span className="text-xs font-medium text-ink">
               {selectedSlideIds.size} slide{selectedSlideIds.size === 1 ? "" : "s"} selected
             </span>
-            <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
-              <Tag size={13} /> Tag depth
-            </Button>
+            {/* A viewer can SEE existing tags but cannot add them (#72) — the
+                write would be rejected and the dialog would hang. */}
+            {readOnly ? (
+              <span className="text-[11px] text-ink-faint">Read-only viewer — tagging is done on the workstation</span>
+            ) : (
+              <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
+                <Tag size={13} /> Tag depth
+              </Button>
+            )}
             <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSelectedSlideIds(new Set())}>
               Clear
             </Button>
@@ -655,7 +684,8 @@ function FragmentRow({
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
-  const { editSampleNotes, editSlideNotes } = useActions();
+  const { editSampleNotes, editSlideNotes, setArchived } = useActions();
+  const readOnly = useReadOnly();
   const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
   function toggleSlide(id: number) {
     setOpenSlides((cur) => {
@@ -707,6 +737,14 @@ function FragmentRow({
                 Exhausted
               </span>
             )}
+            {sample.archived_at && (
+              <span
+                className="whitespace-nowrap rounded-full bg-ink/10 px-1.5 py-0.5 text-[10px] font-medium text-ink-soft"
+                title={`Archived ${sample.archived_at.slice(0, 10)} — hidden from the board, restorable`}
+              >
+                Archived
+              </span>
+            )}
             {progress.total > 0 && (
               <span className="flex items-center gap-1" title={`${progress.done}/${progress.total} analyzed`}>
                 <span className="h-1.5 w-10 overflow-hidden rounded-full bg-line">
@@ -736,16 +774,41 @@ function FragmentRow({
       {open && (
         <tr>
           <td colSpan={colCount} className="bg-surface px-4 py-3">
-            {onRequestStain && (
-              <div className="mb-3">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {onRequestStain && !readOnly && (
                 <button
                   onClick={() => onRequestStain(sample.sample_code)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
                 >
                   <Send size={13} /> Request stain for {sample.sample_code}
                 </button>
-              </div>
-            )}
+              )}
+              {/* Archive is a reversible hide, not a delete, and never renumbers
+                  anything — so it asks first and says so plainly (#74). Hidden
+                  on a viewer, which cannot write (#72). */}
+              {!readOnly && <button
+                aria-label={sample.archived_at ? `Unarchive ${sample.sample_code}` : `Archive ${sample.sample_code}`}
+                onClick={() => {
+                  if (sample.archived_at) {
+                    void setArchived(sample.id, false);
+                    return;
+                  }
+                  if (
+                    confirm(
+                      `Archive ${sample.sample_code}?\n\n` +
+                        `It will be hidden from the board and the log, but nothing is deleted — ` +
+                        `tick "Show archived" to find it again and restore it.`,
+                    )
+                  ) {
+                    void setArchived(sample.id, true);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
+              >
+                <Archive size={13} />
+                {sample.archived_at ? `Restore ${sample.sample_code}` : `Archive ${sample.sample_code}`}
+              </button>}
+            </div>
 
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
