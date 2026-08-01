@@ -8,6 +8,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { compareSampleCodes, compareSlideCodes } from "../lib/utils";
 import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
@@ -30,6 +31,9 @@ import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
 type EmbeddedSort = "embedded_date" | "name" | "sample_id";
 type ExtraSlidesSort = "sample_id" | "name";
+
+/** Shared empty list so an absent queue keeps a stable identity across renders. */
+const NO_STACKS: SlideStack[] = [];
 type ActiveDrag =
   | { type: "block"; sample: Sample; count?: number }
   | { type: "section"; section: SectionRequest; count?: number }
@@ -70,10 +74,13 @@ function sortExtraSlides(slides: Slide[], key: ExtraSlidesSort): Slide[] {
         );
       case "sample_id":
       default:
+        // Numeric-aware on the sample code, and slide-letter-aware on the code
+        // itself — plain localeCompare mis-orders both once sample codes stop
+        // being fixed-width (#87) and at the A..Z→AA wrap (#75).
         return (
           (a.project_code ?? "").localeCompare(b.project_code ?? "") ||
-          (a.parent_code ?? "").localeCompare(b.parent_code ?? "") ||
-          a.slide_code.localeCompare(b.slide_code)
+          compareSampleCodes(a.parent_code ?? "", b.parent_code ?? "") ||
+          compareSlideCodes(a.slide_code, b.slide_code)
         );
     }
   });
@@ -289,7 +296,9 @@ export function Board({
   const agentsOf = (stack: SlideStack): string[] =>
     (stack.agent_names ?? "").split(",").map((a) => a.trim()).filter(Boolean);
 
-  const imagingStacks = stacksByQueue.analysis_pending ?? [];
+  // Stable identity when the queue is empty, so the memos and effects below
+  // don't re-run on every render just because `?? []` minted a new array.
+  const imagingStacks = stacksByQueue.analysis_pending ?? NO_STACKS;
   const projectsInImaging = useMemo(
     () => [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
     [imagingStacks],
@@ -310,6 +319,26 @@ export function Board({
     }
     return items;
   }, [imagingStacks, imagingProjectFilter, imagingStainFilter]);
+
+  // #85 — a controlled <select> whose value is no longer among its options does
+  // NOT go blank: react-dom's updateOptions re-selects the FIRST option and
+  // fires no change event. So when the last stack of the filtered project is
+  // marked Analyzed, its <option> disappears, the control starts reading
+  // "All Projects", but this state still says "EE" — and the queue quietly
+  // filters itself down to nothing while other projects' stacks sit there
+  // unshown. Drop the filter for real once its value is off the menu, so the
+  // control and the list agree.
+  useEffect(() => {
+    if (imagingProjectFilter !== "all" && !projectsInImaging.includes(imagingProjectFilter)) {
+      setImagingProjectFilter("all");
+    }
+  }, [imagingProjectFilter, projectsInImaging]);
+
+  useEffect(() => {
+    if (imagingStainFilter !== "all" && !stainsInImaging.includes(imagingStainFilter)) {
+      setImagingStainFilter("all");
+    }
+  }, [imagingStainFilter, stainsInImaging]);
 
   const projectsInExtraSlides = useMemo(() => {
     return [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
@@ -692,7 +721,11 @@ export function Board({
                         count={isDownstream ? visibleStacks.length : groups.length}
                         selectedCount={selectedCount}
                         headerExtra={
-                          isImaging && (projectsInImaging.length > 0 || stainsInImaging.length > 0) ? (
+                          // Keyed off the RAW queue, not the derived option lists:
+                          // if the filters vanished the moment the queue emptied,
+                          // a stale filter would have no widget left to clear it
+                          // (#85).
+                          isImaging && imagingStacks.length > 0 ? (
                             <div className="flex gap-1">
                               <select
                                 aria-label="Filter imaging by project"

@@ -15,15 +15,15 @@ async function seedSampleWithSlides(page: Page) {
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Logs block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   // Pre-processing → processor → embed.
-  await page.getByText("EE-0001", { exact: true }).click();
+  await page.getByText("EE-1", { exact: true }).click();
   await page.getByRole("button", { name: "Placed in fixative" }).click();
   await page.getByRole("button", { name: "Removed from fixative" }).click();
   await page.getByRole("button", { name: "Placed in ethanol" }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await drag(page, "EE-0001", "Processor");
+  await drag(page, "EE-1", "Processor");
   // A background refetch can momentarily blank the active operator and no-op the
   // Start-Batch click, so retry until the batch actually appears.
   await expect(async () => {
@@ -32,10 +32,10 @@ async function seedSampleWithSlides(page: Page) {
     await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 15000 });
   await drag(page, "Batch 1", "Needs Embedding");
-  await drag(page, "EE-0001", "Embedded Inventory");
+  await drag(page, "EE-1", "Embedded Inventory");
 
   // Send for cutting with one stained slide (index 1 = first catalog stain).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -66,7 +66,7 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   // Go to the Logs view (scope to the sidebar nav).
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await expect(page.getByRole("columnheader", { name: /Sample ID/ })).toBeVisible();
-  const sampleCell = page.getByRole("cell", { name: "EE-0001", exact: true });
+  const sampleCell = page.getByRole("cell", { name: "EE-1", exact: true });
   await expect(sampleCell).toBeVisible();
   // The stains summary shows the stain we cut.
   await expect(page.getByRole("cell", { name: /Alcian Blue/ }).first()).toBeVisible();
@@ -85,7 +85,7 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   // Expand the sample → sample timeline + its slides drill in.
   await sampleCell.click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  const slideRow = page.getByRole("button", { name: /EE-0001-A/ });
+  const slideRow = page.getByRole("button", { name: /EE-1-A/ });
   await expect(slideRow).toBeVisible();
   // Sample notes persist through a refetch.
   const sampleNotes = page.getByPlaceholder("Notes about this sample…");

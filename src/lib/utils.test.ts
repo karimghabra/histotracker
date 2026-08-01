@@ -1,5 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { compareSlideCodes, duplicateLabel } from "./utils";
+import {
+  compareSampleCodes,
+  compareSlideCodes,
+  duplicateLabel,
+  formatSampleCode,
+  parseSampleCode,
+  sampleCodeVariants,
+} from "./utils";
+
+describe("sample code formatting (#87)", () => {
+  it("mints codes without leading zeros", () => {
+    expect(formatSampleCode("ee", 1)).toBe("EE-1");
+    expect(formatSampleCode("EE", 22)).toBe("EE-22");
+    expect(formatSampleCode(" ee ", 100)).toBe("EE-100");
+  });
+
+  it("parses both the padded and unpadded spellings", () => {
+    expect(parseSampleCode("EE-0001")).toEqual({ prefix: "EE", number: 1 });
+    expect(parseSampleCode("EE-1")).toEqual({ prefix: "EE", number: 1 });
+    expect(parseSampleCode("not a code")).toBeNull();
+  });
+
+  it("treats both spellings as the same identity", () => {
+    const padded = sampleCodeVariants("EE-0001");
+    const bare = sampleCodeVariants("EE-1");
+    expect(padded).toContain("EE-1");
+    expect(padded).toContain("EE-0001");
+    expect(new Set(bare)).toEqual(new Set(padded));
+  });
+
+  it("does not conflate different numbers", () => {
+    expect(sampleCodeVariants("EE-2")).not.toContain("EE-1");
+  });
+
+  it("sorts sample codes numerically across both spellings", () => {
+    const codes = ["EE-10", "EE-2", "EE-0001", "EE-9"];
+    expect([...codes].sort(compareSampleCodes)).toEqual(["EE-0001", "EE-2", "EE-9", "EE-10"]);
+  });
+
+  it("is NOT interchangeable with compareSlideCodes for bare sample codes", () => {
+    // compareSlideCodes compares the tail by LENGTH first, which is right for
+    // slide letters (Z before AA) but wrong for numbers — guard the distinction.
+    const codes = ["EE-10", "EE-2", "EE-0001"];
+    expect([...codes].sort(compareSlideCodes)).not.toEqual(
+      [...codes].sort(compareSampleCodes),
+    );
+  });
+
+  it("still orders slide codes correctly with unpadded parents", () => {
+    const codes = ["EE-2-AA", "EE-10-A", "EE-2-B", "EE-2-Z", "EE-2-A"];
+    expect([...codes].sort(compareSlideCodes)).toEqual([
+      "EE-2-A",
+      "EE-2-B",
+      "EE-2-Z",
+      "EE-2-AA",
+      "EE-10-A",
+    ]);
+  });
+});
 
 describe("compareSlideCodes (#75)", () => {
   it("orders a sample's slides A, B, C…", () => {

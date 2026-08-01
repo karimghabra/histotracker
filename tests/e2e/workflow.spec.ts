@@ -24,12 +24,12 @@ async function seedSample(page: Page, description = "Workflow block") {
   await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
 // Walk the pre-processing checklist in the drawer so the block reaches
 // in_ethanol (the only stage from which it can be dragged into the Processor).
-async function completePreprocessing(page: Page, code = "EE-0001") {
+async function completePreprocessing(page: Page, code = "EE-1") {
   await page.getByText(code, { exact: true }).click();
   await page.getByRole("button", { name: "Placed in fixative" }).click();
   await page.getByRole("button", { name: "Removed from fixative" }).click();
@@ -65,7 +65,7 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
 // Advance a freshly-created block all the way to Embedded Inventory.
 async function embedBlock(page: Page) {
   await completePreprocessing(page);
-  await dragOnto(page, "EE-0001", "Processor");
+  await dragOnto(page, "EE-1", "Processor");
   await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   // A background refetch can momentarily blank the active operator and no-op the
   // Start-Batch click, so retry it until the batch actually appears.
@@ -75,13 +75,13 @@ async function embedBlock(page: Page) {
     await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 15000 });
   await dragOnto(page, "Batch 1", "Needs Embedding");
-  await dragOnto(page, "EE-0001", "Embedded Inventory");
+  await dragOnto(page, "EE-1", "Embedded Inventory");
 }
 
 test("processing run dialog has no mode tab and infers plan from time (#42)", async ({ page }) => {
   await seedSample(page);
   await completePreprocessing(page);
-  await dragOnto(page, "EE-0001", "Processor");
+  await dragOnto(page, "EE-1", "Processor");
 
   await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Plan for later" })).toHaveCount(0);
@@ -98,7 +98,7 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
   await embedBlock(page);
 
   // Cut one stained slide so Mark Sectioned mints a Staining rack tile.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -127,16 +127,16 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
 });
 
 test("a planned run's sample list is editable in the drawer (#32)", async ({ page }) => {
-  await seedSample(page); // EE-0001
-  await addSample(page, "Second block"); // EE-0002
-  await expect(page.getByText("EE-0002")).toBeVisible();
+  await seedSample(page); // EE-1
+  await addSample(page, "Second block"); // EE-2
+  await expect(page.getByText("EE-2")).toBeVisible();
 
   // Both blocks reach in_ethanol so they're eligible for processing.
-  await completePreprocessing(page, "EE-0001");
-  await completePreprocessing(page, "EE-0002");
+  await completePreprocessing(page, "EE-1");
+  await completePreprocessing(page, "EE-2");
 
-  // Plan a run (future start time) containing only EE-0001.
-  await dragOnto(page, "EE-0001", "Processor");
+  // Plan a run (future start time) containing only EE-1.
+  await dragOnto(page, "EE-1", "Processor");
   const future = new Date(Date.now() + 86_400_000).toISOString().slice(0, 16);
   await page.getByLabel(/Planned Start|Processing Started/).fill(future);
   await expect(page.getByRole("button", { name: "Plan Batch" })).toBeVisible();
@@ -154,11 +154,11 @@ test("a planned run's sample list is editable in the drawer (#32)", async ({ pag
   }).toPass();
   await expect(page.getByText(/protocol · 1 samples/)).toBeVisible();
 
-  // Add EE-0002 to the planned run from the eligible-samples list (scope to the
-  // drawer — the Pre-processing card also carries "EE-0002").
+  // Add EE-2 to the planned run from the eligible-samples list (scope to the
+  // drawer — the Pre-processing card also carries "EE-2").
   const drawer = page.locator("aside");
   await drawer.getByRole("button", { name: "Add", exact: true }).click({ force: true });
-  await drawer.getByRole("button", { name: /EE-0002/ }).click({ force: true });
+  await drawer.getByRole("button", { name: /EE-2/ }).click({ force: true });
   await expect(page.getByText(/protocol · 2 samples/)).toBeVisible();
 
   // And it can be removed again (X on the member row).
@@ -174,11 +174,11 @@ test("sectioning: per-slide cutting, no stale plan tag, slide-count button (#35/
   await embedBlock(page);
 
   // #36: the embedded tile carries no misleading "N slides planned" tag.
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
   await expect(page.getByText(/slides planned/i)).toHaveCount(0);
 
   // #35: Send for Cutting is a per-slide "how many slides / which get a stain" model.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
   await expect(page.getByText(/4 slides · 0 stained · 4 extra/)).toBeVisible();
@@ -197,7 +197,7 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   await embedBlock(page);
 
   // Request a stain on the embedded block (no extras exist yet → flags the block).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   const agentSelect = page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Choose an agent" }) });
@@ -212,7 +212,7 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   await expect(page.getByText(/needs stain/i)).toBeVisible();
 
   // #41b: Send for Cutting is prefilled from the block's preselected stains.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/Prefilled from .* preselected stains/i)).toBeVisible();
 });
@@ -220,7 +220,7 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
 test("needs-sectioning card exposes a real multi-select checkbox (#37)", async ({ page }) => {
   await seedSample(page);
   await embedBlock(page);
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await expect(page.getByText("4 slides").first()).toBeVisible();
@@ -231,7 +231,7 @@ test("needs-sectioning card exposes a real multi-select checkbox (#37)", async (
   const needsSectioning = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Needs Sectioning", exact: true }) });
-  const checkbox = needsSectioning.getByRole("checkbox", { name: "Select EE-0001" });
+  const checkbox = needsSectioning.getByRole("checkbox", { name: "Select EE-1" });
   await expect(checkbox).not.toBeChecked();
   await checkbox.check();
   await expect(checkbox).toBeChecked();
@@ -250,7 +250,7 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await embedBlock(page);
 
   // Cut with one stained slide (index 1 = first catalog stain, Alcian Blue).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -281,7 +281,7 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   const imaging = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
-  await imaging.getByText("EE-0001", { exact: true }).first().click();
+  await imaging.getByText("EE-1", { exact: true }).first().click();
   await expect(page.getByText("Stack timeline")).toBeVisible();
   // (1) The pre-imaging stamps survived the scatter (recovered from the slides).
   const stainedRow = page.locator("li").filter({ hasText: /^Stained/ });
@@ -297,7 +297,7 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.locator("summary").filter({ hasText: /stage/ }).click();
   await page.getByRole("checkbox", { name: "Analyzed" }).check();
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   // Filter to a different phase → the analyzed sample drops out.
   await page.getByRole("checkbox", { name: "Analyzed" }).uncheck();
   await page.getByRole("checkbox", { name: "Staining / IHC" }).check();
@@ -307,11 +307,11 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
 // Drives one sample to fully-analyzed and leaves a second in progress, then
 // exercises the Logs status partition and the CSV export end to end.
 test("Logs status partition + CSV export", async ({ page }) => {
-  await seedSample(page); // EE-0001
+  await seedSample(page); // EE-1
   await embedBlock(page);
 
-  // EE-0001 → analyzed (cut a stain, run the protocol, image, analyze).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  // EE-1 → analyzed (cut a stain, run the protocol, image, analyze).
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -333,30 +333,30 @@ test("Logs status partition + CSV export", async ({ page }) => {
   const imaging = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
-  await imaging.getByText("EE-0001", { exact: true }).first().click();
+  await imaging.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
   // Marking analyzed removes the stack from the board and auto-closes its drawer.
 
   // A second block, left in pre-processing → still Active (no analyzed slides).
-  await addSample(page, "In-progress block"); // EE-0002
-  await expect(page.getByText("EE-0002")).toBeVisible();
+  await addSample(page, "In-progress block"); // EE-2
+  await expect(page.getByText("EE-2")).toBeVisible();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
 
-  // No filter → both. Stage=Analyzed → only EE-0001. Stage=Pre-processing → only EE-0002.
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
+  // No filter → both. Stage=Analyzed → only EE-1. Stage=Pre-processing → only EE-2.
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toBeVisible();
   await page.screenshot({ path: "test-results/logs-all.png", fullPage: true });
 
   await page.locator("summary").filter({ hasText: /stage/ }).click();
   await page.getByRole("checkbox", { name: "Analyzed" }).check();
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toHaveCount(0);
   await page.getByRole("checkbox", { name: "Analyzed" }).uncheck();
   await page.getByRole("checkbox", { name: "Pre-processing" }).check();
-  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0);
   await page.getByRole("checkbox", { name: "Pre-processing" }).uncheck();
 
   // Export CSV (no stage filter) → confirmation + the file lands in the virtual FS.
@@ -370,9 +370,9 @@ test("Logs status partition + CSV export", async ({ page }) => {
     return null;
   });
   expect(csv).toContain("Sample ID");
-  expect(csv).toContain("EE-0001-A");
+  expect(csv).toContain("EE-1-A");
   expect(csv).toContain("Alcian Blue");
-  expect(csv).toContain("EE-0002"); // the slide-less in-progress block still appears
+  expect(csv).toContain("EE-2"); // the slide-less in-progress block still appears
 
   // Export XLSX too → a .xlsx lands in the virtual FS.
   await page.getByRole("button", { name: "Excel", exact: true }).click();
@@ -392,7 +392,7 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
   await embedBlock(page);
 
   // Cut with TWO different agents → two section_requests, grouped under one card.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   const rows = page.locator(".max-h-64 select");
   await rows.nth(0).selectOption({ index: 1 });
@@ -404,14 +404,14 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
   // not just the first cut group's one slide.
   await page.getByText("4 slides").first().click();
   await expect(page.getByText("Assay slides")).toBeVisible();
-  await expect(page.getByText("EE-0001-A", { exact: true })).toBeVisible();
-  await expect(page.getByText("EE-0001-B", { exact: true })).toBeVisible();
+  await expect(page.getByText("EE-1-A", { exact: true })).toBeVisible();
+  await expect(page.getByText("EE-1-B", { exact: true })).toBeVisible();
 });
 
 test("undo after the staining scatter returns to Staining, not Needs Sectioning (#56)", async ({ page }) => {
   await seedSample(page);
   await embedBlock(page);
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -435,19 +435,19 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
     await page.getByRole("button", { name: steps[i], exact: true }).click();
     if (i < steps.length - 1) await expect(page.getByText(new RegExp(`${i + 1}/2 complete`))).toBeVisible();
   }
-  await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
 
   // Undo once → slides return to Staining, NOT all the way to Needs Sectioning.
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
   await expect(col("Staining / IHC").getByText("Alcian Blue").first()).toBeVisible({ timeout: 15000 });
-  await expect(col("Ready for Imaging").getByText("EE-0001")).toHaveCount(0);
+  await expect(col("Ready for Imaging").getByText("EE-1")).toHaveCount(0);
   await expect(col("Needs Sectioning").getByText("4 slides")).toHaveCount(0);
 });
 
 test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)", async ({ page }) => {
   await seedSample(page);
   await embedBlock(page);
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page
     .locator("select")
@@ -469,17 +469,17 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
-  await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
 
   // Undo → the imaging tile disappears entirely (no ghost left behind, #31);
   // the stack returns to Staining.
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
-  await expect(col("Ready for Imaging").getByText("EE-0001")).toHaveCount(0, { timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-1")).toHaveCount(0, { timeout: 15000 });
   await expect(col("Staining / IHC").getByText("Alcian Blue").first()).toBeVisible();
 
   // Redo → it comes back in imaging and Staining is cleared (moved forward, not
   // duplicated across columns).
   await page.getByTitle("Redo (Ctrl+Y)").click({ force: true });
-  await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
   await expect(col("Staining / IHC").getByText("Alcian Blue")).toHaveCount(0);
 });

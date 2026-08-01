@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.7.1 - 2026-07-31
+
+Fixes a 0.7.0 regression, makes two shipped-but-unreachable features actually
+usable, and closes the three new issues. **No schema change** — no migration, no
+new columns; existing databases, backups and viewer snapshots are untouched.
+
+- **Ready for Imaging no longer empties itself (#85).** Marking the last stack of
+  a filtered project as analyzed made the column go blank while the filter
+  appeared to read “All Projects”. A `<select>` whose value leaves its option
+  list does not blank — the browser silently shows the first option — so the
+  control said “All Projects” while the filter was still narrowing to a project
+  that had no stacks left. The filter is now reset for real, and it no longer
+  disappears when the queue drains (which used to leave it stuck with no way to
+  clear it). **Regression introduced in 0.7.0.**
+- **Sample descriptions are actually editable now (#79).** 0.7.0 added this as a
+  faint 12px pencil beside a label and nobody could find it — a feature you
+  cannot find is not shipped. Descriptions are now an always-visible field in the
+  **Logs** drill-down, right beside the notes you already edit, and the drawer
+  shows a proper bordered “Edit” control instead of a bare icon.
+- **Sample IDs no longer carry leading zeros (#87).** New samples are `EE-1`,
+  `EE-22` — not `EE-0001`. **Existing samples keep the codes already written on
+  their blocks and slides**; nothing is renamed. Because a database in daily use
+  will hold both spellings, lookups, sorting and Logs search now treat `EE-0001`
+  and `EE-1` as the same sample — including the request-matching path, which
+  previously failed silently and would have dropped a technician's request.
+- **Each sample in a batch can have its own description (#86).** Tick “Give each
+  sample its own description” when creating more than one, and optionally paste a
+  column of descriptions straight from a spreadsheet. Blank rows fall back to the
+  shared description; the whole batch is still a single undo.
+- **Removing slides from a staining rack is labelled (#73).** It was hidden
+  behind an unlabelled icon; it now reads “Remove slides”, matching the Extras
+  inventory.
+- **Sync attribution is finally shown (#77).** 0.7.0 recorded who published a
+  snapshot and built the “changes by …” message, but nothing ever rendered it.
+  It now appears next to the sync status.
+- **Setup no longer assumes a role (#72).** The role cards defaulted to
+  *Viewer* and the form never checked, so pressing Connect without choosing
+  configured a read-only install — which since 0.7.0 hides every editing control,
+  presenting as “the app lost half its features”. A role must now be chosen
+  explicitly.
+
 ## 0.7.0 - 2026-07-28
 
 Slide removal, archiving, and a genuinely read-only viewer.

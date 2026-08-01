@@ -39,22 +39,22 @@ async function seedWorkstation(page: Page) {
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Synced block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
-// Drive EE-0001 all the way to Embedded Inventory on the workstation.
+// Drive EE-1 all the way to Embedded Inventory on the workstation.
 async function embedBlockWs(ws: Page) {
-  await ws.getByText("EE-0001", { exact: true }).click();
+  await ws.getByText("EE-1", { exact: true }).click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await dragOnto(ws, "EE-0001", "Processor");
+  await dragOnto(ws, "EE-1", "Processor");
   await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await clickUntil(ws, "Start Batch", ws.getByText("Batch 1", { exact: true }));
   await dragOnto(ws, "Batch 1", "Needs Embedding");
-  await dragOnto(ws, "EE-0001", "Embedded Inventory");
-  await expect(column(ws, "Embedded Inventory").getByText("EE-0001")).toBeVisible({ timeout: 15000 });
+  await dragOnto(ws, "EE-1", "Embedded Inventory");
+  await expect(column(ws, "Embedded Inventory").getByText("EE-1")).toBeVisible({ timeout: 15000 });
 }
 
 // Run a manual sync cycle and wait for it to settle without error.
@@ -142,18 +142,18 @@ test("viewer streams in the workstation database", async ({ browser }) => {
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible(); // read-only role
   await syncNow(vw);
-  await expect(vw.getByText("EE-0001")).toBeVisible({ timeout: 15000 });
+  await expect(vw.getByText("EE-1")).toBeVisible({ timeout: 15000 });
   await vw.screenshot({ path: "test-results/sync-viewer.png", fullPage: true });
 
-  // A second change streams too: add EE-0002 on the workstation, publish, pull.
+  // A second change streams too: add EE-2 on the workstation, publish, pull.
   await ws.getByRole("button", { name: "New Sample" }).click();
   await ws.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Second synced block");
   await ws.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(ws.getByText("EE-0002")).toBeVisible();
+  await expect(ws.getByText("EE-2")).toBeVisible();
   await syncNow(ws);
 
   await syncNow(vw);
-  await expect(vw.getByText("EE-0002")).toBeVisible({ timeout: 15000 });
+  await expect(vw.getByText("EE-2")).toBeVisible({ timeout: 15000 });
 
   await wsCtx.close();
   await vwCtx.close();
@@ -167,35 +167,35 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   const ns = `flow-${Date.now()}`;
   const { ws, vw, wsCtx, vwCtx } = await openPair(browser, ns);
   await ws.goto("/?freshdb=1");
-  await seedWorkstation(ws); // EE-0001 in pre-processing
+  await seedWorkstation(ws); // EE-1 in pre-processing
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
 
   // 1. Pre-processing → in_ethanol.
-  await ws.getByText("EE-0001", { exact: true }).click();
+  await ws.getByText("EE-1", { exact: true }).click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await streamTo(ws, vw, column(vw, "Pre-processing").getByText("EE-0001"));
+  await streamTo(ws, vw, column(vw, "Pre-processing").getByText("EE-1"));
 
   // 2. Processor (start a batch). A background sync/refetch can momentarily blank
   // the active operator and no-op the first click, so retry until it sticks.
-  await dragOnto(ws, "EE-0001", "Processor");
+  await dragOnto(ws, "EE-1", "Processor");
   await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await clickUntil(ws, "Start Batch", ws.getByText("Batch 1", { exact: true }));
   await streamTo(ws, vw, column(vw, "Processor").getByText("Batch 1"));
 
   // 3. Needs Embedding.
   await dragOnto(ws, "Batch 1", "Needs Embedding");
-  await streamTo(ws, vw, column(vw, "Needs Embedding").getByText("EE-0001"));
+  await streamTo(ws, vw, column(vw, "Needs Embedding").getByText("EE-1"));
 
   // 4. Embedded Inventory.
-  await dragOnto(ws, "EE-0001", "Embedded Inventory");
-  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("EE-0001"));
+  await dragOnto(ws, "EE-1", "Embedded Inventory");
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("EE-1"));
 
   // 5. Needs Sectioning (send for cutting with one stain).
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: /Send for Cutting/ }).click();
   await ws
     .locator("select")
@@ -228,26 +228,26 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
       await expect(ws.getByText(new RegExp(`${i + 1}/2 complete`))).toBeVisible({ timeout: 10000 });
     }
   }
-  await expect(column(ws, "Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
-  await streamTo(ws, vw, column(vw, "Ready for Imaging").getByText("EE-0001").first());
+  await expect(column(ws, "Ready for Imaging").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
+  await streamTo(ws, vw, column(vw, "Ready for Imaging").getByText("EE-1").first());
 
   // 8. Analyzed (complete imaging + mark analyzed) → shows in the viewer's Logs.
-  await column(ws, "Ready for Imaging").getByText("EE-0001", { exact: true }).first().click();
+  await column(ws, "Ready for Imaging").getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: /Complete Imaging/ }).click();
   await ws.getByRole("button", { name: /Mark Analyzed/ }).click();
   // Analyzed is terminal — the stack leaves the board; wait for that on the
   // workstation before publishing, then pull (retry) on the viewer.
-  await expect(column(ws, "Ready for Imaging").getByText("EE-0001")).toHaveCount(0, { timeout: 15000 });
+  await expect(column(ws, "Ready for Imaging").getByText("EE-1")).toHaveCount(0, { timeout: 15000 });
   await syncNow(ws);
   await expect(async () => {
     await vw.getByTitle("Sync now").click();
     await vw.waitForTimeout(500);
     await vw.locator("nav").getByRole("button", { name: "Logs" }).click();
-    await expect(vw.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible({ timeout: 3000 });
+    await expect(vw.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 30000 });
   await vw.locator("summary").filter({ hasText: /stage/ }).click();
   await vw.getByRole("checkbox", { name: "Analyzed" }).check();
-  await expect(vw.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(vw.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible({ timeout: 15000 });
   await vw.screenshot({ path: "test-results/sync-workflow-analyzed.png", fullPage: true });
 
   await wsCtx.close();
@@ -264,24 +264,24 @@ test("viewer stain request formally flags the block on the workstation", async (
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
 
-  // Take EE-0001 to Embedded Inventory so it's a real block a viewer can request.
-  await ws.getByText("EE-0001", { exact: true }).click();
+  // Take EE-1 to Embedded Inventory so it's a real block a viewer can request.
+  await ws.getByText("EE-1", { exact: true }).click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await dragOnto(ws, "EE-0001", "Processor");
+  await dragOnto(ws, "EE-1", "Processor");
   await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await clickUntil(ws, "Start Batch", ws.getByText("Batch 1", { exact: true }));
   await dragOnto(ws, "Batch 1", "Needs Embedding");
-  await dragOnto(ws, "EE-0001", "Embedded Inventory");
-  await expect(column(ws, "Embedded Inventory").getByText("EE-0001")).toBeVisible({ timeout: 15000 });
-  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("EE-0001"));
+  await dragOnto(ws, "EE-1", "Embedded Inventory");
+  await expect(column(ws, "Embedded Inventory").getByText("EE-1")).toBeVisible({ timeout: 15000 });
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("EE-1"));
 
   // Viewer raises a formal stain request against the synced block.
   await vw.getByRole("button", { name: /Request stain/ }).click();
   await vw.locator("select").filter({ has: vw.locator("option", { hasText: "Choose a sample" }) })
-    .selectOption("EE-0001");
+    .selectOption("EE-1");
   await vw
     .locator("select")
     .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })
@@ -296,13 +296,13 @@ test("viewer stain request formally flags the block on the workstation", async (
 
   // The request also lands in the workstation inbox.
   await ws.getByRole("button", { name: "Requests" }).click();
-  await expect(ws.getByText("EE-0001").first()).toBeVisible();
+  await expect(ws.getByText("EE-1").first()).toBeVisible();
   await ws.keyboard.press("Escape");
 
   // The flag streams back to the viewer, and the viewer tracks its request.
   await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText(/needs stain/i));
   await vw.getByRole("button", { name: /My requests/ }).click();
-  await expect(vw.getByText("EE-0001").first()).toBeVisible();
+  await expect(vw.getByText("EE-1").first()).toBeVisible();
   await vw.screenshot({ path: "test-results/sync-request.png", fullPage: true });
 
   await wsCtx.close();
@@ -320,21 +320,21 @@ test("viewer request auto-pulls an available extra into Staining and acknowledge
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
 
   await embedBlockWs(ws);
-  // Cut EE-0001 as all extras (default plan) → extras land in inventory.
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  // Cut EE-1 as all extras (default plan) → extras land in inventory.
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: /Send for Cutting/ }).click();
   await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await ws.getByText("4 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
   // The section drawer auto-closes once the all-extras section leaves Needs Sectioning.
-  await expect(column(ws, "Extras").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
-  await streamTo(ws, vw, column(vw, "Extras").getByText("EE-0001").first());
+  await expect(column(ws, "Extras").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
+  await streamTo(ws, vw, column(vw, "Extras").getByText("EE-1").first());
 
   // Viewer requests a stain.
   await vw.getByRole("button", { name: /Request stain/ }).click();
   await vw.locator("select").filter({ has: vw.locator("option", { hasText: "Choose a sample" }) })
-    .selectOption("EE-0001");
+    .selectOption("EE-1");
   await vw
     .locator("select")
     .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })
@@ -344,7 +344,7 @@ test("viewer request auto-pulls an available extra into Staining and acknowledge
   // Workstation drains → an extra is auto-pulled into Staining (no manual step).
   await expect(async () => {
     await syncNow(ws);
-    await expect(column(ws, "Staining / IHC").getByText("EE-0001").first()).toBeVisible({ timeout: 3000 });
+    await expect(column(ws, "Staining / IHC").getByText("EE-1").first()).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 40000 });
 
   // …and the request is auto-acknowledged, not left a stale "requested" item.

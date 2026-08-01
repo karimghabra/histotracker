@@ -331,6 +331,70 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## Fourth wave (#85–#87) + 0.7.0 follow-ups — status as of 0.7.1
+
+- **#85 — Ready for Imaging empties itself · ✅ fixed (regression from 0.7.0).**
+  *Root cause:* the project/stain `<option>` lists are derived from the stacks
+  currently in the queue. Analyzing the last stack of the filtered project
+  removes its option, and react-dom's `updateOptions` then re-selects the FIRST
+  option **without firing a change event** — so the control reads "All Projects"
+  while React state still holds "EE" and `displayedImagingStacks` filters to
+  nothing. Aggravated by the header gate: when the queue drained, both selects
+  unmounted while the stale value survived, leaving no widget to clear it.
+  *Fix:* two effects in `Board.tsx` reset a filter whose value is no longer among
+  the options; the gate keys off the raw queue; `NO_STACKS` gives the empty queue
+  a stable identity. *Test:* `issues-85-87.spec.ts`, verified to fail without the
+  fix (0 tiles instead of 1, while the select still read "all" — the reported
+  symptom exactly).
+- **#79 follow-up — the fix was unreachable · ✅ fixed.** Shipped in 0.7.0 as a
+  12px `text-ink-faint` pencil beside the Description heading; the user reported
+  it as missing. Descriptions are now an always-visible field in the Logs
+  drill-down beside the notes editor (the pattern users already know) and a
+  bordered "Edit" control in the drawer. Writes go through a new
+  `setSampleDescription` / `editSampleDescription` that touches ONE column —
+  `updateSampleDetails` rewrites eight and was the wrong shape for a text field.
+- **#87 — sample ID zero padding · ✅ fixed, deliberately partial.**
+  Phase 1 (identity): `formatSampleCode` / `parseSampleCode` /
+  `sampleCodeVariants` / `compareSampleCodes` in `utils.ts`;
+  `findSampleIdByCode` and `acknowledgeRequestsForSlide` match every spelling;
+  `listSlidesForStack` orders by `project_sample_number` rather than code text;
+  the extras and request-dropdown sorts and the Logs search are padding-aware.
+  Phase 2 (format): the three mint sites now call `formatSampleCode`.
+  **Phase 3 (renaming existing codes) was deliberately NOT done** — see below.
+- **#86 — per-sample batch descriptions · ✅ fixed.** Optional `descriptions[]`
+  on `createSamples`, opt-in checkbox plus a paste-a-column textarea in
+  `NewSampleDialog`. Undo already wrapped the whole loop, so a batch is still one
+  Ctrl+Z. No data-layer change — `sample_description` was always per-row.
+- **#73 follow-up · ✅ fixed.** Rack slide removal was an unlabelled 14px icon
+  while the Extras drawer used a labelled button; aligned to the latter.
+- **#77 — attribution never rendered · ✅ fixed.** `useSync` built the "changes
+  by …" string into `lastMessage`, but `App` never passed it to
+  `SyncStatusPill` and nothing else read it — the whole channel was write-only,
+  and the 0.7.0 changelog claimed a UI that did not exist. Now rendered.
+- **#72 follow-up — setup defaulted to Viewer · ✅ fixed.** `SetupScreen`
+  pre-selected `viewer` and `save()` never validated the role, so pressing
+  Connect without choosing silently configured a read-only install. Harmless
+  before 0.7.0; after it, read-only gating hides every editing control, which
+  presents as the app losing features. A role is now required.
+
+### Why existing sample codes are NOT renamed (#87 Phase 3)
+
+Renaming `EE-0001` → `EE-1` across a live database was considered and rejected
+for now. The blocking argument is physical: **blocks, cassettes and slides already
+carry the padded code in pen.** Renaming desynchronises the database from objects
+on the bench, and nothing in the schema would remember the old spelling. Beyond
+that: `audit_events.summary` freezes codes as text, so history would disagree with
+the present; the unconditional `AFTER UPDATE` audit triggers would inject one junk
+row per sample and per slide; and any viewer request already in the inbox names the
+old code. Phase 1 makes the mixed state safe — both spellings resolve to the same
+sample everywhere — so a rename can be offered later as an explicit, backed-up,
+preview-and-confirm maintenance action if the lab wants one. It must never be an
+open-time translation: those run before `guardWrites` (so they fire on viewers too)
+and their `schema_meta` marker rides with the image, which would silently re-rename
+every backup you ever open.
+
+---
+
 ## Third wave (#70–#84) — status as of 0.6.1
 
 Fixed and gated in this pass:

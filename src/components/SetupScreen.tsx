@@ -17,9 +17,17 @@ export function SetupScreen({
   onConfigured: (config: SyncConfigPublic) => void;
   onCancel?: () => void;
 }) {
-  // Default to the safe, common role so a lab user can't drift into being an
-  // authoritative workstation without deliberately choosing it.
-  const [role, setRole] = useState<SyncRole>((initial?.role as SyncRole) || "viewer");
+  // No pre-selected role on a FIRST setup: the choice must be deliberate.
+  //
+  // This used to default to "viewer" so nobody could drift into being an
+  // authoritative workstation by accident — a sound instinct, but save() never
+  // validated the role, so clicking Connect without touching the cards silently
+  // configured a viewer. Since 0.7.0 a viewer hides every editing control
+  // (issue #72), which presents as "the app lost half its features" on a machine
+  // the user believes is the workstation. Neither role is safe to assume; an
+  // empty role simply blocks Connect until one is picked. An existing install
+  // keeps whatever it already had.
+  const [role, setRole] = useState<SyncRole | "">((initial?.role as SyncRole) || "");
   const [repoOwner, setRepoOwner] = useState(initial?.repo_owner || DEFAULT_OWNER);
   const [repoName, setRepoName] = useState(initial?.repo_name || DEFAULT_REPO);
   const [token, setToken] = useState("");
@@ -40,6 +48,10 @@ export function SetupScreen({
     const name = repoName.trim();
     const operator = operatorName.trim();
     const initials = (operatorInitials.trim() || suggestedInitials).toUpperCase();
+    if (!role) {
+      setError("Choose whether this install is the Workstation or a Viewer.");
+      return;
+    }
     if (!owner || !name) {
       setError("Enter the data repository owner and name.");
       return;
@@ -104,6 +116,13 @@ export function SetupScreen({
 
         <div className="max-h-[70vh] overflow-y-auto px-6 py-5 thin-scroll">
           <Field label="This install's role">
+            {!role && (
+              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                Pick one. A <strong>Viewer</strong> is read-only — it cannot edit samples,
+                run protocols or tag depths. Choose <strong>Workstation</strong> if this is
+                the machine you work on at the bench.
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"

@@ -23,7 +23,7 @@ async function boot(page: Page) {
   await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Selectable block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
 // The detail drawer always renders a "Timeline" section — use it as the
@@ -32,7 +32,7 @@ const drawerOpen = (page: Page) => page.getByRole("heading", { name: "Timeline" 
 
 test("clicking a tile again de-selects it and closes the panel (#61)", async ({ page }) => {
   await boot(page);
-  const tile = page.getByText("EE-0001", { exact: true }).first();
+  const tile = page.getByText("EE-1", { exact: true }).first();
 
   // First click opens the detail panel.
   await tile.click();
@@ -49,7 +49,7 @@ test("clicking a tile again de-selects it and closes the panel (#61)", async ({ 
 
 test("un-ticking a tile's checkbox closes the panel; ticking opens it (#61)", async ({ page }) => {
   await boot(page);
-  const checkbox = page.getByRole("checkbox", { name: "Select EE-0001" }).first();
+  const checkbox = page.getByRole("checkbox", { name: "Select EE-1" }).first();
 
   await checkbox.check();
   await expect(drawerOpen(page)).toBeVisible();

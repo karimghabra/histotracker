@@ -127,37 +127,53 @@ export function StackDetailsDrawer({
             <h3 className="text-xs font-semibold uppercase text-ink-faint">Assay slides</h3>
             <div className="flex items-center gap-1">
               <span className="mr-1 text-[11px] text-ink-soft">{slides.length} total</span>
-              {!readOnly && selectingSlides && selectedSlideIds.size > 0 && (
+              {/* Removing a slide used to be hidden behind this bare 14px icon
+                  with no label — the same discoverability failure as #79. The
+                  Extras drawer already does it properly (permanent checkboxes +
+                  a labelled button), so this now says what it is (#73). */}
+              {!readOnly && (
                 <button
                   type="button"
-                  title="Delete selected slides"
-                  aria-label="Delete selected slides"
+                  aria-label={selectingSlides ? "Cancel slide selection" : "Select slides to remove"}
                   onClick={() => {
-                    if (confirm(`Delete ${selectedSlideIds.size} selected slide${selectedSlideIds.size === 1 ? "" : "s"}? You can undo this.`)) {
-                      void run(() => removeSlides([...selectedSlideIds]));
-                      setSelectedSlideIds(new Set());
-                      setSelectingSlides(false);
-                    }
+                    setSelectingSlides((current) => !current);
+                    setSelectedSlideIds(new Set());
                   }}
-                  className="rounded-md p-1 text-red-600 hover:bg-red-50"
+                  className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium ${
+                    selectingSlides
+                      ? "bg-brand text-white"
+                      : "text-ink-soft hover:bg-black/5 hover:text-ink"
+                  }`}
                 >
-                  <Trash2 size={14} />
+                  <ListChecks size={13} /> {selectingSlides ? "Cancel" : "Remove slides"}
                 </button>
               )}
-              {!readOnly && <button
-                type="button"
-                title={selectingSlides ? "Cancel slide selection" : "Select slides"}
-                aria-label={selectingSlides ? "Cancel slide selection" : "Select slides"}
-                onClick={() => {
-                  setSelectingSlides((current) => !current);
-                  setSelectedSlideIds(new Set());
-                }}
-                className={`rounded-md p-1 ${selectingSlides ? "bg-brand text-white" : "text-ink-faint hover:bg-black/5 hover:text-ink"}`}
-              >
-                <ListChecks size={14} />
-              </button>}
             </div>
           </div>
+          {!readOnly && selectingSlides && (
+            <Button
+              variant="subtle"
+              className="mb-2 w-full justify-center text-red-600"
+              disabled={selectedSlideIds.size === 0}
+              onClick={() => {
+                if (
+                  confirm(
+                    `Delete ${selectedSlideIds.size} selected slide${selectedSlideIds.size === 1 ? "" : "s"}? You can undo this.\n\n` +
+                      `Slide letters are not reused, so the next slide cut will continue the sequence.`,
+                  )
+                ) {
+                  void run(() => removeSlides([...selectedSlideIds]));
+                  setSelectedSlideIds(new Set());
+                  setSelectingSlides(false);
+                }
+              }}
+            >
+              <Trash2 size={14} />
+              {selectedSlideIds.size > 0
+                ? `Remove ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"}`
+                : "Tick the slides to remove"}
+            </Button>
+          )}
           <div className="space-y-1.5">
             {slides.map((slide) => {
               const imaged = Boolean(slide.stage_pictures_taken_at);

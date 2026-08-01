@@ -38,25 +38,25 @@ async function seedCutSample(page: Page) {
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Depth block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   // Embed.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: "Placed in fixative" }).click();
   await page.getByRole("button", { name: "Removed from fixative" }).click();
   await page.getByRole("button", { name: "Placed in ethanol" }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await dragOnto(page, "EE-0001", "Processor");
+  await dragOnto(page, "EE-1", "Processor");
   await expect(async () => {
     const btn = page.getByRole("button", { name: "Start Batch" });
     if (await btn.isVisible().catch(() => false)) await btn.click();
     await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 15000 });
   await dragOnto(page, "Batch 1", "Needs Embedding");
-  await dragOnto(page, "EE-0001", "Embedded Inventory");
+  await dragOnto(page, "EE-1", "Embedded Inventory");
 
   // Cut the default plan (4 extras).
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
@@ -67,11 +67,11 @@ test("select slides in Logs and tag them at a depth (#69)", async ({ page }) => 
 
   // Go to Logs and open the sample's slide list.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
   // Select two slides via their checkboxes.
-  await page.getByRole("checkbox", { name: "Select slide EE-0001-A" }).check();
-  await page.getByRole("checkbox", { name: "Select slide EE-0001-B" }).check();
+  await page.getByRole("checkbox", { name: "Select slide EE-1-A" }).check();
+  await page.getByRole("checkbox", { name: "Select slide EE-1-B" }).check();
   await expect(page.getByText("2 slides selected")).toBeVisible();
 
   // Tag them at a depth with a note.

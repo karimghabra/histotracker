@@ -28,16 +28,16 @@ async function firstSample(page: Page) {
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Enthesis Engineering");
   await page.getByRole("button", { name: "Save Project" }).click();
   await seedSample(page, "First block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
 test("manual backup captures state; revert rolls back a later change", async ({ page }) => {
   // Auto-accept the revert/confirm dialogs.
   page.on("dialog", (d) => void d.accept());
 
-  await firstSample(page); // EE-0001 exists
+  await firstSample(page); // EE-1 exists
 
-  // Take a manual backup of the current state (only EE-0001 present).
+  // Take a manual backup of the current state (only EE-1 present).
   await page.getByRole("button", { name: "Backups" }).click();
   await expect(page.getByRole("heading", { name: "Database backups" })).toBeVisible();
   await page.getByRole("button", { name: "Back up now" }).click();
@@ -47,16 +47,16 @@ test("manual backup captures state; revert rolls back a later change", async ({ 
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Database backups" })).toHaveCount(0);
 
-  // Make a change the backup does NOT contain: add EE-0002.
+  // Make a change the backup does NOT contain: add EE-2.
   await seedSample(page, "Second block");
-  await expect(page.getByText("EE-0002")).toBeVisible();
+  await expect(page.getByText("EE-2")).toBeVisible();
 
-  // Revert to the backup → EE-0002 must disappear, EE-0001 remains.
+  // Revert to the backup → EE-2 must disappear, EE-1 remains.
   await page.getByRole("button", { name: "Backups" }).click();
   await expect(page.getByRole("heading", { name: "Database backups" })).toBeVisible();
   await page.getByRole("button", { name: "Revert" }).first().click();
 
-  // Board is back to just EE-0001.
-  await expect(page.getByText("EE-0002")).toHaveCount(0, { timeout: 15000 });
-  await expect(page.getByText("EE-0001").first()).toBeVisible();
+  // Board is back to just EE-1.
+  await expect(page.getByText("EE-2")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText("EE-1").first()).toBeVisible();
 });

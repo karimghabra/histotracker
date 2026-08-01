@@ -34,7 +34,7 @@ export function SampleDetailsDrawer({
     editTimestamp,
     requestStain,
     changeProject,
-    saveDetails,
+    editSampleDescription,
   } = useActions();
   // Viewers mirror the workstation read-only; the write controls below are
   // hidden rather than left to fail silently (#72).
@@ -139,26 +139,15 @@ export function SampleDetailsDrawer({
         </div>
 
         {/* Descriptions are typed in a hurry at intake and often need correcting
-            later (#79). Editing routes through saveDetails, so it lands on the
-            undo stack like every other mutation. */}
+            later (#79). The first cut of this shipped as a 12px faint pencil beside
+            the heading and users could not find it at all — the description just
+            looked like static text. Now the value itself is the control: a bordered,
+            hoverable row with a visible "Edit" label, so it reads as a field. */}
         <div className="mb-3">
           <div className="mb-1.5 flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
               Description
             </h3>
-            {!editingDescription && !readOnly && (
-              <button
-                type="button"
-                aria-label="Edit description"
-                className="rounded p-0.5 text-ink-faint transition hover:bg-brand/10 hover:text-brand"
-                onClick={() => {
-                  setDescriptionDraft(sample.sample_description ?? "");
-                  setEditingDescription(true);
-                }}
-              >
-                <Pencil size={12} />
-              </button>
-            )}
           </div>
           {editingDescription ? (
             <div>
@@ -174,17 +163,9 @@ export function SampleDetailsDrawer({
                 <Button
                   className="px-2 py-0.5 text-[11px]"
                   onClick={() => {
-                    void saveDetails(sample.id, {
-                      sample_description: descriptionDraft,
-                      processing_type: sample.processing_type,
-                      fixative_agent: sample.fixative_agent,
-                      needs_decalcification: sample.needs_decalcification === 1,
-                      cut_notes: sample.cut_notes ?? "",
-                      slide_notes: sample.slide_notes ?? "",
-                      stains: sample.stains ?? "",
-                      preselected_stains: [],
-                      overall_notes: sample.overall_notes ?? "",
-                    });
+                    // One column, not a whole NewSampleInput — see
+                    // editSampleDescription in useActions.
+                    void editSampleDescription(sample.id, descriptionDraft);
                     setEditingDescription(false);
                   }}
                 >
@@ -199,10 +180,30 @@ export function SampleDetailsDrawer({
                 </Button>
               </div>
             </div>
-          ) : (
+          ) : readOnly ? (
             <p className="text-xs text-ink-soft">
               {sample.sample_description || <span className="text-ink-faint">No description</span>}
             </p>
+          ) : (
+            <button
+              type="button"
+              aria-label="Edit description"
+              title="Click to edit this sample's description"
+              onClick={() => {
+                setDescriptionDraft(sample.sample_description ?? "");
+                setEditingDescription(true);
+              }}
+              className="group flex w-full items-start justify-between gap-2 rounded-md border border-line bg-white px-2 py-1.5 text-left transition hover:border-brand/60 hover:bg-brand/5"
+            >
+              <span className="min-w-0 flex-1 text-xs text-ink-soft">
+                {sample.sample_description || (
+                  <span className="text-ink-faint">Add a description…</span>
+                )}
+              </span>
+              <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-ink-faint group-hover:text-brand">
+                <Pencil size={11} /> Edit
+              </span>
+            </button>
           )}
         </div>
         {sample.needs_decalcification === 1 && !sample.decalc_completed_at && isPreprocessing && (

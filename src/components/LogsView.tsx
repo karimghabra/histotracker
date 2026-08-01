@@ -6,7 +6,7 @@ import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { cn, compareSlideCodes } from "../lib/utils";
+import { cn, compareSlideCodes, sampleCodeVariants } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
@@ -130,10 +130,14 @@ function NotesEditor({
   value,
   placeholder,
   onSave,
+  rows = 2,
+  ariaLabel,
 }: {
   value: string;
   placeholder: string;
   onSave: (notes: string) => void;
+  rows?: number;
+  ariaLabel?: string;
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
@@ -143,8 +147,9 @@ function NotesEditor({
   }, [value, focused]);
   return (
     <textarea
+      aria-label={ariaLabel}
       value={text}
-      rows={2}
+      rows={rows}
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
       onFocus={() => setFocused(true)}
@@ -287,6 +292,10 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       if (query) {
         const hay = [
           sample.sample_code,
+          // Both spellings, so searching "EE-0001" still finds "EE-1" and vice
+          // versa — the number on the physical block may be written either way
+          // depending on when it was cut (#87).
+          ...sampleCodeVariants(sample.sample_code),
           sample.sample_description,
           sample.project_code,
           sample.project_name,
@@ -684,7 +693,7 @@ function FragmentRow({
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
-  const { editSampleNotes, editSlideNotes, setArchived } = useActions();
+  const { editSampleNotes, editSlideNotes, editSampleDescription, setArchived } = useActions();
   const readOnly = useReadOnly();
   const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
   function toggleSlide(id: number) {
@@ -810,8 +819,27 @@ function FragmentRow({
               </button>}
             </div>
 
+            {/* Sample description — editable right here, next to the notes the
+                user already edits. #79 shipped this only as a faint pencil in the
+                board drawer, which nobody found; descriptions belong wherever
+                free text is edited. */}
+            {!readOnly && (
+              <>
+                <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Sample description
+                </h4>
+                <NotesEditor
+                  value={sample.sample_description ?? ""}
+                  placeholder="Describe this sample…"
+                  rows={1}
+                  ariaLabel={`Description for ${sample.sample_code}`}
+                  onSave={(text) => void editSampleDescription(sample.id, text)}
+                />
+              </>
+            )}
+
             {/* Sample timeline — the block's own lifecycle. */}
-            <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+            <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
             </h4>
             <Timeline events={recordedEvents(sample as unknown as Record<string, unknown>, BLOCK_TIMELINE_STAGES)} />

@@ -84,14 +84,14 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
   page.on("dialog", (dialog) => void dialog.accept());
   await signInAndProject(page);
   await addSample(page, "letters block");
-  await embed(page, "EE-0001", "Batch 1");
-  await cut(page, "EE-0001");
+  await embed(page, "EE-1", "Batch 1");
+  await cut(page, "EE-1");
 
-  expect(await slideCodesInLogs(page, "EE-0001")).toEqual([
-    "EE-0001-A",
-    "EE-0001-B",
-    "EE-0001-C",
-    "EE-0001-D",
+  expect(await slideCodesInLogs(page, "EE-1")).toEqual([
+    "EE-1-A",
+    "EE-1-B",
+    "EE-1-C",
+    "EE-1-D",
   ]);
 
   // The cut group has to leave Needs Sectioning before its extras are inventory.
@@ -107,19 +107,19 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
   const extras = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Extras", exact: true }) });
-  await extras.getByText("EE-0001").first().click();
-  const row = page.locator("label").filter({ hasText: "EE-0001-C" });
+  await extras.getByText("EE-1").first().click();
+  const row = page.locator("label").filter({ hasText: "EE-1-C" });
   await row.locator('input[type="checkbox"]').check();
   await page.getByRole("button", { name: /Remove 1 slide/ }).click();
 
-  await expect(page.getByText("EE-0001-C")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText("EE-1-C")).toHaveCount(0, { timeout: 15000 });
 
   // Cut again — the next slide must be E, and D must not be duplicated.
-  await cut(page, "EE-0001");
-  const after = await slideCodesInLogs(page, "EE-0001");
-  expect(after).toContain("EE-0001-E");
-  expect(after).not.toContain("EE-0001-C");
-  expect(after.filter((c) => c === "EE-0001-D")).toHaveLength(1);
+  await cut(page, "EE-1");
+  const after = await slideCodesInLogs(page, "EE-1");
+  expect(after).toContain("EE-1-E");
+  expect(after).not.toContain("EE-1-C");
+  expect(after.filter((c) => c === "EE-1-D")).toHaveLength(1);
   expect(new Set(after).size).toBe(after.length); // no duplicate codes at all
 });
 
@@ -130,37 +130,37 @@ test("#74: a sample can be archived, hidden, and restored", async ({ page }) => 
   await signInAndProject(page);
   await addSample(page, "keep me");
   await addSample(page, "archive me");
-  await expect(page.getByText("EE-0002")).toBeVisible();
+  await expect(page.getByText("EE-2")).toBeVisible();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0002", exact: true }).click();
-  await page.getByRole("button", { name: "Archive EE-0002" }).click();
+  await page.getByRole("cell", { name: "EE-2", exact: true }).click();
+  await page.getByRole("button", { name: "Archive EE-2" }).click();
 
   // Hidden from the log by default, and gone from the board.
-  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toHaveCount(0, {
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toHaveCount(0, {
     timeout: 15000,
   });
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
-  await expect(page.getByText("EE-0002", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("EE-0001", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("EE-2", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("EE-1", { exact: true }).first()).toBeVisible();
 
   // Retrievable: show archived, then restore it.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByLabel("Show archived").check();
-  const archivedRow = page.getByRole("cell", { name: "EE-0002", exact: true });
+  const archivedRow = page.getByRole("cell", { name: "EE-2", exact: true });
   await expect(archivedRow).toBeVisible();
   await expect(page.getByText("Archived").first()).toBeVisible();
 
   await archivedRow.click();
-  await page.getByRole("button", { name: "Unarchive EE-0002" }).click();
+  await page.getByRole("button", { name: "Unarchive EE-2" }).click();
   await page.getByLabel("Show archived").uncheck();
-  await expect(page.getByRole("cell", { name: "EE-0002", exact: true })).toBeVisible({
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toBeVisible({
     timeout: 15000,
   });
 
-  // Restoring did NOT renumber: a new sample is still EE-0003.
+  // Restoring did NOT renumber: a new sample is still EE-3.
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await addSample(page, "next one");
-  await expect(page.getByText("EE-0003", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("EE-3", { exact: true }).first()).toBeVisible();
 });

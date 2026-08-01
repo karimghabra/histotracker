@@ -22,7 +22,7 @@ async function boot(page: Page) {
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Loggable block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
 test("request a stain from the Logs view with the sample pre-filled (#64)", async ({ page }) => {
@@ -30,17 +30,17 @@ test("request a stain from the Logs view with the sample pre-filled (#64)", asyn
 
   // Go to Logs and expand the sample row.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
-  // The row exposes a one-click "Request stain for EE-0001" — no typing.
-  await page.getByRole("button", { name: /Request stain for EE-0001/ }).click();
+  // The row exposes a one-click "Request stain for EE-1" — no typing.
+  await page.getByRole("button", { name: /Request stain for EE-1/ }).click();
   await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
 
   // The sample is already selected in the dialog.
-  await expect(page.getByLabel("Sample")).toHaveValue("EE-0001");
+  await expect(page.getByLabel("Sample")).toHaveValue("EE-1");
 
   // Pick an agent and send.
   await page.getByLabel("Requested stain / IHC").selectOption({ label: "H&E (stain)" });
   await page.getByRole("button", { name: /Send request/ }).click();
-  await expect(page.getByText(/Requested H&E for EE-0001/)).toBeVisible();
+  await expect(page.getByText(/Requested H&E for EE-1/)).toBeVisible();
 });

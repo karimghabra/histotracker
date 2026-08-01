@@ -19,6 +19,7 @@ import { RequestStainDialog } from "./components/RequestStainDialog";
 import { ReadOnlyProvider } from "./lib/readOnly";
 import { useIdleLogout } from "./hooks/useIdleLogout";
 import { mergePendingRequests, prunePendingRequests } from "./lib/pendingRequests";
+import { compareSampleCodes } from "./lib/utils";
 import { RequestsInbox } from "./components/RequestsInbox";
 import { Button, Field, Modal } from "./components/ui";
 import { useActiveUser, useAllSamples, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
@@ -268,7 +269,9 @@ export default function App() {
     const codes = new Set<string>();
     for (const sample of samples) codes.add(sample.sample_code);
     for (const section of sections) if (section.parent_code) codes.add(section.parent_code);
-    return [...codes].sort();
+    // Numeric-aware: a plain .sort() gives EE-1, EE-10, EE-2 once codes are no
+    // longer zero-padded to a fixed width (#87).
+    return [...codes].sort(compareSampleCodes);
   }, [samples, sections]);
   // Exhausted blocks can't be cut again, so the request dialog refuses them (#70).
   // Sourced from ALL samples, not the open board list — listOpenSamples filters
@@ -459,6 +462,7 @@ export default function App() {
               syncing={sync.syncing}
               error={sync.error}
               lastSyncedAt={sync.lastSyncedAt}
+              lastMessage={sync.lastMessage}
               onSyncNow={() => void sync.syncNow()}
               onOpenSettings={() => setShowSetup(true)}
             />
@@ -827,6 +831,7 @@ function SyncStatusPill({
   syncing,
   error,
   lastSyncedAt,
+  lastMessage,
   onSyncNow,
   onOpenSettings,
 }: {
@@ -834,6 +839,8 @@ function SyncStatusPill({
   syncing: boolean;
   error: string | null;
   lastSyncedAt: Date | null;
+  /** Outcome of the last sync, e.g. "Pulled latest snapshot — changes by Alex". */
+  lastMessage: string | null;
   onSyncNow: () => void;
   onOpenSettings: () => void;
 }) {
@@ -851,7 +858,19 @@ function SyncStatusPill({
     <div className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${tone}`}>
       <span className="font-medium capitalize">{role}</span>
       <span className="text-ink-faint">·</span>
-      <span title={error ?? undefined}>{label}</span>
+      {/* #77 — who published what. useSync has always built this string; until
+          now nothing rendered it, so the "changes by …" attribution the changelog
+          promised never actually reached a screen. Shown inline when there is
+          room, and always in the tooltip. */}
+      <span title={error ?? lastMessage ?? undefined}>{label}</span>
+      {!syncing && !error && lastMessage && (
+        <span
+          className="ml-1 hidden max-w-[22rem] truncate text-ink-faint lg:inline"
+          title={lastMessage}
+        >
+          {lastMessage}
+        </span>
+      )}
       <button
         onClick={onSyncNow}
         disabled={syncing}

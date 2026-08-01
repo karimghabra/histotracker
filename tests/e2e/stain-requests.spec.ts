@@ -43,7 +43,7 @@ async function boot(page: Page) {
   await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Stain request block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 }
 
 async function embed(page: Page, code: string) {
@@ -80,8 +80,8 @@ async function cutRows(page: Page): Promise<string[]> {
 
 test("requesting the same stain twice queues two slides (#62/#66)", async ({ page }) => {
   await boot(page);
-  await embed(page, "EE-0001");
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await embed(page, "EE-1");
+  await page.getByText("EE-1", { exact: true }).first().click();
 
   await requestStain(page, "H&E (stain)");
   await requestStain(page, "H&E (stain)");
@@ -95,8 +95,8 @@ test("requesting the same stain twice queues two slides (#62/#66)", async ({ pag
 
 test("re-requesting an already-cut stain flags the block again (#41/#62)", async ({ page }) => {
   await boot(page);
-  await embed(page, "EE-0001");
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await embed(page, "EE-1");
+  await page.getByText("EE-1", { exact: true }).first().click();
 
   // Request H&E → no extras → flags the block.
   await requestStain(page, "H&E (stain)");

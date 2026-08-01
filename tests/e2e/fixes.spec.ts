@@ -24,7 +24,7 @@ async function addSample(page: Page, desc: string) {
 test("#1: undo preserves the signed-in user and keeps the header in sync", async ({ page }) => {
   await seed(page); // Alex (id 1)
   await addSample(page, "Block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
   // Switch users, then undo the sample create.
   await page.getByRole("button", { name: "Manage" }).click();
   await page.getByPlaceholder("Alex Rivera").fill("Blake Chen");
@@ -32,7 +32,7 @@ test("#1: undo preserves the signed-in user and keeps the header in sync", async
   await page.keyboard.press("Escape");
   await page.getByLabel("Signed-in user").selectOption({ label: "Blake Chen" }); // id 2
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
-  await expect(page.getByText("EE-0001")).toHaveCount(0);
+  await expect(page.getByText("EE-1")).toHaveCount(0);
   // Header still shows Blake, and it matches the DB (a reload agrees).
   await expect(page.getByLabel("Signed-in user")).toHaveValue("2");
   await page.goto("/");
@@ -43,14 +43,14 @@ test("#1: undo preserves the signed-in user and keeps the header in sync", async
 test("#2: undo history survives a reload", async ({ page }) => {
   await seed(page);
   await addSample(page, "Persisted");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
   await page.waitForTimeout(900); // let the debounced history persist to IndexedDB
   await page.goto("/"); // reload, keep the DB
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
   // Undo is available again and actually reverts the pre-reload action.
   await expect(page.getByTitle("Undo (Ctrl+Z)")).toBeEnabled();
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
-  await expect(page.getByText("EE-0001")).toHaveCount(0);
+  await expect(page.getByText("EE-1")).toHaveCount(0);
 });
 
 test("#3: header title stays on one line and New Sample stays in view", async ({ page }) => {
@@ -73,9 +73,9 @@ test("#4: New Sample is disabled when nobody is signed in", async ({ page }) => 
 test("#5: Escape closes an open detail drawer", async ({ page }) => {
   await seed(page);
   await addSample(page, "Block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
-  await page.getByText("EE-0001", { exact: true }).click();
-  await expect(page.getByRole("heading", { name: "EE-0001" })).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
+  await page.getByText("EE-1", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "EE-1" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { name: "EE-0001" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "EE-1" })).toHaveCount(0);
 });

@@ -33,13 +33,13 @@ test("a sample can be moved to a different project and is re-numbered (#60)", as
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Misfiled block");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   // Open it and move it to project BB via the Project dropdown.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByLabel("Sample project").selectOption({ label: "Bone Biology (BB)" });
 
   // It is re-numbered under BB, and the old EE code is gone.
-  await expect(page.getByText("BB-0001").first()).toBeVisible();
-  await expect(page.getByText("EE-0001")).toHaveCount(0);
+  await expect(page.getByText("BB-1").first()).toBeVisible();
+  await expect(page.getByText("EE-1")).toHaveCount(0);
 });

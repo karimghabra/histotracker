@@ -108,8 +108,8 @@ test("#81: a rack whose Stained box is ticked does not absorb a newly-moved samp
 }) => {
   await signInAndProject(page);
   await addSample(page, "first block");
-  await embed(page, "EE-0001", "Batch 1");
-  await cutAndSectionIntoStaining(page, "EE-0001");
+  await embed(page, "EE-1", "Batch 1");
+  await cutAndSectionIntoStaining(page, "EE-1");
 
   const staining = col(page, "Staining / IHC");
   // One card per rack; the agent name appears twice per card (title + summary),
@@ -129,8 +129,8 @@ test("#81: a rack whose Stained box is ticked does not absorb a newly-moved samp
 
   // Now move a SECOND sample into staining with the same agent.
   await addSample(page, "second block");
-  await embed(page, "EE-0002", "Batch 2");
-  await cutAndSectionIntoStaining(page, "EE-0002");
+  await embed(page, "EE-2", "Batch 2");
+  await cutAndSectionIntoStaining(page, "EE-2");
 
   // Two separate Alcian Blue racks must coexist — the stained one and a fresh
   // loading rack — so the samples can still be told apart. Before the fix the
@@ -146,8 +146,8 @@ test("#81: a rack whose Stained box is ticked does not absorb a newly-moved samp
 test("#80: the stain protocol no longer has a drying step", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "no drying");
-  await embed(page, "EE-0001", "Batch 1");
-  await cutAndSectionIntoStaining(page, "EE-0001");
+  await embed(page, "EE-1", "Batch 1");
+  await cutAndSectionIntoStaining(page, "EE-1");
 
   const staining = col(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
@@ -163,7 +163,7 @@ test("#80: the stain protocol no longer has a drying step", async ({ page }) => 
   await page.getByRole("button", { name: "Coverslipped", exact: true }).click();
 
   // Two steps is the whole protocol — the rack scatters into imaging.
-  await expect(col(page, "Ready for Imaging").getByText("EE-0001").first()).toBeVisible({
+  await expect(col(page, "Ready for Imaging").getByText("EE-1").first()).toBeVisible({
     timeout: 15000,
   });
 });
@@ -193,8 +193,8 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
 
   // Sample 1 → Alcian Blue, all the way to Ready for Imaging.
   await addSample(page, "imaging block one");
-  await embed(page, "EE-0001", "Batch 1");
-  await cutAndSectionIntoStaining(page, "EE-0001", 1);
+  await embed(page, "EE-1", "Batch 1");
+  await cutAndSectionIntoStaining(page, "EE-1", 1);
   await runProtocolOnLoneRack(page);
 
   const imaging = col(page, "Ready for Imaging");
@@ -203,8 +203,8 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
 
   // Sample 2 → a DIFFERENT stain, also to Ready for Imaging.
   await addSample(page, "imaging block two");
-  await embed(page, "EE-0002", "Batch 2");
-  await cutAndSectionIntoStaining(page, "EE-0002", 2);
+  await embed(page, "EE-2", "Batch 2");
+  await cutAndSectionIntoStaining(page, "EE-2", 2);
   await runProtocolOnLoneRack(page);
   await expect(tiles).toHaveCount(2, { timeout: 15000 });
 
@@ -220,8 +220,8 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
 
   await stainFilter.selectOption("Alcian Blue");
   await expect(tiles).toHaveCount(1);
-  await expect(imaging.getByText("EE-0001").first()).toBeVisible();
-  await expect(imaging.getByText("EE-0002")).toHaveCount(0);
+  await expect(imaging.getByText("EE-1").first()).toBeVisible();
+  await expect(imaging.getByText("EE-2")).toHaveCount(0);
 
   // Clearing the filter brings the other sample back.
   await stainFilter.selectOption("all");
@@ -235,9 +235,9 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
 test("#79: a sample description can be corrected from the drawer", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "typo in teh description");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   // The pencil only exists once the drawer is open, so it doubles as the wait.
   await page.getByLabel("Edit description").click();
   const field = page.getByLabel("Sample description");
@@ -257,24 +257,24 @@ test("#79: a sample description can be corrected from the drawer", async ({ page
 test("#70: the request dialog refuses an exhausted block", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "spent block");
-  await embed(page, "EE-0001", "Batch 1");
+  await embed(page, "EE-1", "Batch 1");
 
   // Mark the block exhausted (a native confirm guards it). It then leaves
   // Embedded Inventory, which is why the request dialog — not the board drawer —
   // is the path a user actually reaches it by.
   page.on("dialog", (dialog) => void dialog.accept());
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Mark Exhausted/ }).click();
-  await expect(page.locator("aside").getByText("EE-0001")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.locator("aside").getByText("EE-1")).toHaveCount(0, { timeout: 15000 });
 
   // On the workstation the request dialog is reached from the Logs view (#64).
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
-  await page.getByRole("button", { name: /Request stain for EE-0001/ }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await page.getByRole("button", { name: /Request stain for EE-1/ }).click();
   await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
 
   const sampleSelect = page.getByLabel("Sample");
-  await expect(sampleSelect.locator("option", { hasText: "EE-0001 — exhausted" })).toHaveCount(1);
+  await expect(sampleSelect.locator("option", { hasText: "EE-1 — exhausted" })).toHaveCount(1);
   await expect(page.getByRole("alert")).toContainText(/exhausted/i);
 
   await page.getByLabel("Requested stain / IHC").selectOption({ index: 1 });
@@ -292,27 +292,27 @@ test("#70: the request dialog refuses an exhausted block", async ({ page }) => {
 test("#75: slides stay alphabetical in Logs across two cut groups", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "logs block");
-  await embed(page, "EE-0001", "Batch 1");
+  await embed(page, "EE-1", "Batch 1");
 
   // First cut → slides A–D.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Second cut on the same block → slides E onward, ordinals restarting at 1.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
-  const codes = await page.locator("text=/^EE-0001-[A-Z]+$/").allTextContents();
+  const codes = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
   // Both cut groups must be present, or the interleaving can't occur.
   expect(codes.length).toBeGreaterThan(4);
-  expect(codes).toContain("EE-0001-E");
+  expect(codes).toContain("EE-1-E");
 
   const suffix = (c: string) => c.split("-").pop() ?? "";
   const expected = [...codes].sort(

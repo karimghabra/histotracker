@@ -86,7 +86,7 @@ async function seedWorkstation(ws: Page) {
   await ws.getByRole("button", { name: "New Sample" }).click();
   await ws.getByPlaceholder("e.g. 2 week Stretch PLA").fill("Viewer block");
   await ws.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(ws.getByText("EE-0001")).toBeVisible();
+  await expect(ws.getByText("EE-1")).toBeVisible();
 }
 
 test("#72: the viewer's sample panel offers no bench actions", async ({ browser }) => {
@@ -95,10 +95,10 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
   await seedWorkstation(ws);
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
-  await streamTo(ws, vw, vw.getByText("EE-0001", { exact: true }).first());
+  await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
 
   // The viewer CAN open the panel and read it — that is the point of viewer mode.
-  await vw.getByText("EE-0001", { exact: true }).first().click();
+  await vw.getByText("EE-1", { exact: true }).first().click();
   await expect(vw.getByText("Description").first()).toBeVisible();
 
   // …but every write control is absent, so nothing can hang on a rejected write.
@@ -110,7 +110,7 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
 
   // The same panel on the workstation DOES offer them — proving the assertions
   // above are about viewer mode, not about a selector that never matches.
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await expect(ws.getByRole("button", { name: /Send for Cutting/ })).toBeVisible();
   await expect(ws.getByLabel("Edit description")).toBeVisible();
 
@@ -130,7 +130,7 @@ test("#71: a viewer's request appears immediately and does not duplicate after s
   await seedWorkstation(ws);
 
   // Take the block to Embedded Inventory so it is a real request target.
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
@@ -138,11 +138,11 @@ test("#71: a viewer's request appears immediately and does not duplicate after s
 
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
-  await streamTo(ws, vw, vw.getByText("EE-0001", { exact: true }).first());
+  await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
 
   // Viewer raises a request…
   await vw.getByRole("button", { name: /Request stain/ }).click();
-  await vw.getByLabel("Sample").selectOption("EE-0001");
+  await vw.getByLabel("Sample").selectOption("EE-1");
   await vw.getByLabel("Requested stain / IHC").selectOption({ index: 1 });
   await vw.getByRole("button", { name: /Send request/ }).click();
 
@@ -151,8 +151,8 @@ test("#71: a viewer's request appears immediately and does not duplicate after s
 
   // …and can see it straight away, with NO sync in between.
   await vw.getByRole("button", { name: /My requests/ }).click();
-  await expect(inbox.getByText("EE-0001").first()).toBeVisible();
-  await expect(inbox.getByText("EE-0001")).toHaveCount(1);
+  await expect(inbox.getByText("EE-1").first()).toBeVisible();
+  await expect(inbox.getByText("EE-1")).toHaveCount(1);
   await vw.keyboard.press("Escape");
 
   // After the full round-trip the request is still listed exactly once.
@@ -160,7 +160,7 @@ test("#71: a viewer's request appears immediately and does not duplicate after s
     await syncNow(ws); // drain + publish
     await syncNow(vw); // pull
     await vw.getByRole("button", { name: /My requests/ }).click();
-    await expect(inbox.getByText("EE-0001")).toHaveCount(1, { timeout: 3000 });
+    await expect(inbox.getByText("EE-1")).toHaveCount(1, { timeout: 3000 });
     await vw.keyboard.press("Escape");
   }).toPass({ timeout: 60000 });
 
@@ -176,13 +176,13 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
   await ws.goto("/?freshdb=1");
   await seedWorkstation(ws);
 
-  // Drive EE-0001 into Staining on the workstation.
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  // Drive EE-1 into Staining on the workstation.
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await dragOnto(ws, "EE-0001", "Processor");
+  await dragOnto(ws, "EE-1", "Processor");
   await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await expect(async () => {
     const btn = ws.getByRole("button", { name: "Start Batch" });
@@ -190,8 +190,8 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
     await expect(ws.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 25000 });
   await dragOnto(ws, "Batch 1", "Needs Embedding");
-  await dragOnto(ws, "EE-0001", "Embedded Inventory");
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await dragOnto(ws, "EE-1", "Embedded Inventory");
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: /Send for Cutting/ }).click();
   await ws
     .locator("select")
@@ -235,7 +235,7 @@ test("#72: the viewer cannot start a depth tag from the Logs", async ({ browser 
   await seedWorkstation(ws);
 
   // Give the block slides so the Logs drill-down has something selectable.
-  await ws.getByText("EE-0001", { exact: true }).first().click();
+  await ws.getByText("EE-1", { exact: true }).first().click();
   await ws.getByRole("button", { name: "Placed in fixative" }).click();
   await ws.getByRole("button", { name: "Removed from fixative" }).click();
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
@@ -243,14 +243,14 @@ test("#72: the viewer cannot start a depth tag from the Logs", async ({ browser 
 
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
-  await streamTo(ws, vw, vw.getByText("EE-0001", { exact: true }).first());
+  await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
 
   await vw.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await expect(vw.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(vw.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
 
   // Archiving is a write too — not offered on a viewer.
-  await vw.getByRole("cell", { name: "EE-0001", exact: true }).click();
-  await expect(vw.getByRole("button", { name: /Archive EE-0001/ })).toHaveCount(0);
+  await vw.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await expect(vw.getByRole("button", { name: /Archive EE-1/ })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Request stain for/ })).toHaveCount(0);
 
   await wsCtx.close();

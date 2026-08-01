@@ -41,15 +41,15 @@ test("undo reverts a create; redo reapplies it", async ({ page }) => {
 
   // Creating a sample IS an undoable action (goes through the commit/snapshot path).
   await createSample(page, "Undo test block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   // Undo → the whole DB reverts to the pre-create image; the UI follows.
   await page.getByTitle("Undo (Ctrl+Z)").click();
-  await expect(page.getByText("EE-0001")).toHaveCount(0);
+  await expect(page.getByText("EE-1")).toHaveCount(0);
 
   // Redo → the image is reapplied and the sample is back, same ID (no sequence drift).
   await page.getByTitle("Redo (Ctrl+Y)").click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
 });
@@ -58,18 +58,18 @@ test("undo/redo keep sample IDs stable (no sequence drift)", async ({ page }) =>
   await signInAndSeedUser(page);
   await createProject(page, "EE", "Enthesis Engineering");
 
-  // Create, undo, then create again: the ID must be EE-0001 both times. The old
+  // Create, undo, then create again: the ID must be EE-1 both times. The old
   // logical-dump undo left sqlite_sequence un-rewound, so the second create
-  // could jump to EE-0002; a true image revert restores the counter too.
+  // could jump to EE-2; a true image revert restores the counter too.
   await createSample(page, "First block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
 
   await page.getByTitle("Undo (Ctrl+Z)").click();
-  await expect(page.getByText("EE-0001")).toHaveCount(0);
+  await expect(page.getByText("EE-1")).toHaveCount(0);
 
   await createSample(page, "Replacement block");
-  await expect(page.getByText("EE-0001")).toBeVisible();
-  await expect(page.getByText("EE-0002")).toHaveCount(0);
+  await expect(page.getByText("EE-1")).toBeVisible();
+  await expect(page.getByText("EE-2")).toHaveCount(0);
 });
 
 test("undo survives a full page reload (persisted DB image)", async ({ page }) => {

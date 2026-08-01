@@ -6,15 +6,23 @@ import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
 import type { Project, ProcessingType } from "../lib/types";
 
-/** Expand a single next code ("EE-0022") into a range label for quantity > 1. */
-function codeRange(first: string, quantity: number): string {
-  if (quantity <= 1) return first;
+/**
+ * The i-th code in the batch, given the first ("EE-22" → i=2 → "EE-24").
+ * Preserves whatever width the first code has, so this keeps working on a
+ * database that still holds zero-padded codes (#87).
+ */
+function codeAt(first: string, index: number): string {
   const match = first.match(/^(.*-)(\d+)$/);
   if (!match) return first;
   const width = match[2].length;
-  const start = Number(match[2]);
-  const last = `${match[1]}${String(start + quantity - 1).padStart(width, "0")}`;
-  return `${first} – ${last}`;
+  const n = Number(match[2]) + index;
+  return `${match[1]}${String(n).padStart(width, "0")}`;
+}
+
+/** Expand a single next code ("EE-22") into a range label for quantity > 1. */
+function codeRange(first: string, quantity: number): string {
+  if (quantity <= 1) return first;
+  return `${first} – ${codeAt(first, quantity - 1)}`;
 }
 
 export function NewSampleDialog({
@@ -33,6 +41,10 @@ export function NewSampleDialog({
   const [processing, setProcessing] = useState<ProcessingType>("Short");
   const [needsDecalc, setNeedsDecalc] = useState(false);
   const [quantity, setQuantity] = useState(1);
+  // #86 — a batch normally shares one description; tick this to give each sample
+  // in the batch its own. Off by default, so existing behaviour is unchanged.
+  const [perSample, setPerSample] = useState(false);
+  const [descriptions, setDescriptions] = useState<string[]>([]);
   // Agents ticked for this sample (issue #1). Keyed "type::name".
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [cutNotes, setCutNotes] = useState("");
@@ -76,6 +88,7 @@ export function NewSampleDialog({
       },
       project.code,
       quantity,
+      perSample ? descriptions.slice(0, quantity) : undefined,
     );
     setSaving(false);
     onClose();
@@ -106,9 +119,65 @@ export function NewSampleDialog({
         />
       </Field>
       {quantity > 1 && (
-        <p className="-mt-2 mb-3 text-xs text-ink-faint">
-          Creates {quantity} samples with identical details, each with its own ID.
-        </p>
+        <div className="-mt-2 mb-3">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
+            <input
+              type="checkbox"
+              checked={perSample}
+              onChange={(e) => setPerSample(e.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+            />
+            Give each sample its own description
+          </label>
+          {!perSample && (
+            <p className="mt-1 text-xs text-ink-faint">
+              Creates {quantity} samples with identical details, each with its own ID.
+            </p>
+          )}
+          {perSample && (
+            <div className="mt-2">
+              {/* Typing 20 fields one at a time is the thing a technician will
+                  refuse to do — they already have the column in a spreadsheet. */}
+              <textarea
+                aria-label="Paste one description per line"
+                rows={2}
+                placeholder="Optional: paste one description per line to fill the list below"
+                onChange={(e) => {
+                  const lines = e.target.value.split("\n").map((l) => l.trim());
+                  if (lines.some(Boolean)) setDescriptions(lines.slice(0, quantity));
+                }}
+                className="mb-2 w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
+              />
+              <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
+                {Array.from({ length: quantity }, (_, i) => {
+                  const code = codeAt(previewCode, i);
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-20 shrink-0 text-[11px] font-medium text-ink-soft">{code}</span>
+                      <TextInput
+                        aria-label={`Description for ${code}`}
+                        value={descriptions[i] ?? ""}
+                        placeholder={description || "Same as above"}
+                        onChange={(e) =>
+                          setDescriptions((prev) => {
+                            const next = [...prev];
+                            while (next.length < quantity) next.push("");
+                            next[i] = e.target.value;
+                            return next;
+                          })
+                        }
+                        className="py-1 text-[11px]"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[11px] text-ink-faint">
+                Blank rows fall back to the description above. IDs shown are a preview.
+              </p>
+            </div>
+          )}
+        </div>
       )}
       <div className="grid grid-cols-2 gap-x-4">
         <Field label="Fixative">

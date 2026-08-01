@@ -23,7 +23,14 @@ import {
   processingDurationHours,
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
-import { duplicateLabel, nowTimestamp, parseTimestamp, todayIso } from "./utils";
+import {
+  duplicateLabel,
+  formatSampleCode,
+  nowTimestamp,
+  parseTimestamp,
+  sampleCodeVariants,
+  todayIso,
+} from "./utils";
 
 const STAGE_COLUMN_SET = new Set(Object.values(STAGE_COLUMNS));
 
@@ -506,7 +513,7 @@ async function nextSampleNumber(projectId: number): Promise<number> {
 
 export async function nextSampleCode(projectId: number, projectCode: string): Promise<string> {
   const n = await nextSampleNumber(projectId);
-  return `${projectCode.trim().toUpperCase()}-${String(n).padStart(4, "0")}`;
+  return formatSampleCode(projectCode, n);
 }
 
 // ---- Samples ----------------------------------------------------------------
@@ -515,7 +522,7 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
   const db = await getDb();
   const timestamp = nowTimestamp();
   const number = await nextSampleNumber(input.project_id);
-  const code = `${projectCode.trim().toUpperCase()}-${String(number).padStart(4, "0")}`;
+  const code = formatSampleCode(projectCode, number);
 
   const preselected = input.preselected_stains?.length
     ? JSON.stringify(input.preselected_stains)
@@ -575,7 +582,7 @@ export async function changeSampleProject(
   if (!newProjectCode) throw new Error("Target project not found.");
 
   const number = await nextSampleNumber(newProjectId);
-  const newCode = `${newProjectCode.trim().toUpperCase()}-${String(number).padStart(4, "0")}`;
+  const newCode = formatSampleCode(newProjectCode, number);
   await db.execute(
     `UPDATE samples SET project_id = ?, project_sample_number = ?, sample_code = ? WHERE id = ?`,
     [newProjectId, number, newCode, sampleId],
@@ -861,6 +868,20 @@ export async function setBlockExhausted(sampleId: number, exhausted: boolean): P
 }
 
 /** Free-text notes on a sample (the block's general notes) and on a slide. */
+/**
+ * Update only the description (#79). `updateSampleDetails` rewrites eight
+ * columns from a whole NewSampleInput, which is the wrong shape for a plain text
+ * field — it would write back whatever the caller happened to be holding for
+ * fixative, notes and the rest. This touches the one column.
+ */
+export async function setSampleDescription(sampleId: number, description: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(`UPDATE samples SET sample_description = ? WHERE id = ?`, [
+    description.trim(),
+    sampleId,
+  ]);
+}
+
 export async function setSampleNotes(sampleId: number, notes: string): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE samples SET overall_notes = ? WHERE id = ?`, [notes, sampleId]);
@@ -2268,7 +2289,9 @@ export async function listSlidesForStack(stackId: number): Promise<Slide[]> {
        JOIN samples s ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
       WHERE sl.stack_id = ?
-      ORDER BY s.sample_code, sl.slide_ordinal, sl.id`,
+      -- Order by the project + the NUMERIC sample number, not the code text.
+      -- A BINARY sort over mixed-width codes puts "EE-10" before "EE-2" (#87).
+      ORDER BY p.code, s.project_sample_number, sl.slide_ordinal, sl.id`,
     [stackId],
   );
 }
@@ -2534,9 +2557,17 @@ export async function requestStainForSample(input: {
 /** Resolve a sample's numeric id from its code (case-insensitive). */
 export async function findSampleIdByCode(code: string): Promise<number | null> {
   const db = await getDb();
+  // Match every spelling of the code (#87). Since new codes are minted unpadded
+  // while older rows keep "EE-0001", a database in daily use holds both, and a
+  // synced request may have been written by an instance on either build. This
+  // lookup fails CLOSED and SILENTLY — githubSync's applyRequestToBlock just
+  // returns when it gets null — so a padding mismatch would drop a technician's
+  // request on the floor with no error anywhere.
+  const variants = sampleCodeVariants(code);
+  const placeholders = variants.map(() => "?").join(", ");
   const rows = await db.select<Array<{ id: number }>>(
-    `SELECT id FROM samples WHERE sample_code = ? COLLATE NOCASE LIMIT 1`,
-    [code.trim()],
+    `SELECT id FROM samples WHERE sample_code IN (${placeholders}) COLLATE NOCASE LIMIT 1`,
+    variants,
   );
   return rows[0]?.id ?? null;
 }
@@ -3149,14 +3180,19 @@ export async function acknowledgeRequestsForSlide(slideId: number): Promise<numb
   );
   const info = rows[0];
   if (!info || info.purpose !== "stain" || !info.assay.trim() || !info.sample_code) return 0;
+  // stain_requests stores the human code as denormalized text, and the request
+  // may have been raised against the other spelling of this sample (#87) — an
+  // unmatched row silently stays "requested" forever.
+  const codes = sampleCodeVariants(info.sample_code);
+  const codePlaceholders = codes.map(() => "?").join(", ");
   const res = await db.execute(
     `UPDATE stain_requests
         SET status = 'acknowledged'
       WHERE status = 'requested'
-        AND sample_code = ? COLLATE NOCASE
+        AND sample_code IN (${codePlaceholders}) COLLATE NOCASE
         AND requested_assay = ? COLLATE NOCASE
         AND (slide_code = '' OR slide_code = ? COLLATE NOCASE)`,
-    [info.sample_code, info.assay.trim(), info.slide_code],
+    [...codes, info.assay.trim(), info.slide_code],
   );
   return res.rowsAffected ?? 0;
 }

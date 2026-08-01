@@ -125,7 +125,8 @@ function makeApi(db) {
   // Port of addSample() — src/lib/db.ts
   function addSample(projectId, projectCode, description, opts = {}) {
     const number = nextSampleNumber(projectId);
-    const code = `${projectCode.toUpperCase()}-${pad(number, 4)}`;
+    // Port of formatSampleCode() — src/lib/utils.ts. Unpadded since #87.
+    const code = `${projectCode.toUpperCase()}-${number}`;
     const preselected = (opts.preselectedStains ?? []).length ? JSON.stringify(opts.preselectedStains) : "";
     const r = run(
       `INSERT INTO samples (
@@ -294,7 +295,7 @@ function makeApi(db) {
   }
 
   // Port of createSectionRequests() — src/lib/db.ts. No depth; per-sample slide
-  // letters (EE-0001-A, -B, …) continue across cuts. groups: {duplicates, stains?}.
+  // letters (EE-1-A, -B, …) continue across cuts. groups: {duplicates, stains?}.
   function createSectionRequests(sampleId, groups) {
     if (!groups.length) return [];
     // A block can only be cut once embedded (issue #7). Mirrors db.ts.
@@ -716,13 +717,50 @@ invariant("all 18 migrations apply and expected tables exist", () => {
     "slides must have the depth-tag columns (0022, #69)");
 });
 
-invariant("sample codes auto-increment per project and are zero-padded", () => {
+// #87 — sample IDs are no longer zero-padded. The number still comes from
+// MAX(project_sample_number)+1, so the sequence itself is unchanged; only the
+// rendered width differs.
+issue(87, "sample codes auto-increment per project WITHOUT zero padding", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const a = api.addSample(p, "EE", "sample one");
   const b = api.addSample(p, "EE", "sample two");
-  eq(a.code, "EE-0001", "first code");
-  eq(b.code, "EE-0002", "second code");
+  eq(a.code, "EE-1", "first code has no leading zeros");
+  eq(b.code, "EE-2", "second code has no leading zeros");
+  // Slide codes inherit the parent verbatim, so they lose the padding too.
+  api.markEmbedded(a.id);
+  api.createSectionRequests(a.id, [{ duplicates: 2 }]);
+  const codes = api.all(
+    `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? ORDER BY sl.id`, [a.id]).map((r) => r.c);
+  eq(codes.join(","), "EE-1-A,EE-1-B", "slide codes follow the unpadded parent");
+});
+
+// #87 — an EXISTING database holds padded codes, and a request raised against
+// either spelling has to resolve to the same sample. findSampleIdByCode fails
+// closed and silently, so a mismatch would drop a technician's request.
+issue(87, "a sample resolves from either spelling of its code", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "legacy padded");
+  // Simulate a row minted by an older build.
+  api.run(`UPDATE samples SET sample_code = 'EE-0001' WHERE id = ?`, [id]);
+
+  const variants = (code) => {
+    const m = /^(.*)-0*(\d+)$/.exec(String(code).trim());
+    if (!m) return [String(code).trim()];
+    return [...new Set([`${m[1]}-${Number(m[2])}`, `${m[1]}-${String(Number(m[2])).padStart(4, "0")}`, String(code).trim()])];
+  };
+  const findByCode = (code) => {
+    const v = variants(code);
+    const row = api.get(
+      `SELECT id FROM samples WHERE sample_code IN (${v.map(() => "?").join(", ")}) COLLATE NOCASE LIMIT 1`, v);
+    return row ? row.id : null;
+  };
+
+  eq(findByCode("EE-0001"), id, "the padded spelling resolves");
+  eq(findByCode("EE-1"), id, "the unpadded spelling resolves to the SAME sample");
+  eq(findByCode("EE-2"), null, "a genuinely different number does not resolve");
 });
 
 invariant("full pipeline: received → analyzed leaves a stained, imaged slide", () => {
@@ -1099,15 +1137,15 @@ issue(73, "deleting a slide does not hand its letter to the next cut", () => {
   const codes = () => api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? ORDER BY sl.id`, [id]).map((r) => r.c);
-  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-C,EE-0001-D", "four slides A–D");
+  eq(codes().join(","), "EE-1-A,EE-1-B,EE-1-C,EE-1-D", "four slides A–D");
 
-  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-1-C'`);
   api.deleteSlide(c.id);
-  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-D", "C is gone, D untouched");
+  eq(codes().join(","), "EE-1-A,EE-1-B,EE-1-D", "C is gone, D untouched");
 
   api.createSectionRequests(id, [{ duplicates: 1 }]);
-  assert(codes().includes("EE-0001-E"), "the next slide is E, not a recycled C");
-  eq(codes().filter((x) => x === "EE-0001-D").length, 1, "D was not duplicated");
+  assert(codes().includes("EE-1-E"), "the next slide is E, not a recycled C");
+  eq(codes().filter((x) => x === "EE-1-D").length, 1, "D was not duplicated");
 });
 
 // #73 — the same must hold on a database created BEFORE samples.slides_issued
@@ -1123,14 +1161,14 @@ issue(73, "an existing database cannot reissue a letter after a delete", () => {
   // Simulate a pre-0023 image: the mark was never written.
   api.run(`UPDATE samples SET slides_issued = 0 WHERE id = ?`, [id]);
 
-  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-1-C'`);
   api.deleteSlide(c.id);
   api.createSectionRequests(id, [{ duplicates: 1 }]);
   const codes = api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ?`, [id]).map((r) => r.c);
   eq(new Set(codes).size, codes.length, "no duplicate slide codes after the delete");
-  assert(codes.includes("EE-0001-E"), "the sequence continues at E");
+  assert(codes.includes("EE-1-E"), "the sequence continues at E");
 });
 
 // #70 — an exhausted block has no tissue left, so a stain request that would

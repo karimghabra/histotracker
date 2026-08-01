@@ -32,6 +32,7 @@ import {
   setSampleArchived,
   setSamplesArchived,
   setSampleNotes,
+  setSampleDescription,
   setSlideNotes,
   setSlidesDepthTag,
   setPickedUp,
@@ -258,6 +259,22 @@ export function useActions() {
     (sampleId: number, notes: string) => commit("Edit sample notes", () => setSampleNotes(sampleId, notes)),
     [commit],
   );
+
+  /**
+   * Change just the description (#79). saveDetails() needs the whole
+   * NewSampleInput, which makes it awkward to call from a plain text field and
+   * risks writing stale values for every other column; this touches one column.
+   */
+  const editSampleDescription = useCallback(
+    async (sampleId: number, description: string) => {
+      const before = await getSample(sampleId);
+      if (!before || (before.sample_description ?? "") === description.trim()) return;
+      await commit(`Edit ${before.sample_code} description`, () =>
+        setSampleDescription(sampleId, description),
+      );
+    },
+    [commit],
+  );
   const tagSlidesDepth = useCallback(
     (slideIds: number[], label: string, note: string) =>
       commit(
@@ -310,12 +327,23 @@ export function useActions() {
   );
 
   // Create N samples that share the same details (issue #1) as a single undo.
+  /**
+   * Create N samples as ONE undo entry. `descriptions[i]` overrides the shared
+   * description for sample i; a blank or missing entry keeps the shared one
+   * (#86). The loop is sequential and awaited, so index i maps deterministically
+   * to the i-th minted code.
+   */
   const createSamples = useCallback(
-    (input: NewSampleInput, projectCode: string, quantity: number) => {
+    (input: NewSampleInput, projectCode: string, quantity: number, descriptions?: string[]) => {
       const count = Math.max(1, Math.floor(quantity));
       return commit(count === 1 ? "Create sample" : `Create ${count} samples`, async () => {
         const ids: number[] = [];
-        for (let i = 0; i < count; i += 1) ids.push(await addSample(input, projectCode));
+        for (let i = 0; i < count; i += 1) {
+          const own = descriptions?.[i]?.trim();
+          ids.push(
+            await addSample(own ? { ...input, sample_description: own } : input, projectCode),
+          );
+        }
         return ids;
       });
     },
@@ -661,6 +689,7 @@ export function useActions() {
     saveDetails,
     changeProject,
     editSampleNotes,
+    editSampleDescription,
     editSlideNotes,
     tagSlidesDepth,
     saveSectioningPlan,

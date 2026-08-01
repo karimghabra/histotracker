@@ -40,6 +40,57 @@ export function duplicateLabel(ordinal: number): string {
 }
 
 /**
+ * Format a sample code. ONE definition, used by the preview, the insert and the
+ * project-move re-mint, so those can never disagree about the shape (#87).
+ *
+ * Codes used to be zero-padded to four digits ("EE-0001"), inherited from the
+ * Python prototype. New codes are minted unpadded ("EE-1"); existing rows keep
+ * whatever they were given, which is why everything that MATCHES or SORTS a code
+ * has to be padding-insensitive — see {@link sampleCodeVariants} and
+ * {@link compareSampleCodes}.
+ */
+export function formatSampleCode(projectCode: string, sampleNumber: number): string {
+  return `${projectCode.trim().toUpperCase()}-${sampleNumber}`;
+}
+
+/** Split "EE-0007" or "EE-7" into its prefix and number; null if not a code. */
+export function parseSampleCode(code: string): { prefix: string; number: number } | null {
+  const match = /^(.*)-0*(\d+)$/.exec((code ?? "").trim());
+  return match ? { prefix: match[1], number: Number(match[2]) } : null;
+}
+
+/**
+ * Every spelling of the same sample identity, for padding-insensitive lookup.
+ *
+ * A database can hold both "EE-0001" (minted before this change) and "EE-2"
+ * (after). Anything resolving a code typed by a human, or arriving in a synced
+ * request written by an instance on a different build, must accept both — the
+ * lookups fail CLOSED and SILENTLY, so a miss quietly drops work.
+ */
+export function sampleCodeVariants(code: string): string[] {
+  const parsed = parseSampleCode(code);
+  const raw = (code ?? "").trim();
+  if (!parsed) return [raw];
+  return [
+    ...new Set([
+      `${parsed.prefix}-${parsed.number}`,
+      `${parsed.prefix}-${String(parsed.number).padStart(4, "0")}`,
+      raw,
+    ]),
+  ];
+}
+
+/**
+ * Order bare sample codes numerically: EE-2 before EE-10, and EE-0001 before
+ * EE-2. Deliberately NOT {@link compareSlideCodes} — that one compares the tail
+ * by LENGTH first (correct for slide letters, where Z must precede AA) and would
+ * sort a padded "EE-0001" after "EE-9".
+ */
+export function compareSampleCodes(a: string, b: string): number {
+  return (a ?? "").localeCompare(b ?? "", undefined, { numeric: true, sensitivity: "base" });
+}
+
+/**
  * Order slide codes the way the bench reads them (issue #75).
  *
  * A slide code is `<parent>-<label>` where the label is the bijective base-26
