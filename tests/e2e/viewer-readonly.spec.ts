@@ -142,7 +142,8 @@ test("#71: a viewer's request appears immediately and does not duplicate after s
 
   // Viewer raises a request…
   await vw.getByRole("button", { name: /Request stain/ }).click();
-  await vw.getByLabel("Sample").selectOption("EE-1");
+  // Option value is the stored code; the label is the display form (#87).
+  await vw.getByLabel("Sample").selectOption({ label: "EE-1" });
   await vw.getByLabel("Requested stain / IHC").selectOption({ index: 1 });
   await vw.getByRole("button", { name: /Send request/ }).click();
 
@@ -229,7 +230,12 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
   await vwCtx.close();
 });
 
-test("#72: the viewer cannot start a depth tag from the Logs", async ({ browser }) => {
+// NOTE: this used to be named "cannot start a depth tag" while asserting only
+// the Archive and Request-stain buttons — and its seed created ZERO slides, so
+// the depth-tag bar it claimed to prove absent could never have rendered on a
+// workstation either. Renamed to what it actually checks; the depth-tag case is
+// the separate test below, which seeds real slides.
+test("#72: the viewer's Logs row offers no write actions", async ({ browser }) => {
   const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `ro2-${Date.now()}`);
   await ws.goto("/?freshdb=1");
   await seedWorkstation(ws);
@@ -252,6 +258,67 @@ test("#72: the viewer cannot start a depth tag from the Logs", async ({ browser 
   await vw.getByRole("cell", { name: "EE-1", exact: true }).click();
   await expect(vw.getByRole("button", { name: /Archive EE-1/ })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Request stain for/ })).toHaveCount(0);
+  // Notes are readable but not editable — they used to accept typing and throw
+  // it away on blur (#72). Target the notes textarea by placeholder; the Logs
+  // search box is also a textbox and is legitimately editable.
+  const notes = vw.getByPlaceholder("Notes about this sample…");
+  await expect(notes).toHaveAttribute("readonly", "");
+
+  await wsCtx.close();
+  await vwCtx.close();
+});
+
+// #72 — the depth-tag case, with SLIDES actually present so the action bar is
+// reachable. This is what the renamed test above only claimed to cover: with a
+// zero-slide seed there is nothing to select, so its absence proved nothing.
+test("#72: a viewer with real slides still cannot tag a depth", async ({ browser }) => {
+  const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `ro4-${Date.now()}`);
+  await ws.goto("/?freshdb=1");
+  await seedWorkstation(ws);
+
+  // Drive EE-1 to a cut so it HAS slides to select in the Logs drill-down.
+  await ws.getByText("EE-1", { exact: true }).first().click();
+  await ws.getByRole("button", { name: "Placed in fixative" }).click();
+  await ws.getByRole("button", { name: "Removed from fixative" }).click();
+  await ws.getByRole("button", { name: "Placed in ethanol" }).click();
+  await ws.locator("button:has(svg.lucide-x)").first().click();
+  await dragOnto(ws, "EE-1", "Processor");
+  await expect(ws.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  await expect(async () => {
+    const btn = ws.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(ws.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 25000 });
+  await dragOnto(ws, "Batch 1", "Needs Embedding");
+  await dragOnto(ws, "EE-1", "Embedded Inventory");
+  await ws.getByText("EE-1", { exact: true }).first().click();
+  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
+  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.locator("button:has(svg.lucide-x)").first().click();
+
+  await vw.goto("/?freshdb=1");
+  await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
+  await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
+
+  await vw.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await vw.getByRole("cell", { name: "EE-1", exact: true }).click();
+
+  // Precondition that the OLD test lacked: the slides really are there, so a
+  // workstation WOULD show the tagging bar once they are selected.
+  const slideCheckboxes = vw.getByRole("checkbox", { name: /Select slide/ });
+  await expect(slideCheckboxes.first()).toBeVisible({ timeout: 15000 });
+  await slideCheckboxes.first().check();
+
+  // Selection is allowed (viewers may inspect), but tagging is not offered.
+  await expect(vw.getByRole("button", { name: /Tag depth/ })).toHaveCount(0);
+  await expect(vw.getByText(/Read-only viewer/).first()).toBeVisible();
+
+  // And the workstation, with the identical selection, DOES offer it — which is
+  // what makes the absence above meaningful rather than incidental.
+  await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await ws.getByRole("checkbox", { name: /Select slide/ }).first().check();
+  await expect(ws.getByRole("button", { name: /Tag depth/ })).toBeVisible();
 
   await wsCtx.close();
   await vwCtx.close();

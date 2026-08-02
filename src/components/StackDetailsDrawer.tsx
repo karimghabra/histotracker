@@ -8,12 +8,16 @@ import type { SlideStack } from "../lib/types";
 import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { useReadOnly } from "../lib/readOnly";
+import { displayCode } from "../lib/utils";
 
+// Drying is no longer tracked (#80). The stage and its column are retained in
+// the schema (append-only contract, and legacy rows may still carry a stamp),
+// but it is not a step the lab records, so it does not appear on the timeline —
+// it was rendering a permanent "Dried –" row on every rack.
 const STACK_TIMELINE_KEYS = new Set([
   "stained",
   "ihc_complete",
   "coverslipped",
-  "dried",
   "ready_for_imaging",
   "pictures_taken",
   "analyzed",
@@ -104,7 +108,7 @@ export function StackDetailsDrawer({
           <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
             <Layers size={16} className="shrink-0" />
             <span className="truncate">
-              {stack.parent_code}{stack.kind === "stain" ? " · stain rack" : ""}
+              {displayCode(stack.parent_code ?? "")}{stack.kind === "stain" ? " · stain rack" : ""}
             </span>
           </h2>
           <p className="truncate text-xs text-ink-faint">
@@ -184,7 +188,7 @@ export function StackDetailsDrawer({
                     <input
                       type="checkbox"
                       checked={selectedSlideIds.has(slide.id)}
-                      aria-label={`Select ${slide.slide_code}`}
+                      aria-label={`Select ${displayCode(slide.slide_code)}`}
                       onChange={() => setSelectedSlideIds((current) => {
                         const next = new Set(current);
                         if (next.has(slide.id)) next.delete(slide.id);
@@ -197,15 +201,15 @@ export function StackDetailsDrawer({
                     <input
                       type="checkbox"
                       checked={imaged}
-                      aria-label={`Images captured for ${slide.slide_code}`}
+                      aria-label={`Images captured for ${displayCode(slide.slide_code)}`}
                       onChange={() => void run(() => setSlidePicturesTaken(slide.id, !imaged))}
                       className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
                     />
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-semibold text-ink">{slide.slide_code}</span>
+                    <span className="block truncate text-xs font-semibold text-ink">{displayCode(slide.slide_code)}</span>
                     <span className="block truncate text-[10px] text-ink-faint">
-                      {slide.assay_name || slide.stain_name}{slide.parent_code ? ` | ${slide.parent_code}` : ""}
+                      {slide.assay_name || slide.stain_name}{slide.parent_code ? ` | ${displayCode(slide.parent_code)}` : ""}
                     </span>
                   </span>
                   <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>

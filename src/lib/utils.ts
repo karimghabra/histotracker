@@ -40,17 +40,47 @@ export function duplicateLabel(ordinal: number): string {
 }
 
 /**
- * Format a sample code. ONE definition, used by the preview, the insert and the
- * project-move re-mint, so those can never disagree about the shape (#87).
+ * The STORED form of a sample code — zero-padded to four digits ("EE-0001").
+ * ONE definition, used by the preview, the insert and the project-move re-mint,
+ * so those can never disagree about the shape.
  *
- * Codes used to be zero-padded to four digits ("EE-0001"), inherited from the
- * Python prototype. New codes are minted unpadded ("EE-1"); existing rows keep
- * whatever they were given, which is why everything that MATCHES or SORTS a code
- * has to be padding-insensitive — see {@link sampleCodeVariants} and
- * {@link compareSampleCodes}.
+ * Storage stays padded deliberately (#87). The padding is what makes the code a
+ * stable, fixed-width identifier: it is embedded verbatim in every slide code, in
+ * `stain_requests`, in audit summaries and in the synced payload. Changing the
+ * stored form would fork the identity of every existing sample. The leading zeros
+ * are a DISPLAY concern only — see {@link displayCode}, which strips them
+ * everywhere the user reads a code, including for samples cut years ago.
  */
 export function formatSampleCode(projectCode: string, sampleNumber: number): string {
-  return `${projectCode.trim().toUpperCase()}-${sampleNumber}`;
+  return `${projectCode.trim().toUpperCase()}-${String(sampleNumber).padStart(4, "0")}`;
+}
+
+/**
+ * The DISPLAYED form of any sample or slide code: the same code without its
+ * leading zeros (#87).
+ *
+ * "EE-0001" → "EE-1", "EE-0022-A" → "EE-22-A". Purely cosmetic and applied at
+ * render time, so it fixes codes retroactively — a block logged last year shows
+ * the short form immediately, with nothing written to the database. Only the
+ * leading numeric run is touched; a slide's letter suffix is left alone.
+ */
+export function displayCode(code: string): string {
+  return (code ?? "").replace(/^([A-Za-z]+)-0*(\d+)/, (_m, prefix, digits) => `${prefix}-${Number(digits)}`);
+}
+
+/**
+ * Strip leading zeros from EVERY code embedded in a longer string.
+ *
+ * Some summaries are composed in SQL — `slide_summary` is a GROUP_CONCAT like
+ * "EE-0001-B: Stain: H&E · EE-0002-A: IHC: CD31" — so the codes sit mid-text
+ * where {@link displayCode}'s anchored match cannot reach them. Matching
+ * requires letters, a hyphen and digits, so ordinary prose is left alone.
+ */
+export function displayCodesInText(text: string): string {
+  return (text ?? "").replace(
+    /\b([A-Za-z]{1,6})-0+(\d+)/g,
+    (_m, prefix, digits) => `${prefix}-${Number(digits)}`,
+  );
 }
 
 /** Split "EE-0007" or "EE-7" into its prefix and number; null if not a code. */

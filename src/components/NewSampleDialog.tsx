@@ -88,7 +88,12 @@ export function NewSampleDialog({
       },
       project.code,
       quantity,
-      perSample ? descriptions.slice(0, quantity) : undefined,
+      // Gate on the SAME condition that renders the per-sample UI (#86). Gating
+      // on `perSample` alone meant that ticking the box, filling the rows, then
+      // correcting Quantity back to 1 hid the whole UI but still wrote
+      // descriptions[0] — silently ignoring the Description field the user could
+      // actually see. Same "state nothing renders" shape as #77.
+      perSample && quantity > 1 ? descriptions.slice(0, quantity) : undefined,
     );
     setSaving(false);
     onClose();

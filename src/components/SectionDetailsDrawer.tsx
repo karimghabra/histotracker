@@ -8,7 +8,7 @@ import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/u
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { useReadOnly } from "../lib/readOnly";
-import { duplicateLabel } from "../lib/utils";
+import { displayCode, duplicateLabel } from "../lib/utils";
 
 const STATUS_ONLY_STAGES = new Set(["needs_sectioning", "assignment_required", "stain_requested"]);
 
@@ -39,7 +39,7 @@ function SlideAssignmentRow({
   return (
     <div className="rounded-md border border-line bg-surface p-2">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs font-semibold text-ink">{slide.slide_code}</span>
+        <span className="text-xs font-semibold text-ink">{displayCode(slide.slide_code)}</span>
         <span className="text-[10px] uppercase tracking-wide text-ink-faint">
           Duplicate {duplicateLabel(slide.slide_ordinal)}
         </span>
@@ -193,7 +193,7 @@ export function SectionDetailsDrawer({
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <h2 className="text-base font-semibold text-ink">
-            {section.parent_code} · ×{section.duplicates}
+            {displayCode(section.parent_code ?? "")} · ×{section.duplicates}
           </h2>
           <p className="text-xs text-ink-faint">
             Section from {section.parent_description || section.parent_code}
@@ -293,7 +293,7 @@ export function SectionDetailsDrawer({
               {assaySlides.map((slide) => (
                 <div key={slide.id} className="rounded-md border border-line bg-surface px-2.5 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs font-semibold text-ink">{slide.slide_code}</span>
+                    <span className="truncate text-xs font-semibold text-ink">{displayCode(slide.slide_code)}</span>
                     <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>
                   </div>
                   <p className="mt-0.5 truncate text-[11px] text-ink-soft">
@@ -334,7 +334,7 @@ export function SectionDetailsDrawer({
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-semibold text-ink">{slide.assay_name || slide.stain_name}</span>
-                      <span className="block truncate text-[10px] text-ink-faint">{slide.slide_code} · {slide.assay_type.toUpperCase()}</span>
+                      <span className="block truncate text-[10px] text-ink-faint">{displayCode(slide.slide_code)} · {slide.assay_type.toUpperCase()}</span>
                     </span>
                     {complete && <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />}
                   </label>
@@ -390,7 +390,12 @@ export function SectionDetailsDrawer({
           <span className="ml-2 font-normal normal-case text-ink-faint/70">physical events only</span>
         </h3>
         <ol className="space-y-1">
-          {SECTION_STAGES.filter((stage) => !STATUS_ONLY_STAGES.has(stage.key)).map((stage) => {
+          {/* `dried` is excluded: drying is no longer tracked (#80), and this row
+              was not merely cosmetic — its pencil opened a datetime picker that
+              SAVED, so the lab could still enter drying times. */}
+          {SECTION_STAGES.filter(
+            (stage) => !STATUS_ONLY_STAGES.has(stage.key) && stage.key !== "dried",
+          ).map((stage) => {
             const at = (section as unknown as Record<string, string | null>)[stage.column];
             const editing = editingColumn === stage.column;
             return (

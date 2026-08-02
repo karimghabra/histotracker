@@ -36,8 +36,11 @@ test("request a stain from the Logs view with the sample pre-filled (#64)", asyn
   await page.getByRole("button", { name: /Request stain for EE-1/ }).click();
   await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
 
-  // The sample is already selected in the dialog.
-  await expect(page.getByLabel("Sample")).toHaveValue("EE-1");
+  // The sample is already selected in the dialog. Assert on the SELECTED OPTION's
+  // text, not the select's value: the value is deliberately the stored code
+  // ("EE-0001") because it travels into the request payload, while the user sees
+  // the display form (#87).
+  await expect(page.getByLabel("Sample").locator("option:checked")).toHaveText("EE-1");
 
   // Pick an agent and send.
   await page.getByLabel("Requested stain / IHC").selectOption({ label: "H&E (stain)" });

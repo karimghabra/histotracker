@@ -220,7 +220,8 @@ export function Board({
     () => samples.filter((sample) => !batchMemberIds.has(sample.id)).map((sample) => sample.id),
     [batchMemberIds, samples],
   );
-  const visibleStackOrder = useMemo(() => stacks.map((stack) => stack.id), [stacks]);
+  // (No global stack order: range selection is scoped per column in selectStack,
+  // so an all-stacks list would only invite the #82 bug back.)
 
   const blocksByQueue = useMemo(() => {
     const map: Record<string, Sample[]> = {};
@@ -518,8 +519,20 @@ export function Board({
   function selectStack(id: number, event: MouseEvent<HTMLDivElement>) {
     setSelectedBlocks(new Set());
     setSelectedSections(new Set());
+    // Range-select within the CLICKED COLUMN, over what is actually on screen
+    // (#82). This used to walk every open stack in the database across both
+    // columns, so filtering Ready for Imaging to one project and shift-clicking
+    // silently selected hidden stacks — and Staining racks — which the next
+    // "Complete Imaging" or Delete then acted on. The block column already
+    // scopes this correctly; stacks now match it.
+    const targetQueue = SECTION_STAGE_TO_QUEUE[
+      stacks.find((stack) => stack.id === id)?.current_stage ?? ""
+    ];
+    const queueOrder = (targetQueue === "analysis_pending" ? displayedImagingStacks : stacks)
+      .filter((stack) => SECTION_STAGE_TO_QUEUE[stack.current_stage] === targetQueue)
+      .map((stack) => stack.id);
     if (event.shiftKey) {
-      setSelectedStacks(new Set(rangeSelection(visibleStackOrder, stackAnchor.current, id)));
+      setSelectedStacks(new Set(rangeSelection(queueOrder, stackAnchor.current, id)));
     } else if (event.ctrlKey || event.metaKey) {
       setSelectedStacks((current) => {
         const next = new Set(current);

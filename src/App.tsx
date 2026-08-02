@@ -16,6 +16,7 @@ import { ManageDialog } from "./components/ManageDialog";
 import { BackupsDialog } from "./components/BackupsDialog";
 import { SetupScreen } from "./components/SetupScreen";
 import { RequestStainDialog } from "./components/RequestStainDialog";
+import { ManifestView } from "./components/ManifestView";
 import { ReadOnlyProvider } from "./lib/readOnly";
 import { useIdleLogout } from "./hooks/useIdleLogout";
 import { mergePendingRequests, prunePendingRequests } from "./lib/pendingRequests";
@@ -119,9 +120,30 @@ export default function App() {
     window.localStorage.setItem("histometer-drawer-width", String(drawerWidth));
   }, [drawerWidth]);
 
+  // Keep the protocol-checklist operator name in step with who is signed in —
+  // INCLUDING on sign-out. It used to be written but never cleared, so after an
+  // idle logout the protocol steps kept recording the departed operator's name
+  // (#76).
   useEffect(() => {
     if (activeUser) window.localStorage.setItem("histometer-active-operator", activeUser.name);
+    else window.localStorage.removeItem("histometer-active-operator");
   }, [activeUser]);
+
+  // #76 — the signed-in user lives in the DATABASE (app_settings.active_user_id),
+  // so it survives quitting the app and rebooting the machine. On a shared bench
+  // PC that meant Monday's user was still signed in on Tuesday and Tuesday's
+  // work was attributed to them, with no prompt. Clear it once per launch: the
+  // first thing you do each session is say who you are.
+  const launchSignOutDone = useRef(false);
+  useEffect(() => {
+    if (launchSignOutDone.current || isViewer) return;
+    if (!syncConfig?.configured) return;
+    launchSignOutDone.current = true;
+    if (activeUser) {
+      setIdleSignedOut(activeUser.name);
+      selectUser.mutate(null);
+    }
+  }, [syncConfig?.configured, isViewer, activeUser, selectUser]);
 
   // #76 — drop the session after a spell of no interaction, so the next person
   // at a shared bench machine isn't silently attributed the previous one's work.
@@ -132,12 +154,21 @@ export default function App() {
     selectUser.mutate(null);
   });
 
-  // Default the sidebar selection to the first active project.
+  // Restore the last-used project, falling back to the first active one (#84).
+  // Without persistence, every restart silently reset the sidebar to whichever
+  // project happened to sort first — and the next New Sample went there.
   useEffect(() => {
-    if (selectedProjectId === null && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
+    if (selectedProjectId !== null || projects.length === 0) return;
+    const remembered = Number(window.localStorage.getItem("histometer-selected-project") ?? "");
+    const stillExists = projects.some((project) => project.id === remembered);
+    setSelectedProjectId(stillExists ? remembered : projects[0].id);
   }, [projects, selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedProjectId !== null) {
+      window.localStorage.setItem("histometer-selected-project", String(selectedProjectId));
+    }
+  }, [selectedProjectId]);
 
   // Restore the persisted undo/redo history (if it matches the live DB) so a
   // reload doesn't strand the user with a greyed-out Undo (#2).
@@ -277,8 +308,15 @@ export default function App() {
   // Sourced from ALL samples, not the open board list — listOpenSamples filters
   // exhausted blocks out, yet their code still reaches the dropdown via sections
   // that are still in flight, which is exactly the case being guarded.
+  // Archived blocks are refused for the same reason (#74): the sample has been
+  // deliberately taken out of circulation, so a request against it could never
+  // be actioned. Both states are "not available for work", so they share the
+  // dialog's guard rather than growing a second, forgettable one.
   const exhaustedSampleCodes = useMemo(
-    () => allSamples.filter((sample) => sample.block_exhausted === 1).map((sample) => sample.sample_code),
+    () =>
+      allSamples
+        .filter((sample) => sample.block_exhausted === 1 || Boolean(sample.archived_at))
+        .map((sample) => sample.sample_code),
     [allSamples],
   );
 
@@ -292,6 +330,26 @@ export default function App() {
   useEffect(() => {
     if (sync.error) flash(`Sync error: ${sync.error}`);
   }, [sync.error]);
+
+  // Nothing should ever fail silently again (#72).
+  //
+  // Most mutations are fired as `void doThing()`, so a rejection had nowhere to
+  // go: the viewer clicked a control, the data layer refused the write, and the
+  // UI showed nothing at all. Rather than hunt every call site for a .catch,
+  // catch the rejections themselves and flash them. This is a backstop, not a
+  // licence to skip error handling — but it converts the whole class of
+  // "clicked it and nothing happened" into a visible message.
+  useEffect(() => {
+    const onRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const message = reason instanceof Error ? reason.message : String(reason ?? "");
+      if (!message) return;
+      event.preventDefault(); // handled — keep it out of the console as "unhandled"
+      flash(message);
+    };
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => window.removeEventListener("unhandledrejection", onRejection);
+  }, []);
 
   const selectSample = (id: number) => {
     setSelectedSectionId(null);
@@ -361,8 +419,19 @@ export default function App() {
     window.addEventListener("mouseup", onUp);
   }
 
+  // `key` on every drawer, so switching the selected item REMOUNTS it and no
+  // draft can survive the switch (#79).
+  //
+  // Without this, React reuses the instance: editing EE-1's description, then
+  // clicking EE-2's tile, left EE-1's text sitting in what now looked like
+  // EE-2's own description field — and one click on Save wrote it onto EE-2,
+  // because the handler pairs the NEW sample.id with the STALE draft. The same
+  // hazard applies to the timestamp draft and the stain-request agent, and to
+  // any draft state added to these drawers later; keying by id retires the whole
+  // class rather than resetting the three fields that exist today.
   const activeDrawer = selectedSample ? (
     <SampleDetailsDrawer
+      key={selectedSample.id}
       sample={selectedSample}
       selectedSamples={samples.filter((sample) => selectedSampleIds.includes(sample.id))}
       onRequestProcessing={setPendingBatchSampleIds}
@@ -371,6 +440,7 @@ export default function App() {
     />
   ) : selectedStack ? (
     <StackDetailsDrawer
+      key={selectedStack.id}
       stack={selectedStack}
       selectedStacks={selectedStacks}
       width={drawerWidth}
@@ -378,6 +448,7 @@ export default function App() {
     />
   ) : selectedSection ? (
     <SectionDetailsDrawer
+      key={selectedSection.id}
       section={selectedSection}
       selectedSections={sections.filter((section) => selectedSectionIds.includes(section.id))}
       width={drawerWidth}
@@ -385,6 +456,7 @@ export default function App() {
     />
   ) : selectedBatch ? (
     <ProcessingBatchDetailsDrawer
+      key={selectedBatch.id}
       batch={selectedBatch}
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
       candidates={plannedBatchCandidates}
@@ -630,7 +702,11 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {view === "logs" ? (
+          {view === "manifest" ? (
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <ManifestView />
+            </div>
+          ) : view === "logs" ? (
             <div className="min-w-0 flex-1 overflow-hidden p-3">
               <LogsView
                 onRequestStain={(code) => {
@@ -715,7 +791,13 @@ export default function App() {
         </div>
       </main>
 
-      {showNewProject && <NewProjectDialog users={users.filter((user) => user.is_active)} onClose={() => setShowNewProject(false)} />}
+      {showNewProject && (
+        <NewProjectDialog
+          users={users.filter((user) => user.is_active)}
+          onCreated={(projectId) => setSelectedProjectId(projectId)}
+          onClose={() => setShowNewProject(false)}
+        />
+      )}
       {showUsers && <ManageDialog users={users} activeUser={activeUser} onClose={() => setShowUsers(false)} />}
       {showBackups && (
         <BackupsDialog

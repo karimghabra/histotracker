@@ -179,6 +179,22 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
     ensureRuntimeSchema(db);
     assertDataIntact(db, "B");
   });
+  check("#87: stored codes keep their four digits — only the DISPLAY strips them", () => {
+    // The whole point of the display-layer approach: a lab that has been running
+    // for months keeps every identifier exactly as written on its blocks, and
+    // still sees the short form in the app.
+    const codes = db.prepare(`SELECT sample_code AS c FROM samples ORDER BY id`).all().map((r) => r.c);
+    eq(codes.join(","), "EE-0001,EE-0002,EE-0003", "storage is untouched by #87");
+    const slides = db.prepare(`SELECT slide_code AS c FROM slides ORDER BY id LIMIT 2`).all().map((r) => r.c);
+    eq(slides.join(","), "EE-0001-A,EE-0001-B", "slide codes keep the padded parent");
+
+    // Port of displayCode() — src/lib/utils.ts.
+    const display = (code) =>
+      String(code ?? "").replace(/^([A-Za-z]+)-0*(\d+)/, (_m, p, d) => `${p}-${Number(d)}`);
+    eq(codes.map(display).join(","), "EE-1,EE-2,EE-3", "the user sees the short form retroactively");
+    eq(slides.map(display).join(","), "EE-1-A,EE-1-B", "slide codes display short too");
+  });
+
   check("archiving works on the converged image and hides only that sample", () => {
     db.prepare(`UPDATE samples SET archived_at = '2026-07-28 12:00' WHERE sample_code = 'EE-0003'`).run();
     eq(db.prepare(`SELECT COUNT(*) AS n FROM samples WHERE archived_at IS NULL`).get().n, 2,

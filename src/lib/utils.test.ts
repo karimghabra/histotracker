@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareSampleCodes,
   compareSlideCodes,
+  displayCode,
   duplicateLabel,
   formatSampleCode,
   parseSampleCode,
@@ -9,10 +10,35 @@ import {
 } from "./utils";
 
 describe("sample code formatting (#87)", () => {
-  it("mints codes without leading zeros", () => {
-    expect(formatSampleCode("ee", 1)).toBe("EE-1");
-    expect(formatSampleCode("EE", 22)).toBe("EE-22");
-    expect(formatSampleCode(" ee ", 100)).toBe("EE-100");
+  it("STORES codes zero-padded to four digits", () => {
+    expect(formatSampleCode("ee", 1)).toBe("EE-0001");
+    expect(formatSampleCode("EE", 22)).toBe("EE-0022");
+    expect(formatSampleCode(" ee ", 100)).toBe("EE-0100");
+  });
+
+  it("DISPLAYS codes without their leading zeros", () => {
+    expect(displayCode("EE-0001")).toBe("EE-1");
+    expect(displayCode("EE-0022")).toBe("EE-22");
+    expect(displayCode("EE-0100")).toBe("EE-100");
+    expect(displayCode("EE-1000")).toBe("EE-1000");
+  });
+
+  it("strips the parent's zeros in a slide code but leaves the letter alone", () => {
+    expect(displayCode("EE-0001-A")).toBe("EE-1-A");
+    expect(displayCode("EE-0022-AA")).toBe("EE-22-AA");
+  });
+
+  it("is retroactive: a legacy stored code displays short with no data change", () => {
+    // This is the whole point — old samples gain the short form for free.
+    const storedLastYear = "EE-0007";
+    expect(displayCode(storedLastYear)).toBe("EE-7");
+    expect(storedLastYear).toBe("EE-0007"); // storage untouched
+  });
+
+  it("leaves anything that is not a code alone", () => {
+    expect(displayCode("")).toBe("");
+    expect(displayCode("Batch 1")).toBe("Batch 1");
+    expect(displayCode("no-code-here")).toBe("no-code-here");
   });
 
   it("parses both the padded and unpadded spellings", () => {

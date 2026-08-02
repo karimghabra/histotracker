@@ -26,3 +26,69 @@ jobs:
 
       - name: Run the workflow harness
         run: node scripts/workflow-test.mjs
+
+      - name: Verify a pre-0023 database still upgrades cleanly
+        run: node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs
+
+  # The harness only covers the data layer. Everything that lives above it —
+  # read-only gating, drawer state, filters, the request dialog — is Playwright
+  # only, and until now Playwright never ran in CI at all. That is a direct cause
+  # of fixes shipping "green" while being unusable in the app: see the audit
+  # correction at the top of docs/issue_remediation_plan.md.
+  browser-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm exec tsc --noEmit
+
+      - name: Component and unit tests
+        run: pnpm exec vitest run
+
+      # Cache the browser binary — it is ~190 MB and otherwise dominates the run.
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install system deps for cached browser
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: End-to-end tests
+        run: pnpm exec playwright test
+        env:
+          CI: "true"
+
+      # Traces/screenshots for anything that failed, so a red CI run is
+      # diagnosable without reproducing locally.
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

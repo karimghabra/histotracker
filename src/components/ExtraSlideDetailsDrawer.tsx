@@ -4,6 +4,7 @@ import type { Slide } from "../lib/types";
 import { useAssayCatalog } from "../hooks/useData";
 import { useActions } from "../hooks/useActions";
 import { useReadOnly } from "../lib/readOnly";
+import { displayCode } from "../lib/utils";
 import { Button } from "./ui";
 
 type AssaySelection = `${"stain" | "ihc"}:${string}`;
@@ -65,7 +66,7 @@ export function ExtraSlideDetailsDrawer({
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <h2 className="truncate text-base font-semibold text-ink">{parentCode}</h2>
+            <h2 className="truncate text-base font-semibold text-ink">{displayCode(parentCode)}</h2>
             {slides[0]?.is_priority === 1 && <Star size={13} className="fill-amber-400 text-amber-500" />}
           </div>
           <p className="truncate text-xs text-ink-faint">
@@ -116,7 +117,7 @@ export function ExtraSlideDetailsDrawer({
                     className="h-3.5 w-3.5 accent-[var(--color-brand)]"
                   />
                   <Archive size={12} className="shrink-0 text-ink-faint" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{slide.slide_code}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink">{displayCode(slide.slide_code)}</span>
                 </label>
                 {checked && (
                   <select
@@ -126,7 +127,7 @@ export function ExtraSlideDetailsDrawer({
                       [slide.id]: event.target.value as AssaySelection | "",
                     }))}
                     className="mt-2 w-full rounded border border-line bg-panel px-2 py-1.5 text-xs text-ink outline-none focus:border-brand"
-                    aria-label={`Assay for ${slide.slide_code}`}
+                    aria-label={`Assay for ${displayCode(slide.slide_code)}`}
                   >
                     <option value="">Choose stain or IHC...</option>
                     <optgroup label="Stains">

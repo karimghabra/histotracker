@@ -4,7 +4,7 @@ import type { MouseEvent } from "react";
 import type { Sample } from "../lib/types";
 import { processingDurationHours } from "../lib/stages";
 import { parsePreselectedStains } from "../lib/db";
-import { cn, parseTimestamp } from "../lib/utils";
+import { cn, displayCode, parseTimestamp } from "../lib/utils";
 
 function processingRemaining(sample: Sample): string | null {
   if (sample.current_stage !== "processing_started") return null;
@@ -100,13 +100,13 @@ export function SampleCard({
         <input
           type="checkbox"
           checked={selected}
-          aria-label={`Select ${sample.sample_code}`}
+          aria-label={`Select ${displayCode(sample.sample_code)}`}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
           onChange={() => onToggle?.(sample.id)}
           className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
         />
-        <span className="text-xs font-semibold text-ink">{sample.sample_code}</span>
+        <span className="text-xs font-semibold text-ink">{displayCode(sample.sample_code)}</span>
         <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
           {sample.sample_description || "—"}
         </span>
@@ -143,13 +143,13 @@ export function SampleCard({
       <input
         type="checkbox"
         checked={selected}
-        aria-label={`Select ${sample.sample_code}`}
+        aria-label={`Select ${displayCode(sample.sample_code)}`}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
         onChange={() => onToggle?.(sample.id)}
         className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
       />
-      <span className="shrink-0 text-xs font-semibold text-ink">{sample.sample_code}</span>
+      <span className="shrink-0 text-xs font-semibold text-ink">{displayCode(sample.sample_code)}</span>
       <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
         {sample.sample_description}
       </span>

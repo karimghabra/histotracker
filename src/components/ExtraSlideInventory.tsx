@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Archive, Search, Star } from "lucide-react";
 import type { Slide } from "../lib/types";
+import { displayCode } from "../lib/utils";
 
 export interface ExtraSlideGroup {
   sampleId: number;
@@ -77,7 +78,7 @@ export function ExtraSlideInventory({
             }`}
           >
             <Archive size={13} className="shrink-0 text-ink-faint" />
-            <span className="shrink-0 text-xs font-semibold text-ink">{group.parentCode}</span>
+            <span className="shrink-0 text-xs font-semibold text-ink">{displayCode(group.parentCode)}</span>
             <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
               {group.sampleDescription || group.projectCode}
             </span>

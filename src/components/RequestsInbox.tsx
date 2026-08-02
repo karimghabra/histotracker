@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, RotateCcw, X } from "lucide-react";
 import type { StainRequest, StainRequestStatus } from "../lib/types";
+import { displayCode } from "../lib/utils";
 import { Button, Modal } from "./ui";
 
 const STATUS_STYLES: Record<StainRequestStatus, string> = {
@@ -73,9 +74,9 @@ export function RequestsInbox({
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
                     <span>{request.requested_assay || "Stain"}</span>
                     <span className="text-ink-faint">·</span>
-                    <span className="font-mono text-xs text-ink-soft">{request.sample_code}</span>
+                    <span className="font-mono text-xs text-ink-soft">{displayCode(request.sample_code)}</span>
                     {request.slide_code && (
-                      <span className="font-mono text-[11px] text-ink-faint">({request.slide_code})</span>
+                      <span className="font-mono text-[11px] text-ink-faint">({displayCode(request.slide_code)})</span>
                     )}
                   </p>
                   <p className="mt-0.5 text-[11px] text-ink-faint">

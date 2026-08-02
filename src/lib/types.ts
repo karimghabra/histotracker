@@ -75,6 +75,21 @@ export interface Sample {
   pending_stains?: string;
 }
 
+/** A row of the change manifest — who did what, when (#77). */
+export interface AuditEvent {
+  id: number;
+  user_id: number | null;
+  /** Empty when the change was made while nobody was signed in. */
+  user_name: string;
+  action: string;
+  entity_type: string;
+  entity_id: number | null;
+  summary: string;
+  created_at: string;
+  sample_code: string;
+  project_code: string;
+}
+
 export interface SampleTimelineEvent {
   id: number;
   sample_id: number;

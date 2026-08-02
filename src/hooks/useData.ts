@@ -7,6 +7,7 @@ import {
   deleteSample,
   listAllSamples,
   listAllSlides,
+  listAuditEvents,
   listOpenSamples,
   listOpenProcessingBatches,
   listOpenSectionRequests,
@@ -199,6 +200,11 @@ export function useAllSamples() {
 }
 export function useAllSlides() {
   return useQuery({ queryKey: ["all-slides"], queryFn: listAllSlides });
+}
+
+/** The change manifest (#77). Refetched on mutations like everything else. */
+export function useAuditEvents() {
+  return useQuery({ queryKey: ["audit-events"], queryFn: () => listAuditEvents() });
 }
 
 export function useProjectMutations() {

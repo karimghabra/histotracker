@@ -7,7 +7,7 @@ import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
-import { cn } from "../lib/utils";
+import { cn, displayCode } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
@@ -88,7 +88,7 @@ export function SampleDetailsDrawer({
     <div className="flex h-full shrink-0 flex-col border-l border-line bg-panel" style={{ width }}>
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
-          <h2 className="text-base font-semibold text-ink">{sample.sample_code}</h2>
+          <h2 className="text-base font-semibold text-ink">{displayCode(sample.sample_code)}</h2>
           <p className="text-xs text-ink-faint">
             {sample.project_name} · {sample.processing_type} · {sample.fixative_agent}
           </p>
@@ -102,7 +102,15 @@ export function SampleDetailsDrawer({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 thin-scroll">
-        {showPreprocessing && (
+        {/* The preprocessing checklist is the first thing a viewer reaches for,
+            and it used to be entirely ungated — clicking "Placed in fixative"
+            simply did nothing (#72). */}
+        {showPreprocessing && readOnly && (
+          <p className="mb-3 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+            Read-only viewer — the preprocessing checklist is completed on the workstation.
+          </p>
+        )}
+        {showPreprocessing && !readOnly && (
           <>
             {preprocessingSamples.length > 1 && (
               <p className="mb-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs font-medium text-brand">
@@ -121,11 +129,15 @@ export function SampleDetailsDrawer({
           <select
             aria-label="Sample project"
             value={sample.project_id}
+            // Disabled rather than hidden: a viewer still needs to SEE which
+            // project the block belongs to. Left enabled, the select visibly
+            // moved to the new project while nothing was written (#72).
+            disabled={readOnly}
             onChange={(event) => {
               const target = Number(event.target.value);
               if (target && target !== sample.project_id) void changeProject(sample.id, target);
             }}
-            className="w-full rounded-lg border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-brand"
+            className="w-full rounded-lg border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-surface disabled:text-ink-soft"
           >
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
@@ -133,9 +145,11 @@ export function SampleDetailsDrawer({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-[11px] text-ink-faint">
-            Moving a sample re-numbers it under the new project (its slide labels update too).
-          </p>
+          {!readOnly && (
+            <p className="mt-1 text-[11px] text-ink-faint">
+              Moving a sample re-numbers it under the new project (its slide labels update too).
+            </p>
+          )}
         </div>
 
         {/* Descriptions are typed in a hurry at intake and often need correcting

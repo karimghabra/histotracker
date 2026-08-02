@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Copy, Plus, Scissors, X } from "lucide-react
 import { Button, Modal } from "./ui";
 import { parsePreselectedStains } from "../lib/db";
 import type { Sample } from "../lib/types";
-import { cn } from "../lib/utils";
+import { cn, displayCode } from "../lib/utils";
 
 // A single slide the technician plans to cut: either a plain Extra or a slide
 // carrying one stain/IHC agent. Encoded as "extra" or "<type>::<name>".
@@ -134,7 +134,7 @@ export function SectioningPlanDialog({
 
   return (
     <Modal
-      title={isBatch ? `Send for Cutting · ${blocks.length} blocks` : `Send for Cutting · ${current.sample_code}`}
+      title={isBatch ? `Send for Cutting · ${blocks.length} blocks` : `Send for Cutting · ${displayCode(current.sample_code)}`}
       onClose={onClose}
     >
       {isBatch && (
@@ -154,7 +154,7 @@ export function SectioningPlanDialog({
                     i === active ? "bg-brand text-white" : "bg-surface text-ink-soft hover:bg-brand/10",
                   )}
                 >
-                  {b.sample_code}
+                  {displayCode(b.sample_code)}
                   <span className={cn("h-1.5 w-1.5 rounded-full", hasStain ? "bg-amber-400" : "bg-transparent")} />
                 </button>
               );
@@ -169,7 +169,7 @@ export function SectioningPlanDialog({
       <p className="mb-2 text-xs text-ink-faint">
         {isBatch && (
           <>
-            Plan for <strong className="text-ink-soft">{current.sample_code}</strong> · block {active + 1} of{" "}
+            Plan for <strong className="text-ink-soft">{displayCode(current.sample_code)}</strong> · block {active + 1} of{" "}
             {blocks.length}
             {current.sample_description ? ` — ${current.sample_description}` : ""}. <br />
           </>
@@ -179,7 +179,7 @@ export function SectioningPlanDialog({
 
       {preselected && (
         <p className="mb-3 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          Prefilled from {current.sample_code}'s preselected stains ({current.pending_stains}).
+          Prefilled from {displayCode(current.sample_code)}'s preselected stains ({current.pending_stains}).
         </p>
       )}
 

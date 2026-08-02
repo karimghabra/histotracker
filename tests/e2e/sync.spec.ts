@@ -281,7 +281,9 @@ test("viewer stain request formally flags the block on the workstation", async (
   // Viewer raises a formal stain request against the synced block.
   await vw.getByRole("button", { name: /Request stain/ }).click();
   await vw.locator("select").filter({ has: vw.locator("option", { hasText: "Choose a sample" }) })
-    .selectOption("EE-1");
+    // The option VALUE is the stored code ("EE-0001"); the LABEL is the display
+    // form ("EE-1"). Select by what the user actually sees (#87).
+    .selectOption({ label: "EE-1" });
   await vw
     .locator("select")
     .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })
@@ -334,7 +336,9 @@ test("viewer request auto-pulls an available extra into Staining and acknowledge
   // Viewer requests a stain.
   await vw.getByRole("button", { name: /Request stain/ }).click();
   await vw.locator("select").filter({ has: vw.locator("option", { hasText: "Choose a sample" }) })
-    .selectOption("EE-1");
+    // The option VALUE is the stored code ("EE-0001"); the LABEL is the display
+    // form ("EE-1"). Select by what the user actually sees (#87).
+    .selectOption({ label: "EE-1" });
   await vw
     .locator("select")
     .filter({ has: vw.locator("option", { hasText: "Choose an agent" }) })

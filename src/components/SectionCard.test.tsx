@@ -29,7 +29,9 @@ describe("SectionCard — real checkbox multi-select (issue #37)", () => {
       />,
     );
     const user = userEvent.setup();
-    await user.click(screen.getByRole("checkbox", { name: /Select EE-0001/i }));
+    // The code is STORED as "EE-0001" but rendered without its leading zeros
+    // (#87), so the accessible name is the display form.
+    await user.click(screen.getByRole("checkbox", { name: /Select EE-1/i }));
     // A plain checkbox tick accumulates selection (onToggle), and must NOT fall
     // through to the card's replace-select (onSelectGroup).
     expect(onToggle).toHaveBeenCalledTimes(1);

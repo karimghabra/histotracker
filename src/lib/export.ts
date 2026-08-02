@@ -10,14 +10,17 @@ import {
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
-import { duplicateLabel, todayIso } from "./utils";
+import { displayCode, duplicateLabel, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
 
 // Ordered column definitions shared by the CSV and XLSX sample exports.
 export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
   ["Project", (s) => s.project_code ?? ""],
-  ["Sample ID", (s) => s.sample_code],
+  // Exports are read by humans, so they carry the DISPLAY form of a code — the
+  // same short spelling shown in the app (#87). The database keeps the padded
+  // form; nothing round-trips an export back into the app.
+  ["Sample ID", (s) => displayCode(s.sample_code)],
   ["Description", (s) => s.sample_description],
   ["Date Added", (s) => s.date_added],
   ["Processing", (s) => s.processing_type],
@@ -53,7 +56,7 @@ const PROJECT_COLUMNS: Array<[string, Accessor<Project>]> = [
 
 const SECTION_COLUMNS: Array<[string, Accessor<SectionRequest>]> = [
   ["Project", (row) => row.project_code ?? ""],
-  ["Sample ID", (row) => row.parent_code ?? ""],
+  ["Sample ID", (row) => displayCode(row.parent_code ?? "")],
   ["Duplicates", (row) => String(row.duplicates)],
   ["Current Stage", (row) => row.current_stage],
   ["Requested Stains", (row) => row.stains || row.parent_stains || ""],
@@ -63,7 +66,6 @@ const SECTION_COLUMNS: Array<[string, Accessor<SectionRequest>]> = [
   ["Stained", (row) => row.stage_stained_at ?? ""],
   ["IHC Complete", (row) => row.stage_ihc_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
-  ["Dried", (row) => row.stage_dried_at ?? ""],
   ["Ready for Imaging", (row) => row.stage_ready_for_imaging_at ?? ""],
   ["Pictures Taken", (row) => row.stage_pictures_taken_at ?? ""],
   ["Analyzed", (row) => row.stage_analyzed_at ?? ""],
@@ -72,8 +74,8 @@ const SECTION_COLUMNS: Array<[string, Accessor<SectionRequest>]> = [
 
 export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Project", (row) => row.project_code ?? ""],
-  ["Sample ID", (row) => row.parent_code ?? ""],
-  ["Slide ID", (row) => row.slide_code],
+  ["Sample ID", (row) => displayCode(row.parent_code ?? "")],
+  ["Slide ID", (row) => displayCode(row.slide_code)],
   ["Duplicate", (row) => duplicateLabel(row.slide_ordinal)],
   ["Purpose", (row) => row.purpose],
   ["Slices", (row) => String(row.slice_count)],
@@ -85,7 +87,6 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Stain Requested", (row) => row.stage_stain_requested_at ?? ""],
   ["Stained", (row) => row.stage_stained_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
-  ["Dried", (row) => row.stage_dried_at ?? ""],
   ["Ready for Imaging", (row) => row.stage_ready_for_imaging_at ?? ""],
   ["Pictures Taken", (row) => row.stage_pictures_taken_at ?? ""],
   ["Analyzed", (row) => row.stage_analyzed_at ?? ""],
@@ -159,7 +160,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
   for (const { sample, slides } of rows) {
     const base = [
       sample.project_code ?? "",
-      sample.sample_code,
+      displayCode(sample.sample_code),
       sample.sample_description ?? "",
       sample.current_stage ?? "",
       sample.block_exhausted ? "Yes" : "No",
@@ -173,7 +174,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
     for (const sl of slides) {
       out.push([
         ...base,
-        sl.slide_code ?? "",
+        displayCode(sl.slide_code ?? ""),
         sl.assay_type ?? "",
         sl.assay_name || (sl.purpose === "extra" ? "Extra" : ""),
         sl.current_stage ?? "",

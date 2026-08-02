@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.7.2 - 2026-08-01
+
+Re-does the 0.7.0/0.7.1 fixes properly. An adversarial audit found most of them
+did not work; each is now fixed at the invariant rather than at one call site,
+and every gate has been **observed failing with its fix removed**. **No schema
+change** — no migration, no new columns.
+
+**Data integrity — these corrupt data on 0.7.x, please update.**
+
+- **Removing a slide from the middle of a cut group bricked that group.**
+  `slides` carries `UNIQUE(section_request_id, slide_ordinal)` and the top-up
+  loop took its next ordinal from a live `COUNT`, so after removing a middle
+  slide it retried an ordinal still in use — throwing on *every* open of that
+  card, and poisoning delete too, so the group could not even be removed. That
+  function is now an initialiser for empty sections only, which also stops it
+  silently resurrecting a slide you deliberately removed.
+- **Slide letters could be reused.** The allocator consulted a live count, which
+  any delete lowers; only one of four delete paths compensated. It no longer
+  reads a count at all, and a one-time backfill corrects existing databases at
+  open — before any delete can matter.
+- **Editing a description could write it onto a different sample (#79).** The
+  drawer kept its draft across a sample switch, so editing EE-1, clicking EE-2
+  and pressing Save wrote EE-1's text onto EE-2. All four drawers are now keyed
+  by id, so no draft of any kind survives a switch.
+- **Staining racks still merged (#81).** There are two "Stained" checkboxes; the
+  0.7.0 fix covered one. Rack state is now derived from the member *slides* —
+  what every path must write — so both are covered, and the repair for existing
+  databases was widened to match.
+
+**Features that had shipped but did not work**
+
+- **#77 — the Manifest.** `audit_events` has been recorded since 0.4 but nothing
+  ever read it, so the app could not answer "who made what changes". There is
+  now a Manifest view, filterable by person and action.
+- **#72 — viewer mode** refused writes at the data layer but still offered the
+  controls, so clicks did nothing. Every mutation now refuses at one choke point
+  with a clear message, and nothing can fail silently anywhere in the app.
+- **#74 — archiving** hid the block but left its cut groups, extras and rack on
+  the board. All of them now go; a shared rack stays while another sample uses it.
+- **#80 — drying** was removed from new checklists only. It is gone from both
+  timelines and both exports, and racks stuck mid-protocol on upgrade are freed.
+- **#71** a request that could not be applied was deleted without trace; it is
+  now recorded as rejected, with the reason.
+- **#75** exports and the synced status sheet listed slides A, E, B, F for a
+  twice-cut block. **#76** the signed-in user survived reboots, misattributing
+  the next person's work. **#84** creating a project did not select it, and the
+  selection was lost on restart. **#86** lowering Quantity back to 1 wrote a
+  hidden description. **#82** shift-selecting in a filtered queue silently
+  selected hidden tiles.
+
+**Why this was needed**
+
+Playwright never ran in CI, two tests were vacuous, and four `db.ts` functions
+were never mirrored into the harness as `CLAUDE.md` requires — so the fixes
+passed while being unusable. All three are fixed, plus an invariant that fails if
+any allocator reads a live count again.
+
+> **Correction (2026-08-01).** An adversarial audit found that most of the fixes
+> claimed in 0.7.0 and 0.7.1 below do **not** actually work. Genuinely resolved:
+> #70, #78, #83. Partial: #75, #82, #84. Not resolved: #71, #72, #73, #74, #76,
+> #77, #79, #80, #81, #86. Three of those corrupt data on a database upgraded
+> from 0.6.x — see the audit correction at the top of
+> `docs/issue_remediation_plan.md`. The entries below are left unedited as a
+> record of what was claimed; do not read them as current status.
+
+
 ## 0.7.1 - 2026-07-31
 
 Fixes a 0.7.0 regression, makes two shipped-but-unreachable features actually

@@ -201,10 +201,19 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
   const tiles = imaging.locator("div[aria-selected]");
   await expect(tiles).toHaveCount(1, { timeout: 15000 });
 
-  // Sample 2 → a DIFFERENT stain, also to Ready for Imaging.
+  // Sample 2 → a DIFFERENT stain AND a different project, so BOTH filters have
+  // something real to narrow. Keeping both samples in one project made the
+  // project-filter assertion below vacuous: the filtered count equalled the
+  // unfiltered one, so it would have passed with the filter disabled.
+  await page.getByTitle("Add project").click();
+  await expect(page.getByRole("heading", { name: "Add Project" })).toBeVisible();
+  await page.locator('input[placeholder="EE"]').fill("ZZ");
+  await page.locator('input[placeholder="Enthesis Engineering"]').fill("Zebrafish Study");
+  await page.getByRole("button", { name: "Save Project" }).click();
+
   await addSample(page, "imaging block two");
-  await embed(page, "EE-2", "Batch 2");
-  await cutAndSectionIntoStaining(page, "EE-2", 2);
+  await embed(page, "ZZ-1", "Batch 2");
+  await cutAndSectionIntoStaining(page, "ZZ-1", 2);
   await runProtocolOnLoneRack(page);
   await expect(tiles).toHaveCount(2, { timeout: 15000 });
 
@@ -221,14 +230,19 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
   await stainFilter.selectOption("Alcian Blue");
   await expect(tiles).toHaveCount(1);
   await expect(imaging.getByText("EE-1").first()).toBeVisible();
-  await expect(imaging.getByText("EE-2")).toHaveCount(0);
+  await expect(imaging.getByText("ZZ-1")).toHaveCount(0);
 
   // Clearing the filter brings the other sample back.
   await stainFilter.selectOption("all");
   await expect(tiles).toHaveCount(2);
 
-  // The project filter narrows too — both samples share project EE.
-  await projectFilter.selectOption("EE");
+  // The project filter genuinely narrows: two projects in the queue, pick one.
+  await projectFilter.selectOption("ZZ");
+  await expect(tiles).toHaveCount(1);
+  await expect(imaging.getByText("ZZ-1").first()).toBeVisible();
+  await expect(imaging.getByText("EE-1")).toHaveCount(0);
+
+  await projectFilter.selectOption("all");
   await expect(tiles).toHaveCount(2);
 });
 

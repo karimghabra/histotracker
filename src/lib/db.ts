@@ -12,6 +12,7 @@ import type {
   SlideStack,
   SlidePurpose,
   SampleTimelineEvent,
+  AuditEvent,
 } from "./types";
 import {
   STAGES,
@@ -83,6 +84,8 @@ export function getDb(): Promise<Database> {
         await ensureRuntimeSchema(db);
         await reconcileStainRequests(db);
         await splitContaminatedStainRacks(db);
+        await backfillSlideLetterMarks(db);
+        await retireDryingChecklistStep(db);
         return db;
       })
       .then(guardWrites);
@@ -214,24 +217,46 @@ async function splitContaminatedStainRacksInner(db: Database): Promise<void> {
   );
   if (done[0]?.value === "1") return;
 
-  // Racks that recorded substage work but are still accepting-by-old-rules.
+  // Racks holding a MIX of worked and unworked slides.
+  //
+  // Keyed off the SLIDES, not the stack columns: the cut-group drawer's
+  // checkboxes stamp slides without touching slide_stacks, so a rack
+  // contaminated through that path has all-NULL stack columns and the original
+  // stack-column condition skipped it entirely. Coverslipped-only contamination
+  // was missed for the same reason.
   const contaminated = await db.select<Array<{ id: number; assay_type: string; assay_name: string }>>(
     `SELECT ss.id, ss.assay_type, ss.assay_name
        FROM slide_stacks ss
       WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
         AND ss.current_stage = 'stain_requested'
-        AND (ss.stage_stained_at IS NOT NULL OR ss.stage_ihc_at IS NOT NULL)
+        AND EXISTS (
+          SELECT 1 FROM slides w
+           WHERE w.stack_id = ss.id AND w.purpose = 'stain'
+             AND (w.stage_stained_at IS NOT NULL
+               OR w.stage_refrax_at IS NOT NULL
+               OR w.stage_coverslipped_at IS NOT NULL
+               OR w.stage_dried_at IS NOT NULL)
+        )
         AND EXISTS (
           SELECT 1 FROM slides sl
            WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
              AND sl.stage_stained_at IS NULL
+             AND sl.stage_refrax_at IS NULL
+             AND sl.stage_coverslipped_at IS NULL
+             AND sl.stage_dried_at IS NULL
         )`,
   );
 
+  let unrepaired = 0;
   for (const rack of contaminated) {
+    // The late arrivals: members with NO substage work of their own.
     const strays = await db.select<Array<{ id: number }>>(
       `SELECT id FROM slides
-        WHERE stack_id = ? AND purpose = 'stain' AND stage_stained_at IS NULL`,
+        WHERE stack_id = ? AND purpose = 'stain'
+          AND stage_stained_at IS NULL
+          AND stage_refrax_at IS NULL
+          AND stage_coverslipped_at IS NULL
+          AND stage_dried_at IS NULL`,
       [rack.id],
     );
     if (strays.length === 0) continue;
@@ -241,16 +266,65 @@ async function splitContaminatedStainRacksInner(db: Database): Promise<void> {
        VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
       [rack.assay_type, rack.assay_name, nowTimestamp()],
     );
-    if (result.lastInsertId == null) continue;
+    if (result.lastInsertId == null) {
+      // Could not mint the replacement rack — leave this one contaminated AND
+      // leave the marker unwritten so the next open tries again.
+      unrepaired += 1;
+      continue;
+    }
     for (const stray of strays) {
       await db.execute(`UPDATE slides SET stack_id = ? WHERE id = ?`, [result.lastInsertId, stray.id]);
     }
   }
 
+  // Only claim the repair is done if it actually completed. Writing the marker
+  // unconditionally meant a database this failed on never got a second chance.
+  if (unrepaired > 0) {
+    console.warn(`#81 repair left ${unrepaired} rack(s) unsplit; will retry on next open.`);
+    return;
+  }
   await db.execute(
     `INSERT INTO schema_meta (key, value) VALUES ('stain_racks_split_81', '1')
        ON CONFLICT(key) DO UPDATE SET value = '1'`,
   );
+}
+
+/**
+ * One-time removal of the retired "Dried" protocol step from checklist runs that
+ * already exist (#80).
+ *
+ * `ensureChecklist` REUSES a run keyed on (scope, stage_key), so shortening the
+ * label list only affected runs created after the upgrade. Any rack whose
+ * checklist existed before it kept a required third item and read "0/3" — the
+ * technician could tick Stained and Coverslipped and the rack still would not
+ * reach Ready for Imaging, because `checklistComplete` counted the Dried item as
+ * outstanding. Those are precisely the racks that were mid-protocol on upgrade
+ * day.
+ *
+ * Deleting the item preserves the progress already recorded on the other two
+ * steps. A rack that was waiting ONLY on drying becomes fully complete; it
+ * advances the next time any step is toggled.
+ */
+async function retireDryingChecklistStep(db: Database): Promise<void> {
+  try {
+    const done = await db.select<Array<{ value: string }>>(
+      `SELECT value FROM schema_meta WHERE key = 'drying_step_retired_80'`,
+    );
+    if (done[0]?.value === "1") return;
+    await db.execute(
+      `DELETE FROM checklist_items
+        WHERE label = 'Dried'
+          AND checklist_run_id IN (
+            SELECT id FROM checklist_runs WHERE stage_key LIKE '%_workflow_v%'
+          )`,
+    );
+    await db.execute(
+      `INSERT INTO schema_meta (key, value) VALUES ('drying_step_retired_80', '1')
+         ON CONFLICT(key) DO UPDATE SET value = '1'`,
+    );
+  } catch (error) {
+    console.warn("Skipped retiring the drying checklist step on this image:", error);
+  }
 }
 
 async function ensureColumn(
@@ -793,6 +867,34 @@ export async function updateSectioningPlan(
   );
 }
 
+/**
+ * The change manifest: who did what, most recent first (#77).
+ *
+ * `audit_events` has been populated by database triggers since 0010 and carries
+ * `user_id` on every row — but nothing in the app ever SELECTed from it, so the
+ * question the issue actually asks ("who made what changes") had no answer
+ * anywhere in the product. The user name is joined here rather than stored on
+ * the row, so renaming a user corrects the history rather than forking it.
+ * Rows written while nobody was signed in are surfaced honestly as "Unsigned".
+ */
+export async function listAuditEvents(limit = 500): Promise<AuditEvent[]> {
+  const db = await getDb();
+  return db.select<AuditEvent[]>(
+    `SELECT ae.id, ae.action, ae.entity_type, ae.entity_id, ae.summary, ae.created_at,
+            ae.user_id,
+            COALESCE(NULLIF(u.name, ''), '') AS user_name,
+            COALESCE(s.sample_code, '') AS sample_code,
+            COALESCE(p.code, '') AS project_code
+       FROM audit_events ae
+       LEFT JOIN users u ON u.id = ae.user_id
+       LEFT JOIN samples s ON s.id = ae.sample_id
+       LEFT JOIN projects p ON p.id = s.project_id
+      ORDER BY ae.created_at DESC, ae.id DESC
+      LIMIT ?`,
+    [limit],
+  );
+}
+
 export async function listSampleTimelineEvents(sampleId: number): Promise<SampleTimelineEvent[]> {
   const db = await getDb();
   return db.select<SampleTimelineEvent[]>(
@@ -837,7 +939,12 @@ export async function listAllSlides(): Promise<Slide[]> {
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
-      ORDER BY p.code, s.project_sample_number, sl.slide_ordinal`,
+      -- slide_ordinal is a PER-SECTION counter that restarts at 1 for every cut
+      -- group, so a twice-cut block came out A, E, B, F, C, G here (#75). The
+      -- Logs view sorts client-side, but this query also feeds the Excel export
+      -- and the auto-synced Slide Status sheet, which had no such correction.
+      -- Order by the cut group first, then position within it.
+      ORDER BY p.code, s.project_sample_number, sl.section_request_id, sl.slide_ordinal`,
   );
 }
 
@@ -1641,15 +1748,76 @@ function slideCodeFor(parentCode: string, ordinal: number): string {
  * takes over from there.
  */
 async function nextSlideLetter(db: Database, sampleId: number): Promise<number> {
-  const rows = await db.select<Array<{ issued: number; used: number }>>(
+  // NEVER a live COUNT. A count is lowered by any delete, and there are several
+  // delete paths (deleteSlide, deleteSlidesForStack, deleteSectionRequest, and
+  // ON DELETE CASCADE) — requiring each of them to compensate is exactly the
+  // per-call-site fragility that let #73 ship broken. Both terms below only ever
+  // rise: the persisted mark, and the highest letter still visible in the
+  // sample's slide codes (a safety net for rows written before the mark existed,
+  // or by any future path that forgets to record).
+  const rows = await db.select<Array<{ issued: number; codes: string }>>(
     `SELECT COALESCE((SELECT slides_issued FROM samples WHERE id = ?), 0) AS issued,
-            (SELECT COUNT(sl.id)
-               FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-              WHERE sr.sample_id = ?) AS used`,
+            COALESCE((SELECT GROUP_CONCAT(sl.slide_code)
+                        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+                       WHERE sr.sample_id = ?), '') AS codes`,
     [sampleId, sampleId],
   );
   const row = rows[0];
-  return Math.max(row?.issued ?? 0, row?.used ?? 0) + 1;
+  return Math.max(row?.issued ?? 0, highestLetterOrdinal(row?.codes ?? "")) + 1;
+}
+
+/**
+ * The highest slide-letter ordinal appearing in a comma-separated list of slide
+ * codes ("EE-0001-A,EE-0001-AB" → 28). Unknown shapes contribute 0.
+ */
+function highestLetterOrdinal(codes: string): number {
+  let highest = 0;
+  for (const code of codes.split(",")) {
+    const suffix = /-([A-Za-z]+)$/.exec(code.trim())?.[1];
+    if (!suffix) continue;
+    let ordinal = 0;
+    for (const ch of suffix.toUpperCase()) ordinal = ordinal * 26 + (ch.charCodeAt(0) - 64);
+    if (ordinal > highest) highest = ordinal;
+  }
+  return highest;
+}
+
+/**
+ * One-time backfill of `samples.slides_issued` from the letters already present
+ * in each sample's slide codes.
+ *
+ * A database created before 0023 has the mark at 0 while its slides already
+ * occupy letters. Until the mark catches up, a delete could hand a live letter
+ * to the next cut — `UNIQUE constraint failed: slides.slide_code`. Running this
+ * at open means the mark is correct for every sample BEFORE any delete can
+ * happen, which is what makes deletes safe without each delete path
+ * compensating. Idempotent (MAX only ever raises), so a re-run — including after
+ * reverting an old backup — is harmless.
+ */
+async function backfillSlideLetterMarks(db: Database): Promise<void> {
+  try {
+    const done = await db.select<Array<{ value: string }>>(
+      `SELECT value FROM schema_meta WHERE key = 'slide_letter_marks_backfilled'`,
+    );
+    if (done[0]?.value === "1") return;
+    const rows = await db.select<Array<{ sample_id: number; codes: string }>>(
+      `SELECT sr.sample_id AS sample_id, GROUP_CONCAT(sl.slide_code) AS codes
+         FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        GROUP BY sr.sample_id`,
+    );
+    for (const row of rows) {
+      const highest = highestLetterOrdinal(row.codes ?? "");
+      if (highest > 0) await recordSlidesIssued(db, row.sample_id, highest);
+    }
+    await db.execute(
+      `INSERT INTO schema_meta (key, value) VALUES ('slide_letter_marks_backfilled', '1')
+         ON CONFLICT(key) DO UPDATE SET value = '1'`,
+    );
+  } catch (error) {
+    // Corrective, not load-bearing — never block the app from opening. The
+    // marker is only written on success, so a failure retries on the next open.
+    console.warn("Skipped the slide-letter mark backfill on this image:", error);
+  }
 }
 
 /** Record how far a sample's letter sequence has advanced (never backwards). */
@@ -1868,6 +2036,7 @@ export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
        JOIN projects p ON p.id = s.project_id
       LEFT JOIN slides sl ON sl.section_request_id = sr.id
       WHERE p.is_active = 1 AND sr.current_stage != 'analyzed'
+        AND s.archived_at IS NULL -- archiving clears the board (#74)
       GROUP BY sr.id
       HAVING NOT (
         sr.current_stage = 'ready_for_imaging'
@@ -1901,11 +2070,31 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   );
   const row = rows[0];
   if (!row) return;
+
+  // ONLY initialise a section that has no slides at all.
+  //
+  // This used to top a section up to `duplicates`, with the next ordinal taken
+  // from a live COUNT. Two bugs fell out of that, both reachable from the
+  // "Remove slides" controls (#73/#83):
+  //   1. deleting a slide silently RESURRECTED it on the next open, so a slide
+  //      the technician removed as lost or mis-entered simply came back; and
+  //   2. `slides` carries UNIQUE(section_request_id, slide_ordinal), so deleting
+  //      a slide from the MIDDLE of a group made the count collide with an
+  //      ordinal that was still occupied — "UNIQUE constraint failed" thrown
+  //      from a function that runs on EVERY open of that card, permanently
+  //      bricking it, with removeSections poisoned too so it could not even be
+  //      deleted.
+  // Slides for a real cut are created eagerly by createSectionRequests; this
+  // path exists only to initialise legacy rows that predate that. Restricting it
+  // to empty sections makes both failures impossible by construction rather than
+  // by remembering to compensate at each delete site.
+  if (row.existing_count > 0) return;
+
   // New slides continue the sample's letter sequence (A, B, …), never reusing a
   // letter a deleted slide already consumed (#73).
   let nextLetter = await nextSlideLetter(db, row.sample_id);
   const cutAt = nowTimestamp();
-  for (let ordinal = row.existing_count + 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
+  for (let ordinal = 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
     await db.execute(
       `INSERT INTO slides
         (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage, stage_cut_at)
@@ -1951,6 +2140,10 @@ export async function listExtraSlides(): Promise<Slide[]> {
        JOIN projects p ON p.id = s.project_id
       WHERE sl.purpose = 'extra' AND sl.assignment_saved = 1
         AND sl.current_stage = 'extra' AND p.is_active = 1
+        -- Archived samples leave the board entirely (#74). Extras never advance
+        -- past current_stage='extra', so without this an archived block's extras
+        -- sat in the inventory permanently.
+        AND s.archived_at IS NULL
         -- Only after the cut group has left the Fresh/assignment tab (issue #12):
         -- a slide saved as 'extra' during assignment must not surface in the
         -- inventory until its section is dispositioned onward.
@@ -2036,6 +2229,30 @@ export async function getOpenStainRack(
         AND stage_refrax_at IS NULL
         AND stage_coverslipped_at IS NULL
         AND stage_dried_at IS NULL
+        -- …and NO MEMBER SLIDE has been worked on either.
+        --
+        -- The stack columns above are only written by updateSlideStackStage and
+        -- syncAssayStackWorkflowStep — the RACK drawer's checkboxes. There is a
+        -- SECOND set of the same checkboxes in the cut-group drawer, wired to
+        -- syncAssayWorkflowStep, which stamps slides and section_requests
+        -- and never touches slide_stacks. Keying "is this rack still loading?"
+        -- off the stack row therefore missed that path entirely, and the rack
+        -- kept absorbing new samples — the reported bug, via a route the first
+        -- fix never looked at.
+        --
+        -- The SLIDES are the real record of what has been stained: every path
+        -- that advances a protocol must write them, because that is what the
+        -- bench is tracking. Deriving from them closes both checkboxes and any
+        -- third one added later.
+        AND NOT EXISTS (
+          SELECT 1 FROM slides sl
+           WHERE sl.stack_id = slide_stacks.id
+             AND sl.purpose = 'stain'
+             AND (sl.stage_stained_at IS NOT NULL
+               OR sl.stage_refrax_at IS NOT NULL
+               OR sl.stage_coverslipped_at IS NOT NULL
+               OR sl.stage_dried_at IS NOT NULL)
+        )
       ORDER BY id ASC LIMIT 1`,
     [assayType, assayName],
   );
@@ -2262,6 +2479,25 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
        LEFT JOIN projects mproj ON mproj.id = msamp.project_id
       WHERE ss.closed_at IS NULL
         AND (ss.kind = 'stain' OR p.is_active = 1)
+        -- Archiving clears the board (#74). A PER-SAMPLE stack goes with its
+        -- sample. A cross-sample RACK holds other people's slides, so it only
+        -- goes once every member's sample is archived — otherwise archiving one
+        -- block would hide a rack the rest of the lab is still working.
+        AND (
+          (ss.sample_id IS NOT NULL AND s.archived_at IS NULL)
+          OR (
+            ss.sample_id IS NULL AND (
+              EXISTS (
+                SELECT 1 FROM slides live_sl
+                  JOIN section_requests live_sr ON live_sr.id = live_sl.section_request_id
+                  JOIN samples live_s ON live_s.id = live_sr.sample_id
+                 WHERE live_sl.stack_id = ss.id AND live_s.archived_at IS NULL
+              )
+              -- A rack with no members yet is not "fully archived"; keep it.
+              OR NOT EXISTS (SELECT 1 FROM slides any_sl WHERE any_sl.stack_id = ss.id)
+            )
+          )
+        )
       GROUP BY ss.id
       ORDER BY is_priority DESC, ss.created_at ASC, ss.id ASC`,
   );
@@ -3198,6 +3434,25 @@ export async function acknowledgeRequestsForSlide(slideId: number): Promise<numb
 }
 
 /** Move a request through requested -> acknowledged -> done / rejected. */
+/**
+ * Mark an ingested request rejected, with the reason it could not be applied
+ * (#71). The workstation deletes the inbox file as soon as it drains, so if the
+ * apply fails and nothing is recorded here the request is simply gone — the
+ * viewer sees it acknowledged-by-silence and the bench never learns of it.
+ */
+export async function rejectStainRequestByUuid(uuid: string, reason: string): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `UPDATE stain_requests
+        SET status = 'rejected',
+            resolved_by = 'system',
+            resolved_at = ?,
+            note = CASE WHEN note = '' THEN ? ELSE note || ' | ' || ? END
+      WHERE uuid = ? AND status = 'requested'`,
+    [nowTimestamp(), reason, reason, uuid],
+  );
+}
+
 export async function setStainRequestStatus(
   id: number,
   status: StainRequestStatus,

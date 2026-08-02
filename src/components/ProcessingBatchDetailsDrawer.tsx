@@ -1,7 +1,7 @@
 import { CalendarClock, CheckCircle2, Clock3, FlaskConical, Pencil, Play, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProcessingBatch, Sample } from "../lib/types";
-import { parseTimestamp } from "../lib/utils";
+import { displayCode, parseTimestamp } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 import { Button } from "./ui";
 
@@ -116,7 +116,7 @@ export function ProcessingBatchDetailsDrawer({
           {samples.map((sample) => (
             <div key={sample.id} className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-2">
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold text-ink">{sample.sample_code}</div>
+                <div className="text-xs font-semibold text-ink">{displayCode(sample.sample_code)}</div>
                 {sample.sample_description && <div className="truncate text-[11px] text-ink-soft">{sample.sample_description}</div>}
               </div>
               {canEditMembers && samples.length > 1 && (
@@ -147,7 +147,7 @@ export function ProcessingBatchDetailsDrawer({
                     className="flex w-full items-center gap-2 rounded border border-line bg-panel px-2 py-1 text-left text-[11px] hover:border-brand/50"
                   >
                     <Plus size={11} className="shrink-0 text-brand" />
-                    <span className="font-semibold text-ink">{sample.sample_code}</span>
+                    <span className="font-semibold text-ink">{displayCode(sample.sample_code)}</span>
                     <span className="min-w-0 flex-1 truncate text-ink-soft">{sample.sample_description}</span>
                   </button>
                 ))}

@@ -54,6 +54,7 @@ import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../li
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
 import { nowTimestamp } from "../lib/utils";
+import { useReadOnly } from "../lib/readOnly";
 
 /**
  * Central mutation layer. Every action performs its DB write, invalidates the
@@ -65,6 +66,7 @@ import { nowTimestamp } from "../lib/utils";
 export function useActions() {
   const qc = useQueryClient();
   const record = useUndoStore((s) => s.record);
+  const readOnly = useReadOnly();
 
   const invalidate = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["projects"] });
@@ -92,13 +94,27 @@ export function useActions() {
   // value is passed through so callers can still get ids/results.
   const commit = useCallback(
     async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+      // ONE read-only refusal for every mutation in the app (#72).
+      //
+      // Gating was previously per-component opt-in, so each new control was a
+      // fresh chance to forget — and a forgotten one failed SILENTLY, because
+      // db.ts's guardWrites rejects into a promise nobody awaits. The user
+      // clicked "Placed in fixative" and simply nothing happened, twice.
+      // Refusing here means a missed surface is merely UGLY (a clear message)
+      // rather than mysterious, and the component-level gating above it is now
+      // presentation, not the safety mechanism.
+      if (readOnly) {
+        throw new Error(
+          "This instance is a read-only viewer. Changes are made on the workstation.",
+        );
+      }
       const before = await snapshotDb();
       const result = await fn();
       invalidate();
       record({ label, snapshot: before });
       return result;
     },
-    [invalidate, record],
+    [invalidate, record, readOnly],
   );
 
   function validateForwardSampleMove(sample: Sample, stageKey: string) {

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Send } from "lucide-react";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { submitRequest } from "../lib/githubSync";
+import { displayCode } from "../lib/utils";
 import { addPendingRequest } from "../lib/pendingRequests";
 import { nowTimestamp } from "../lib/utils";
 
@@ -16,7 +17,7 @@ export function RequestStainDialog({
 }: {
   operatorName: string;
   sampleCodes: string[];
-  /** Blocks marked exhausted — they cannot be cut again (#70). */
+  /** Blocks unavailable for work — exhausted (#70) or archived (#74). */
   exhaustedSampleCodes?: string[];
   catalog: Array<{ assay_type: string; name: string }>;
   defaultSampleCode?: string;
@@ -44,7 +45,7 @@ export function RequestStainDialog({
     }
     if (chosenIsExhausted) {
       setError(
-        `${sampleCode.trim()} is marked exhausted — the block cannot be cut again, ` +
+        `${displayCode(sampleCode.trim())} is marked exhausted — the block cannot be cut again, ` +
           `so this request could not be fulfilled.`,
       );
       return;
@@ -76,7 +77,7 @@ export function RequestStainDialog({
         note: note.trim(),
         created_at: nowTimestamp(),
       });
-      onSubmitted(`Requested ${assayName} for ${sampleCode.trim()}`);
+      onSubmitted(`Requested ${assayName} for ${displayCode(sampleCode.trim())}`);
       onClose();
     } catch (cause) {
       setError(String(cause));
@@ -105,14 +106,17 @@ export function RequestStainDialog({
             ? [defaultSampleCode, ...sampleCodes]
             : sampleCodes
           ).map((code) => (
+            // The VALUE stays the stored code — it travels into the request
+            // payload and is resolved by findSampleIdByCode. Only the label
+            // loses its leading zeros (#87).
             <option key={code} value={code}>
-              {code}{exhausted.has(code.toUpperCase()) ? " — exhausted" : ""}
+              {displayCode(code)}{exhausted.has(code.toUpperCase()) ? " — exhausted" : ""}
             </option>
           ))}
         </select>
         {chosenIsExhausted && (
           <p role="alert" className="mt-1 text-[11px] text-red-600">
-            {sampleCode.trim()} is exhausted — the block cannot be cut again.
+            {displayCode(sampleCode.trim())} is exhausted — the block cannot be cut again.
           </p>
         )}
       </Field>

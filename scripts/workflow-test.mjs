@@ -125,8 +125,9 @@ function makeApi(db) {
   // Port of addSample() — src/lib/db.ts
   function addSample(projectId, projectCode, description, opts = {}) {
     const number = nextSampleNumber(projectId);
-    // Port of formatSampleCode() — src/lib/utils.ts. Unpadded since #87.
-    const code = `${projectCode.toUpperCase()}-${number}`;
+    // Port of formatSampleCode() — src/lib/utils.ts. STORAGE stays zero-padded
+    // to four digits; #87 strips the zeros at RENDER time only (displayCode).
+    const code = `${projectCode.toUpperCase()}-${pad(number, 4)}`;
     const preselected = (opts.preselectedStains ?? []).length ? JSON.stringify(opts.preselectedStains) : "";
     const r = run(
       `INSERT INTO samples (
@@ -295,7 +296,7 @@ function makeApi(db) {
   }
 
   // Port of createSectionRequests() — src/lib/db.ts. No depth; per-sample slide
-  // letters (EE-1-A, -B, …) continue across cuts. groups: {duplicates, stains?}.
+  // letters (EE-0001-A, -B, …) continue across cuts. groups: {duplicates, stains?}.
   function createSectionRequests(sampleId, groups) {
     if (!groups.length) return [];
     // A block can only be cut once embedded (issue #7). Mirrors db.ts.
@@ -382,30 +383,79 @@ function makeApi(db) {
   }
 
   // Port of nextSlideLetter()/recordSlidesIssued()/deleteSlide() — src/lib/db.ts.
-  // Letters come from a high-water mark, never a live count, so a deleted slide
-  // never hands its letter to the next cut (#73). The MAX() against the live
-  // count is the compatibility path for images predating samples.slides_issued.
+  // Ports of highestLetterOrdinal/nextSlideLetter/recordSlidesIssued — db.ts.
+  // NEVER a live count: a count is lowered by any delete, and there are several
+  // delete paths. Both terms below only ever rise (#73).
+  function highestLetterOrdinal(codes) {
+    let highest = 0;
+    for (const code of String(codes ?? "").split(",")) {
+      const suffix = /-([A-Za-z]+)$/.exec(code.trim())?.[1];
+      if (!suffix) continue;
+      let ordinal = 0;
+      for (const ch of suffix.toUpperCase()) ordinal = ordinal * 26 + (ch.charCodeAt(0) - 64);
+      if (ordinal > highest) highest = ordinal;
+    }
+    return highest;
+  }
   function nextSlideLetter(sampleId) {
     const row = get(
       `SELECT COALESCE((SELECT slides_issued FROM samples WHERE id = ?), 0) AS issued,
-              (SELECT COUNT(sl.id) FROM slides sl
+              COALESCE((SELECT GROUP_CONCAT(sl.slide_code) FROM slides sl
                  JOIN section_requests sr ON sr.id = sl.section_request_id
-                WHERE sr.sample_id = ?) AS used`,
+                WHERE sr.sample_id = ?), '') AS codes`,
       [sampleId, sampleId]);
-    return Math.max(row?.issued ?? 0, row?.used ?? 0) + 1;
+    return Math.max(row?.issued ?? 0, highestLetterOrdinal(row?.codes ?? "")) + 1;
   }
   function recordSlidesIssued(sampleId, lastLetter) {
     run(`UPDATE samples SET slides_issued = MAX(COALESCE(slides_issued, 0), ?) WHERE id = ?`,
         [lastLetter, sampleId]);
   }
-  // Freeze the mark BEFORE the row goes, so an old image can't reissue a letter
-  // belonging to a slide that still exists.
+  // Port of backfillSlideLetterMarks() — db.ts. Runs at open so the mark is
+  // correct BEFORE any delete, which is what makes deletes safe without every
+  // delete path compensating.
+  function backfillSlideLetterMarks() {
+    for (const row of all(
+      `SELECT sr.sample_id AS sample_id, GROUP_CONCAT(sl.slide_code) AS codes
+         FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        GROUP BY sr.sample_id`)) {
+      const highest = highestLetterOrdinal(row.codes);
+      if (highest > 0) recordSlidesIssued(row.sample_id, highest);
+    }
+  }
+  // Port of deleteSlide() — db.ts. Deliberately a BARE delete now: the mark is
+  // authoritative, so nothing here has to compensate.
   function deleteSlide(slideId) {
-    const row = get(
-      `SELECT sr.sample_id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-        WHERE sl.id = ?`, [slideId]);
-    if (row) recordSlidesIssued(row.sample_id, nextSlideLetter(row.sample_id) - 1);
     run(`DELETE FROM slides WHERE id = ?`, [slideId]);
+  }
+  // Ports of deleteSlidesForStack() and deleteSectionRequest() — db.ts. These
+  // were NEVER mirrored, which is exactly why #73 shipped green: the gates only
+  // ever exercised deleteSlide.
+  function deleteSlidesForStack(stackId) {
+    run(`DELETE FROM slides WHERE stack_id = ?`, [stackId]);
+  }
+  function deleteSectionRequest(sectionId) {
+    run(`DELETE FROM slides WHERE section_request_id = ?`, [sectionId]);
+    run(`DELETE FROM section_requests WHERE id = ?`, [sectionId]);
+  }
+  // Port of ensureSlidesForSectionRequest() — db.ts. ONLY initialises a section
+  // with no slides; it used to top up from a live COUNT, which both resurrected
+  // deleted slides and collided on UNIQUE(section_request_id, slide_ordinal).
+  function ensureSlidesForSectionRequest(id) {
+    const row = get(
+      `SELECT sr.duplicates, sr.sample_id, s.sample_code,
+              (SELECT COUNT(sl.id) FROM slides sl WHERE sl.section_request_id = sr.id) AS existing_count
+         FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`, [id]);
+    if (!row) return;
+    if (row.existing_count > 0) return;
+    let nextLetter = nextSlideLetter(row.sample_id);
+    for (let ordinal = 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
+      run(`INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose,
+                               assignment_saved, current_stage)
+           VALUES (?, ?, ?, 'extra', 1, 'extra')`,
+          [id, ordinal, `${row.sample_code}-${duplicateLabel(nextLetter).toUpperCase()}`]);
+      nextLetter += 1;
+    }
+    recordSlidesIssued(row.sample_id, nextLetter - 1);
   }
 
   // Port of getOpenStainRack() — src/lib/db.ts. A rack only accepts new members
@@ -681,7 +731,8 @@ function makeApi(db) {
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
-    deleteSlide, nextSlideLetter,
+    deleteSlide, nextSlideLetter, deleteSlidesForStack, deleteSectionRequest,
+    ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
     requestStainForSample, snapshotDb, restoreDb,
   };
@@ -720,20 +771,35 @@ invariant("all 18 migrations apply and expected tables exist", () => {
 // #87 — sample IDs are no longer zero-padded. The number still comes from
 // MAX(project_sample_number)+1, so the sequence itself is unchanged; only the
 // rendered width differs.
-issue(87, "sample codes auto-increment per project WITHOUT zero padding", () => {
+// #87 — leading zeros are a DISPLAY concern. Storage stays four-digit so the
+// identity embedded in slide codes, stain_requests, audit summaries and the
+// synced payload never changes; displayCode() strips the zeros at render time,
+// which is what makes the change retroactive for samples cut long ago.
+issue(87, "codes are STORED zero-padded and DISPLAYED without the zeros", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const a = api.addSample(p, "EE", "sample one");
   const b = api.addSample(p, "EE", "sample two");
-  eq(a.code, "EE-1", "first code has no leading zeros");
-  eq(b.code, "EE-2", "second code has no leading zeros");
-  // Slide codes inherit the parent verbatim, so they lose the padding too.
+  eq(a.code, "EE-0001", "storage keeps the four-digit form");
+  eq(b.code, "EE-0002", "storage keeps the four-digit form");
+
+  // Port of displayCode() — src/lib/utils.ts.
+  const display = (code) =>
+    String(code ?? "").replace(/^([A-Za-z]+)-0*(\d+)/, (_m, prefix, digits) => `${prefix}-${Number(digits)}`);
+  eq(display(a.code), "EE-1", "the user sees no leading zeros");
+  eq(display(b.code), "EE-2", "the user sees no leading zeros");
+
+  // Slide codes embed the STORED parent, and strip on display the same way.
   api.markEmbedded(a.id);
   api.createSectionRequests(a.id, [{ duplicates: 2 }]);
   const codes = api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? ORDER BY sl.id`, [a.id]).map((r) => r.c);
-  eq(codes.join(","), "EE-1-A,EE-1-B", "slide codes follow the unpadded parent");
+  eq(codes.join(","), "EE-0001-A,EE-0001-B", "slide codes store the padded parent");
+  eq(codes.map(display).join(","), "EE-1-A,EE-1-B", "and display without the zeros");
+
+  // A legacy row is displayed identically — that is the retroactive part.
+  eq(display("EE-0042"), "EE-42", "an old sample gains the short form with no data change");
 });
 
 // #87 — an EXISTING database holds padded codes, and a request raised against
@@ -1137,15 +1203,15 @@ issue(73, "deleting a slide does not hand its letter to the next cut", () => {
   const codes = () => api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? ORDER BY sl.id`, [id]).map((r) => r.c);
-  eq(codes().join(","), "EE-1-A,EE-1-B,EE-1-C,EE-1-D", "four slides A–D");
+  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-C,EE-0001-D", "four slides A–D");
 
-  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-1-C'`);
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
   api.deleteSlide(c.id);
-  eq(codes().join(","), "EE-1-A,EE-1-B,EE-1-D", "C is gone, D untouched");
+  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-D", "C is gone, D untouched");
 
   api.createSectionRequests(id, [{ duplicates: 1 }]);
-  assert(codes().includes("EE-1-E"), "the next slide is E, not a recycled C");
-  eq(codes().filter((x) => x === "EE-1-D").length, 1, "D was not duplicated");
+  assert(codes().includes("EE-0001-E"), "the next slide is E, not a recycled C");
+  eq(codes().filter((x) => x === "EE-0001-D").length, 1, "D was not duplicated");
 });
 
 // #73 — the same must hold on a database created BEFORE samples.slides_issued
@@ -1161,14 +1227,160 @@ issue(73, "an existing database cannot reissue a letter after a delete", () => {
   // Simulate a pre-0023 image: the mark was never written.
   api.run(`UPDATE samples SET slides_issued = 0 WHERE id = ?`, [id]);
 
-  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-1-C'`);
+  const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
   api.deleteSlide(c.id);
   api.createSectionRequests(id, [{ duplicates: 1 }]);
   const codes = api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ?`, [id]).map((r) => r.c);
   eq(new Set(codes).size, codes.length, "no duplicate slide codes after the delete");
-  assert(codes.includes("EE-1-E"), "the sequence continues at E");
+  assert(codes.includes("EE-0001-E"), "the sequence continues at E");
+});
+
+// #73 — deleting a slide from the MIDDLE of a cut group must not brick the card.
+// slides carries UNIQUE(section_request_id, slide_ordinal), and the top-up loop
+// used to derive its next ordinal from a live COUNT — so after removing the
+// middle slide it retried an ordinal that was still occupied and threw on EVERY
+// open of that card, including from removeSections, so the group could not even
+// be deleted. This is the gate that was missing: the old gates only ever deleted
+// the LAST slide, where a count and a max coincide.
+issue(73, "removing a middle slide leaves the cut group openable", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "middle delete");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
+
+  const middle = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-B'`);
+  api.deleteSlide(middle.id);
+
+  // Opening the card runs the top-up; it must not throw and must not resurrect B.
+  let threw = null;
+  try { api.ensureSlidesForSectionRequest(section); } catch (err) { threw = err.message; }
+  eq(threw, null, "opening the cut group after a middle delete does not throw");
+
+  const codes = api.all(
+    `SELECT slide_code AS c FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`,
+    [section]).map((r) => r.c);
+  eq(codes.join(","), "EE-0001-A,EE-0001-C", "the removed slide stays removed");
+});
+
+// #73 — the mark must survive delete paths that were NEVER mirrored into this
+// harness (which is why the original fix shipped green). Deleting a whole stain
+// rack, or a whole cut group, must not hand a live letter to the next cut.
+issue(73, "letters are not reused after ANY delete path", () => {
+  for (const [label, wipe] of [
+    ["deleteSlidesForStack", (api, ctx) => api.deleteSlidesForStack(ctx.stackId)],
+    ["deleteSectionRequest", (api, ctx) => api.deleteSectionRequest(ctx.section)],
+  ]) {
+    const api = makeApi(freshDb());
+    const p = api.seedProject();
+    const { id } = api.addSample(p, "EE", `wipe via ${label}`);
+    api.markEmbedded(id);
+    const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+    api.sectionToAssignment(section);
+    const first = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+    api.assignSlide(first.id, "stain", "stain", "H&E");
+    api.startAssayWork(section);
+    const stackId = api.get(`SELECT stack_id FROM slides WHERE id = ?`, [first.id]).stack_id;
+
+    wipe(api, { stackId, section });
+
+    // A fresh cut must continue past the letters already burned, never reuse.
+    api.createSectionRequests(id, [{ duplicates: 1 }]);
+    const codes = api.all(
+      `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ?`, [id]).map((r) => r.c);
+    eq(new Set(codes).size, codes.length, `${label}: no duplicate slide codes`);
+    assert(codes.includes("EE-0001-C"), `${label}: the sequence continues at C`);
+  }
+});
+
+// #73 — a pre-0023 image has slides_issued = 0 while its slides already occupy
+// letters. The backfill must correct the mark AT OPEN, before any delete, which
+// is what makes deletes safe without each delete path compensating.
+issue(73, "the letter mark is backfilled from existing codes on open", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "legacy mark");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [{ duplicates: 4 }]);
+  api.run(`UPDATE samples SET slides_issued = 0 WHERE id = ?`, [id]); // pre-0023 shape
+
+  api.backfillSlideLetterMarks();
+  eq(api.get(`SELECT slides_issued AS n FROM samples WHERE id = ?`, [id]).n, 4,
+     "the mark catches up to the highest letter already issued");
+
+  // Now a delete cannot lower it.
+  const d = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-D'`);
+  api.deleteSlide(d.id);
+  eq(api.nextSlideLetter(id), 5, "the next letter is still E after deleting D");
+});
+
+// #74 — archiving must clear the board, not just the block tile. The shipped fix
+// filtered archived_at in listOpenSamples ONLY, so the sample's cut group, its
+// extras and its rack all stayed visible — and extras never advance past
+// current_stage='extra', so they stayed forever. These are ports of the real
+// WHERE clauses; if a list query forgets the predicate, this gate goes red.
+issue(74, "archiving a sample clears its sections, extras and stack too", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "to archive");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  api.sectionToAssignment(section);
+  const slides = api.all(`SELECT * FROM slides WHERE section_request_id = ?`, [section]);
+  api.assignSlide(slides[0].id, "stain", "stain", "H&E");
+  api.assignSlide(slides[1].id, "extra", "", "");
+  api.startAssayWork(section);
+
+  const openSections = () => api.all(
+    `SELECT sr.id FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
+       JOIN projects p ON p.id = s.project_id
+      WHERE p.is_active = 1 AND sr.current_stage != 'analyzed' AND s.archived_at IS NULL`).length;
+  const openExtras = () => api.all(
+    `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+       JOIN samples s ON s.id = sr.sample_id JOIN projects p ON p.id = s.project_id
+      WHERE sl.purpose = 'extra' AND sl.current_stage = 'extra' AND p.is_active = 1
+        AND s.archived_at IS NULL`).length;
+  const openRacks = () => api.all(
+    `SELECT ss.id FROM slide_stacks ss
+      WHERE ss.closed_at IS NULL AND ss.kind = 'stain'
+        AND EXISTS (SELECT 1 FROM slides l JOIN section_requests r ON r.id = l.section_request_id
+                      JOIN samples sa ON sa.id = r.sample_id
+                     WHERE l.stack_id = ss.id AND sa.archived_at IS NULL)`).length;
+
+  assert(openSections() > 0 && openExtras() > 0 && openRacks() > 0, "precondition: all on the board");
+  api.run(`UPDATE samples SET archived_at = '2026-08-01 09:00' WHERE id = ?`, [id]);
+
+  eq(openSections(), 0, "the cut group leaves the board");
+  eq(openExtras(), 0, "the extras leave the inventory");
+  eq(openRacks(), 0, "the rack leaves staining once its only member is archived");
+
+  // Nothing was deleted — archiving is reversible.
+  eq(api.all(`SELECT id FROM slides`).length, 2, "no slide was destroyed");
+  api.run(`UPDATE samples SET archived_at = NULL WHERE id = ?`, [id]);
+  assert(openSections() > 0 && openExtras() > 0, "restoring brings everything back");
+});
+
+// #74 — a cross-sample rack must NOT vanish when only one of its members is
+// archived; it still holds other people's slides.
+issue(74, "a rack survives while any member sample is still live", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "archive me"); api.markEmbedded(a.id);
+  const b = api.addSample(p, "EE", "still working"); api.markEmbedded(b.id);
+  const rack = stainOneSlide(api, a.id, "stain", "SafO");
+  eq(stainOneSlide(api, b.id, "stain", "SafO"), rack, "precondition: one shared rack");
+
+  api.run(`UPDATE samples SET archived_at = '2026-08-01 09:00' WHERE id = ?`, [a.id]);
+  const visible = api.all(
+    `SELECT ss.id FROM slide_stacks ss
+      WHERE ss.closed_at IS NULL AND ss.kind = 'stain'
+        AND EXISTS (SELECT 1 FROM slides l JOIN section_requests r ON r.id = l.section_request_id
+                      JOIN samples sa ON sa.id = r.sample_id
+                     WHERE l.stack_id = ss.id AND sa.archived_at IS NULL)`).length;
+  eq(visible, 1, "the rack stays while B is still live");
 });
 
 // #70 — an exhausted block has no tissue left, so a stain request that would
@@ -1755,6 +1967,35 @@ issue(58, "opening a pre-0020 image converges slides.stage_deparaffinized_at so 
   assert(hasCol(), "convergence adds the missing column");
   stampDepar(); // now succeeds — the step can persist and the checkbox checks
   db.close();
+});
+
+// ANTI-DRIFT. Identifier allocators must never be derived from a live COUNT of
+// the rows they allocate for, because any delete lowers that count and the next
+// allocation collides with a row that still exists. This shipped TWICE — slide
+// letters (UNIQUE slide_code) and slide_ordinal (UNIQUE section_request_id,
+// slide_ordinal), the second of which threw on every open of the affected card.
+// A grep is crude, but it fails loudly the moment someone reaches for the same
+// shape again, which review demonstrably did not.
+invariant("slide allocators never derive an identifier from a live COUNT", () => {
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+
+  const nextLetter = /async function nextSlideLetter[\s\S]*?\n}/.exec(db)?.[0] ?? "";
+  assert(nextLetter, "nextSlideLetter must exist");
+  assert(!/COUNT\(/i.test(nextLetter),
+    "nextSlideLetter must not read a live COUNT — deletes lower it and letters get reused (#73)");
+
+  const ensureSlides = /async function ensureSlidesForSectionRequest[\s\S]*?\n}/.exec(db)?.[0] ?? "";
+  assert(ensureSlides, "ensureSlidesForSectionRequest must exist");
+  assert(/existing_count > 0\)\s*return/.test(ensureSlides),
+    "ensureSlidesForSectionRequest must only INITIALISE an empty section — topping up from a " +
+    "count both resurrects deleted slides and collides on slide_ordinal (#73)");
+  assert(!/ordinal = row\.existing_count \+ 1/.test(ensureSlides),
+    "slide_ordinal must not be derived from a live count (#73)");
+
+  // The mark must be corrected at open, so deletes are safe without every delete
+  // path compensating.
+  assert(/backfillSlideLetterMarks\(db\)/.test(db),
+    "getDb must backfill the slide-letter high-water mark on open (#73)");
 });
 
 invariant("getDb converges late-added runtime columns on every (re)open", () => {

@@ -6,6 +6,7 @@ import {
   getActiveUser,
   getDbFilePath,
   insertStainRequest,
+  rejectStainRequestByUuid,
   requestStainForSample,
   resetDb,
 } from "./db";
@@ -389,9 +390,21 @@ export async function drainRequests(): Promise<number> {
       ingested += 1;
       // Raise the SAME formal stain request the workstation's own bench UI does:
       // add it to the block's preselected stains (⚑ needs stain, prefilled cut)
-      // or pull an available extra into staining. Best-effort — a request for an
-      // unknown block/agent still lands in the inbox for manual handling.
-      await applyRequestToBlock(payload).catch(() => undefined);
+      // or pull an available extra into staining.
+      //
+      // A failure here used to be swallowed whole — `.catch(() => undefined)` —
+      // while the inbox file was deleted below regardless, so a request that
+      // could not be applied (unknown block, exhausted or archived sample)
+      // disappeared with no trace on either side (#71). Record WHY on the
+      // request instead, so it shows up in the inbox as rejected with a reason
+      // rather than silently evaporating.
+      try {
+        await applyRequestToBlock(payload);
+      } catch (cause) {
+        const reason = cause instanceof Error ? cause.message : String(cause);
+        await rejectStainRequestByUuid(payload.uuid || entry.name.replace(/\.json$/, ""), reason)
+          .catch(() => undefined);
+      }
     }
     await githubDeleteFile(entry.path, file.sha, `Ingest request ${payload.uuid ?? entry.name}`);
   }

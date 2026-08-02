@@ -1,10 +1,11 @@
-import { LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Table2 } from "lucide-react";
+import { History, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Table2 } from "lucide-react";
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
+import { useReadOnly } from "../lib/readOnly";
 import { APP_VERSION } from "../lib/version";
 
-export type AppView = "board" | "logs";
+export type AppView = "board" | "logs" | "manifest";
 
 export function Sidebar({
   projects,
@@ -24,6 +25,7 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem("histometer-sidebar-collapsed") === "true",
   );
+  const readOnly = useReadOnly();
   function toggleCollapsed() {
     setCollapsed((current) => {
       window.localStorage.setItem("histometer-sidebar-collapsed", String(!current));
@@ -41,6 +43,7 @@ export function Sidebar({
         {([
           { key: "board", label: "Board", icon: LayoutGrid },
           { key: "logs", label: "Logs", icon: Table2 },
+          { key: "manifest", label: "Manifest", icon: History },
         ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -63,7 +66,10 @@ export function Sidebar({
         <div className="flex items-center gap-1">
         <button
           onClick={onAddProject}
-          title="Add project"
+          // A viewer cannot create a project; the dialog's Save was rejected
+          // downstream with no feedback (#72).
+          disabled={readOnly}
+          title={readOnly ? "Read-only viewer — projects are created on the workstation" : "Add project"}
           className="rounded-md p-1 text-ink-soft transition hover:bg-brand/10 hover:text-ink"
         >
           <Plus size={16} />

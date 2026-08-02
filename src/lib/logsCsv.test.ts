@@ -37,8 +37,11 @@ describe("buildLogsCsv", () => {
     const lines = csv.trim().split("\n");
     expect(lines[0]).toContain("Sample ID");
     expect(lines).toHaveLength(3);
-    expect(lines[1]).toContain("EE-0001-A");
-    expect(lines[2]).toContain("EE-0001-B");
+    // Codes are STORED padded ("EE-0001-A") but exported in the display form
+    // users see in the app (#87).
+    expect(lines[1]).toContain("EE-1-A");
+    expect(lines[2]).toContain("EE-1-B");
+    expect(csv).not.toContain("EE-0001");
     expect(lines[1]).toContain("H&E");
     expect(lines[1]).toContain("2026-07-24 13:00"); // Analyzed stamp present
   });
@@ -56,7 +59,7 @@ describe("buildLogsCsv", () => {
     const csv = buildLogsCsv([{ sample: sample({ sample_code: "EE-0002" }), slides: [] }]);
     const lines = csv.trim().split("\n");
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain("EE-0002");
+    expect(lines[1]).toContain("EE-2");
   });
 
   it("labels an unstained extra and RFC-escapes commas/quotes", () => {

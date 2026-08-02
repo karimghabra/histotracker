@@ -3,7 +3,7 @@ import { Layers, Star } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { SlideStack } from "../lib/types";
 import { SECTION_STAGE_LABELS } from "../lib/stages";
-import { cn } from "../lib/utils";
+import { cn, displayCode, displayCodesInText } from "../lib/utils";
 
 export function StackCard({
   stack,
@@ -41,7 +41,7 @@ export function StackCard({
       <div className="flex items-center gap-1.5">
         <span className={cn("h-3.5 w-3.5 shrink-0 rounded border", selected ? "border-brand bg-brand" : "border-line bg-white")} />
         <Layers size={11} className="shrink-0 text-ink-faint" />
-        <span className="text-xs font-semibold text-ink">{stack.parent_code}</span>
+        <span className="text-xs font-semibold text-ink">{displayCode(stack.parent_code ?? "")}</span>
         {stack.kind === "stain" && (
           <span className="rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
             {memberSampleCount} {memberSampleCount === 1 ? "sample" : "samples"}
@@ -53,7 +53,9 @@ export function StackCard({
         </span>
       </div>
       <p className="mt-0.5 truncate pl-7 text-[10px] text-ink-soft">
-        {stack.slide_summary || SECTION_STAGE_LABELS[stack.current_stage] || stack.current_stage}
+        {displayCodesInText(stack.slide_summary ?? "") ||
+          SECTION_STAGE_LABELS[stack.current_stage] ||
+          stack.current_stage}
       </p>
     </div>
   );

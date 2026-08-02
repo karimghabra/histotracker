@@ -1,5 +1,49 @@
 # Histometer — Issue Remediation Plan
 
+> ## ⚠️ AUDIT CORRECTION — 2026-08-01
+>
+> An adversarial re-audit of everything marked "✅ fixed" below (two independent
+> passes per issue, the second tasked with breaking the first) found that **most
+> of these fixes do not actually work**. Of 16 audited: **3 genuinely resolved**
+> (#70, #78, #83), **3 partial** (#75, #82, #84), **10 not resolved**.
+>
+> Treat every "✅ fixed" claim in the sections below as UNVERIFIED unless it
+> appears in the resolved list above. The failures shared one shape — a narrow
+> patch at one call site while the underlying invariant stayed unenforced:
+>
+> - **#73** `deleteSlide()` freezes the slide-letter high-water mark, but
+>   `deleteSlidesForStack()` and `deleteSectionRequest()` do not. On a database
+>   upgraded from 0.6.x, deleting a stain rack reuses a burnt letter →
+>   `UNIQUE constraint failed` → a phantom cut group whose card can never be
+>   opened → and no undo, though the dialog promises one.
+> - **#81** there are **two** "Stained" checkboxes. The rack one was fixed; the
+>   section one (`SectionDetailsDrawer` → `syncAssayWorkflowStep`) writes to
+>   `slides`/`section_requests` and never touches `slide_stacks`, so the rack
+>   stays open and still absorbs the next sample — the reporter's bug verbatim.
+> - **#79** the drawer keeps draft state across a sample switch, so editing
+>   EE-1's description then clicking EE-2 and saving writes it onto **EE-2**.
+>   The fix for wrong descriptions now creates them.
+> - **#72** read-only gating is per-component opt-in, and a miss fails silently.
+> - **#74** `archived_at` is honoured by `listOpenSamples` only, so an archived
+>   block's cut group, extras and rack stay on the board.
+> - **#80** only the new-checklist labels were shortened; the editable Dried
+>   timeline row, both export columns, and legacy 3-item checklist runs remain.
+>
+> **Why the test suite did not catch this**, which matters more than any single
+> bug:
+> 1. `CLAUDE.md` requires mirroring `db.ts` changes into
+>    `scripts/workflow-test.mjs`. `deleteSlidesForStack`, `deleteSectionRequest`,
+>    `ensureSlidesForSectionRequest` and `syncAssayWorkflowStep` were never
+>    mirrored — which is exactly why #73 and #81 shipped green.
+> 2. Playwright does **not** run in CI (`.github/workflows/test.yml` runs only
+>    the harness), so every Playwright-only fix has zero enforced coverage.
+> 3. Two tests were vacuous: the #72 depth-tag case seeds zero slides so the
+>    control it "proves" absent could never render, and the #82 filter case puts
+>    both samples in one project so the filtered count equals the unfiltered one.
+>
+> A fix is not done until a test has been observed to FAIL without it.
+
+
 Covers the 11 open issues in `karimghabra/histotracker` (as of 2026-07-17).
 Each entry is anchored to the real code, states the root cause, the proposed
 fix, blast radius, effort, and how it's tested. A runnable regression harness

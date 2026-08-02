@@ -6,7 +6,7 @@ import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { cn, compareSlideCodes, sampleCodeVariants } from "../lib/utils";
+import { cn, compareSlideCodes, displayCode, sampleCodeVariants } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
@@ -141,6 +141,11 @@ function NotesEditor({
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
+  // A viewer READS notes; it must not appear to edit them. Gating here covers
+  // every use of this editor — the description, sample notes and slide notes —
+  // rather than three separate call-site checks, one of which would be missed
+  // (#72). Left editable, typing was accepted and silently discarded on blur.
+  const readOnly = useReadOnly();
   // Adopt external changes only while not editing, so a refetch can't clobber typing.
   useEffect(() => {
     if (!focused) setText(value ?? "");
@@ -150,11 +155,14 @@ function NotesEditor({
       aria-label={ariaLabel}
       value={text}
       rows={rows}
+      readOnly={readOnly}
+      title={readOnly ? "Read-only viewer — edited on the workstation" : undefined}
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
       onFocus={() => setFocused(true)}
       onBlur={() => {
         setFocused(false);
+        if (readOnly) return;
         if (text !== (value ?? "")) onSave(text);
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
@@ -725,7 +733,7 @@ function FragmentRow({
             {sample.is_priority ? (
               <Star size={11} aria-hidden className="shrink-0 fill-amber-400 text-amber-400" />
             ) : null}
-            {sample.sample_code}
+            {displayCode(sample.sample_code)}
             {hasNotes && (
               <span title="Has notes" aria-hidden className="text-ink-faint">
                 📝
@@ -789,14 +797,18 @@ function FragmentRow({
                   onClick={() => onRequestStain(sample.sample_code)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
                 >
-                  <Send size={13} /> Request stain for {sample.sample_code}
+                  <Send size={13} /> Request stain for {displayCode(sample.sample_code)}
                 </button>
               )}
               {/* Archive is a reversible hide, not a delete, and never renumbers
                   anything — so it asks first and says so plainly (#74). Hidden
                   on a viewer, which cannot write (#72). */}
               {!readOnly && <button
-                aria-label={sample.archived_at ? `Unarchive ${sample.sample_code}` : `Archive ${sample.sample_code}`}
+                aria-label={
+                  sample.archived_at
+                    ? `Unarchive ${displayCode(sample.sample_code)}`
+                    : `Archive ${displayCode(sample.sample_code)}`
+                }
                 onClick={() => {
                   if (sample.archived_at) {
                     void setArchived(sample.id, false);
@@ -804,9 +816,12 @@ function FragmentRow({
                   }
                   if (
                     confirm(
-                      `Archive ${sample.sample_code}?\n\n` +
-                        `It will be hidden from the board and the log, but nothing is deleted — ` +
-                        `tick "Show archived" to find it again and restore it.`,
+                      `Archive ${displayCode(sample.sample_code)}?\n\n` +
+                        `The block, its cut groups and its extra slides all leave the board, ` +
+                        `and the sample is hidden from this log. Nothing is deleted and no ` +
+                        `numbering changes — tick "Show archived" to find it again and restore it.\n\n` +
+                        `A shared staining rack stays put while it still holds another ` +
+                        `sample's slides.`,
                     )
                   ) {
                     void setArchived(sample.id, true);
@@ -815,7 +830,9 @@ function FragmentRow({
                 className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
               >
                 <Archive size={13} />
-                {sample.archived_at ? `Restore ${sample.sample_code}` : `Archive ${sample.sample_code}`}
+                {sample.archived_at
+                  ? `Restore ${displayCode(sample.sample_code)}`
+                  : `Archive ${displayCode(sample.sample_code)}`}
               </button>}
             </div>
 
@@ -832,7 +849,7 @@ function FragmentRow({
                   value={sample.sample_description ?? ""}
                   placeholder="Describe this sample…"
                   rows={1}
-                  ariaLabel={`Description for ${sample.sample_code}`}
+                  ariaLabel={`Description for ${displayCode(sample.sample_code)}`}
                   onSave={(text) => void editSampleDescription(sample.id, text)}
                 />
               </>
@@ -874,7 +891,7 @@ function FragmentRow({
                       <div className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-brand/5">
                         <input
                           type="checkbox"
-                          aria-label={`Select slide ${slide.slide_code}`}
+                          aria-label={`Select slide ${displayCode(slide.slide_code)}`}
                           checked={selectedSlideIds.has(slide.id)}
                           onChange={() => onToggleSlideSelect(slide.id)}
                           className="h-3 w-3 shrink-0 accent-[var(--color-brand)]"
@@ -885,7 +902,7 @@ function FragmentRow({
                           className="flex flex-1 items-center gap-2 text-left"
                         >
                           {slideOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                          <span className="font-medium text-ink">{slide.slide_code}</span>
+                          <span className="font-medium text-ink">{displayCode(slide.slide_code)}</span>
                           {slide.assay_type && (
                             <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
                               {slide.assay_type}

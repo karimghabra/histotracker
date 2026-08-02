@@ -9,6 +9,11 @@ import { fileURLToPath } from "node:url";
 // checks that it opens, keeps every row, repairs itself, and supports the new
 // features — no `?freshdb=1`, so the app is genuinely opening existing data.
 //
+// The legacy image STORES four-digit codes (EE-0001). #87 strips the zeros at
+// render time, so the UI shows EE-1 for a sample cut long before this build —
+// that retroactive display is asserted here, while the stored form is verified
+// unchanged by scripts/legacy-db-upgrade-test.mjs.
+//
 // Note this is the STRICTER of the two upgrade paths: the browser shim opens a
 // saved image WITHOUT re-running migrations, so `ensureRuntimeSchema()` alone has
 // to converge it — the same situation as an undo restore or a viewer sync pull.
@@ -46,14 +51,14 @@ test("an existing pre-0023 database opens in the new build with no data loss", a
   // The pre-existing project and its samples are all there.
   await expect(page.locator("aside").getByText("Enthesis Engineering")).toBeVisible();
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  for (const code of ["EE-0001", "EE-0002", "EE-0003"]) {
+  for (const code of ["EE-1", "EE-2", "EE-3"]) {
     await expect(page.getByRole("cell", { name: code, exact: true })).toBeVisible();
   }
 
   // Every original slide survived the upgrade, with its original code.
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
-  const codes = await page.locator("text=/^EE-0001-[A-Z]+$/").allTextContents();
-  expect(codes.sort()).toEqual(["EE-0001-A", "EE-0001-B", "EE-0001-C", "EE-0001-D"]);
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  const codes = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
+  expect(codes.sort()).toEqual(["EE-1-A", "EE-1-B", "EE-1-C", "EE-1-D"]);
 
   expect(pageErrors, `page errors:\n${pageErrors.join("\n")}`).toEqual([]);
   expect(consoleErrors, `console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
@@ -85,13 +90,13 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
 
   // #74 — archive a pre-existing sample, then bring it back.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0003", exact: true }).click();
-  await page.getByRole("button", { name: "Archive EE-0003" }).click();
-  await expect(page.getByRole("cell", { name: "EE-0003", exact: true })).toHaveCount(0, {
+  await page.getByRole("cell", { name: "EE-3", exact: true }).click();
+  await page.getByRole("button", { name: "Archive EE-3" }).click();
+  await expect(page.getByRole("cell", { name: "EE-3", exact: true })).toHaveCount(0, {
     timeout: 15000,
   });
   await page.getByLabel("Show archived").check();
-  await expect(page.getByRole("cell", { name: "EE-0003", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-3", exact: true })).toBeVisible();
   await page.getByLabel("Show archived").uncheck();
 
   // #73 — the legacy sample has A–D and slides_issued = 0 (never tracked). Delete
@@ -100,21 +105,21 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   const extras = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Extras", exact: true }) });
-  await extras.getByText("EE-0001").first().click();
-  await page.locator("label").filter({ hasText: "EE-0001-C" }).locator('input[type="checkbox"]').check();
+  await extras.getByText("EE-1").first().click();
+  await page.locator("label").filter({ hasText: "EE-1-C" }).locator('input[type="checkbox"]').check();
   await page.getByRole("button", { name: /Remove 1 slide/ }).click();
-  await expect(page.getByText("EE-0001-C")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText("EE-1-C")).toHaveCount(0, { timeout: 15000 });
 
   // Cut again on the legacy block.
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
-  const after = await page.locator("text=/^EE-0001-[A-Z]+$/").allTextContents();
-  expect(after).toContain("EE-0001-E");
-  expect(after).not.toContain("EE-0001-C");
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
+  expect(after).toContain("EE-1-E");
+  expect(after).not.toContain("EE-1-C");
   expect(new Set(after).size).toBe(after.length); // no duplicate codes
 });

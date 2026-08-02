@@ -3,7 +3,16 @@ import { Button, Field, Modal, Select, TextInput } from "./ui";
 import { useProjectMutations } from "../hooks/useData";
 import type { LabUser } from "../lib/types";
 
-export function NewProjectDialog({ users, onClose }: { users: LabUser[]; onClose: () => void }) {
+export function NewProjectDialog({
+  users,
+  onClose,
+  onCreated,
+}: {
+  users: LabUser[];
+  onClose: () => void;
+  /** Called with the new project's id so the caller can select it (#84). */
+  onCreated?: (projectId: number) => void;
+}) {
   const { create } = useProjectMutations();
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -18,7 +27,14 @@ export function NewProjectDialog({ users, onClose }: { users: LabUser[]; onClose
       return;
     }
     try {
-      await create.mutateAsync({ code, name, team_lead: lead.name, lead_user_id: lead.id, is_active: isActive });
+      const newId = await create.mutateAsync({
+        code, name, team_lead: lead.name, lead_user_id: lead.id, is_active: isActive,
+      });
+      // Select the project you just created (#84). Leaving the previous one
+      // active is how samples ended up filed under the wrong project: you make
+      // "Tendon Healing", the sidebar still highlights "Enthesis Engineering",
+      // and the next New Sample goes there.
+      if (typeof newId === "number") onCreated?.(newId);
       onClose();
     } catch (e) {
       setError(String(e).includes("UNIQUE") ? `Project code "${code}" already exists.` : String(e));

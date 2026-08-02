@@ -3,7 +3,7 @@ import { Layers, Star } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { SectionRequest } from "../lib/types";
 import { SECTION_STAGE_LABELS } from "../lib/stages";
-import { cn } from "../lib/utils";
+import { cn, displayCode, displayCodesInText } from "../lib/utils";
 
 /** Collapse a group's per-slide dispositions into a compact tally:
  *  "H&E · 3× Extra", "2× H&E · SafO · 2× Extra" (issue #63). */
@@ -58,9 +58,13 @@ export function SectionCard({
     : grouped.reduce((count, item) => count + (item.slide_count ?? 0), 0);
   // Needs-sectioning cards show a COMPACT tally — each agent once, with a count,
   // plus "N× Extra" — instead of repeating "Extra · Extra · Extra" (#63).
-  const visibleSummary = isDownstream
-    ? [...new Set(grouped.flatMap((item) => (item.assay_slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
-    : compactSummary(grouped);
+  // The summaries are SQL-composed and embed slide codes mid-string, so strip
+  // their leading zeros here rather than at a single anchored code (#87).
+  const visibleSummary = displayCodesInText(
+    isDownstream
+      ? [...new Set(grouped.flatMap((item) => (item.assay_slide_summary ?? "").split(" · ").filter(Boolean)))].join(" · ")
+      : compactSummary(grouped),
+  );
 
   return (
     <div
@@ -83,14 +87,14 @@ export function SectionCard({
         <input
           type="checkbox"
           checked={selected}
-          aria-label={`Select ${section.parent_code}`}
+          aria-label={`Select ${displayCode(section.parent_code ?? "")}`}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
           onChange={() => onToggle?.(grouped.map((item) => item.id))}
           className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
         />
         <Layers size={11} className="shrink-0 text-ink-faint" />
-        <span className="text-xs font-semibold text-ink">{section.parent_code}</span>
+        <span className="text-xs font-semibold text-ink">{displayCode(section.parent_code ?? "")}</span>
         {section.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}
         <span className="ml-auto text-[11px] font-medium text-ink-soft">
           {isGrouped
