@@ -6,6 +6,7 @@ import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { useActions } from "../hooks/useActions";
+import { pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
 import { cn, displayCode } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
@@ -233,10 +234,21 @@ export function SampleDetailsDrawer({
         {/* Cutting and stain requests are workstation actions. A viewer sees the
             cutting plan and existing tags, but cannot drive the bench (#72). */}
         {readOnly ? (
-          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-            Read-only viewer — cutting and stain requests are made on the workstation.
-            Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
-          </p>
+          <div className="mb-4">
+            {/* Which stains this block is WAITING ON is a read, and one a viewer
+                needs in order to decide whether to request anything. The first
+                pass buried it inside the workstation-only block below, so
+                viewers lost it (#72). */}
+            {sample.pending_stains && (
+              <p className="mb-1 text-[11px] text-brand">
+                Awaiting stains: {pendingStainNames(sample.pending_stains)}
+              </p>
+            )}
+            <p className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+              Read-only viewer — cutting and stain requests are made on the workstation.
+              Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
+            </p>
+          </div>
         ) : (
         <>
         <div className="mb-4">
@@ -248,7 +260,7 @@ export function SampleDetailsDrawer({
           </Button>
           {sample.pending_stains && (
             <p className="mt-1 text-[11px] text-brand">
-              Stains preselected ({sample.pending_stains}) — the cut is prefilled and ready.
+              Stains preselected ({pendingStainNames(sample.pending_stains)}) — the cut is prefilled and ready.
             </p>
           )}
         </div>

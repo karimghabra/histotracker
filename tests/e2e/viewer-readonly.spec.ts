@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 // #72 — a viewer should SEE cutting plans and existing tags, and nothing more.
 // The data layer already rejects viewer writes (guardWrites in db.ts), so the
@@ -68,6 +69,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
   await page.mouse.move(dropX, dropY, { steps: 10 });
   await page.mouse.move(dropX, dropY + 2, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 async function seedWorkstation(ws: Page) {
@@ -319,6 +322,76 @@ test("#72: a viewer with real slides still cannot tag a depth", async ({ browser
   await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
   await ws.getByRole("checkbox", { name: /Select slide/ }).first().check();
   await expect(ws.getByRole("button", { name: /Tag depth/ })).toBeVisible();
+
+  await wsCtx.close();
+  await vwCtx.close();
+});
+
+// #72 — a READ must never depend on a WRITE.
+//
+// listSlidesForSections calls ensureSlidesForSectionRequest, which INSERTs the
+// slides of a cut group that has none. On a viewer guardWrites rejects that
+// INSERT, and the rejection propagates out of the *read*, so useSectionsSlides
+// fails and the drawer falls back to `slides = []`. Because the loop runs over
+// every grouped cut group, ONE uninitialised sibling blanked the slide rows of
+// every populated group on the card — destroying the exact read #72 promises
+// viewers ("see cutting plans and existing tags"). Invisible from the bench,
+// because the workstation is allowed to write and so repairs the row on open.
+test("#72: an uninitialised sibling cut group does not blank the viewer's slide list", async ({
+  browser,
+}) => {
+  const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `ro5-${Date.now()}`);
+  await ws.goto("/?freshdb=1");
+  await seedWorkstation(ws);
+
+  // Plant the pre-0.4.6 shape the UI cannot produce any more: one cut group
+  // holding real slides, and a sibling with duplicates > 0 and no slides at all.
+  // (ensureSlidesForSectionRequest exists precisely to serve those legacy rows.)
+  await ws.evaluate(() => {
+    const sql = (window as unknown as Record<string, unknown>).__SHIM_SQL__ as (
+      q: string,
+      p?: unknown[],
+    ) => void;
+    sql(
+      `INSERT INTO section_requests (id, sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
+       VALUES (901, 1, 2, 'H&E', 'needs_sectioning', '2026-01-01 09:00:00')`,
+    );
+    for (const [ordinal, code] of [[1, "EE-1-A"], [2, "EE-1-B"]] as Array<[number, string]>) {
+      sql(
+        `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+                             assay_type, assay_name, assignment_saved, current_stage)
+         VALUES (901, ?, ?, 'stain', 'H&E', 'stain', 'H&E', 1, 'assigned')`,
+        [ordinal, code],
+      );
+    }
+    // The sibling: legacy, never initialised, still claims a plan.
+    sql(
+      `INSERT INTO section_requests (id, sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
+       VALUES (902, 1, 1, '', 'needs_sectioning', '2026-01-01 09:00:00')`,
+    );
+  });
+  // NOT reload(): the page URL still carries ?freshdb=1, which makes the shim
+  // drop the database on load and would wipe both the seed and the planted rows.
+  await ws.goto("/");
+
+  await vw.goto("/?freshdb=1");
+  await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
+  await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
+
+  // The viewer opens the grouped Needs Sectioning card. Scope to the column —
+  // the block itself is also on the board and carries the same "EE-1" text.
+  await column(vw, "Needs Sectioning").getByText("EE-1", { exact: true }).first().click();
+  await expect(vw.getByRole("heading", { name: "Assay slides" })).toBeVisible({ timeout: 15000 });
+  await expect(vw.getByText("EE-1-A", { exact: true })).toBeVisible();
+  await expect(vw.getByText("EE-1-B", { exact: true })).toBeVisible();
+
+  // No read-only banner either: the read must not have attempted a write.
+  await expect(vw.getByText(/read-only viewer — changes are made/i)).toHaveCount(0);
+
+  // The workstation shows the same rows, so the assertion above is meaningful
+  // rather than incidental.
+  await column(ws, "Needs Sectioning").getByText("EE-1", { exact: true }).first().click();
+  await expect(ws.getByText("EE-1-A", { exact: true })).toBeVisible({ timeout: 15000 });
 
   await wsCtx.close();
   await vwCtx.close();

@@ -504,6 +504,26 @@ Second pass — the remaining eight, all now fixed:
   surfaced from the Extras inventory drawer. Harness gates: `issue #73` ×2, both
   verified to fail without the fix; Playwright drives the reporter's exact
   "delete C → next is E" sequence.
+
+  *0.7.3 addendum — the total-delete case.* Restricting the initialiser to
+  sections with **no** slides fixed removing some of them but left removing
+  **all** of them broken, because emptying a group restores the very condition
+  the initialiser fires on (`existing_count = 0`). The group came back at its
+  original size on the next open, with fresh letters each time, so reopening the
+  card burned the letter sequence without bound. `duplicates` is now recomputed
+  from the live rows on every removal path (`deleteSlide`,
+  `deleteSlidesForStack`) and `0` is read as "the bench removed everything",
+  not "never initialised" — legacy rows still carry the column's
+  `NOT NULL DEFAULT 1` and initialise as before. Recomputed rather than
+  decremented so a database that already drifted self-corrects. Undo is
+  unaffected: it restores a whole DB image, so `duplicates` returns with the
+  slides. Gate: `issue #83`, observed failing without the fix.
+
+  That fix on its own traded a resurrecting group for a dead one — an emptied
+  group has no `HAVING` clause hiding it, so it sat in Needs Sectioning as "×0".
+  `deleteSectionRequestIfEmpty` (called from `removeSlides`, alongside the
+  `deleteSlideStackIfEmpty` that racks already had) removes the group with its
+  last slide. Second `issue #83` gate, also observed failing without it.
 - **#74 — archive samples · ✅ fixed.** `samples.archived_at` (same migration).
   `listOpenSamples` hides archived blocks; the Logs view hides them behind a
   **Show archived** toggle, badges them, and offers Archive/Restore with a

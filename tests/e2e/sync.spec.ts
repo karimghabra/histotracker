@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 // Verifies the workstation → viewer sync end to end: two ISOLATED browser
 // contexts (each with its own local SQLite image in its own localStorage) share
@@ -111,6 +112,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
   await page.mouse.move(dropX, dropY, { steps: 10 });
   await page.mouse.move(dropX, dropY + 2, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 // Open a fresh workstation + viewer pair against a shared fake remote.

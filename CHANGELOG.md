@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.7.3 - 2026-08-02
+
+Follow-up to 0.7.2, from a second review pass over the same code. Fixes one more
+data-integrity bug, restores a read that 0.7.2 took away from viewers by mistake,
+and closes the last unmirrored gap in the test harness. **No schema change** —
+no migration, no new columns.
+
+**Data integrity**
+
+- **Removing *every* slide from a cut group put them all back.** 0.7.2 stopped
+  the initialiser from topping a group up, but only when the group still had
+  slides in it — emptying one restored the exact condition the initialiser fires
+  on, so the group reappeared at its original size on the next open, with new
+  letters each time. Repeatedly opening an emptied card burned the sample's
+  letter sequence without bound. The planned count now follows removals down, so
+  "remove them all" is an instruction the database actually keeps. Removing a
+  group's last slide also removes the now-empty group, instead of leaving a "×0"
+  card in Needs Sectioning claiming a cut that would produce nothing — the rule
+  slide racks already followed.
+- **A failed cut left a phantom group behind.** `createSectionRequests` writes
+  across two tables with no transaction; a failure part-way through left a group
+  claiming more slides than it held, which could not be opened and therefore
+  could not be deleted either. It now unwinds what it created.
+
+**Viewer mode**
+
+- **Viewers could not see the cutting plan.** The 0.7.2 read-only work hid the
+  whole slide list instead of just its controls, contradicting what #72 asks for.
+  The plan, existing tags, and the "awaiting stains" line are visible again; the
+  controls stay disabled.
+- **...and un-hiding it was not enough.** The drawer's slide list is fetched by a
+  read that calls the initialiser, which *writes*. On a viewer that write is
+  refused, and the refusal came out of the **read** — so a single cut group with
+  no slides blanked the slide rows of every group on the card. The initialiser is
+  a workstation-side repair and now simply does not run on a viewer.
+- A viewer no longer runs the timed processing auto-advance, which was firing a
+  refused write on mount and every 60 seconds and flashing a "read-only viewer"
+  banner nobody had triggered — over the top of real messages like sync errors.
+- "Confirm start" on a planned processing run is no longer offered to viewers.
+
+**Smaller fixes**
+
+- The "Duplicate" column in the section drawer took its letter from the
+  per-section ordinal, which restarts at 1 for each cut group, so slides in the
+  second group were mislabelled. It now reads the slide code (#75).
+- Ctrl-click in the imaging queue could select across two columns at once (#82).
+- The batch paste box kept showing stale lines after the quantity changed, and
+  now warns when the number of lines does not match the number of samples (#86).
+  The warning and the rows below it now agree on what a line is: a blank line
+  inside a pasted column used to shift every following description onto the wrong
+  sample and drop the last one, while the warning stayed silent because it only
+  counted non-empty lines. A trailing newline — what a spreadsheet copy always
+  ends with — still counts as nothing.
+- Grouped cut groups listed their slides interleaved (A, C, B, D) because the
+  ordinal restarts at 1 in each group. Same fix the Logs view already had (#75).
+- The preselected-stains line printed its raw JSON at the user in three places.
+- The collapsed sidebar showed no indication of which project was active (#84).
+- The matcha theme rendered dark form controls on its light background (#78).
+
+**Test harness**
+
+- `syncAssayWorkflowStep` was the fourth workflow query never mirrored into
+  `workflow-test.mjs`, which is why #81 shipped green twice. Mirrored, with a
+  gate observed failing against the old lookup.
+- The legacy-upgrade test's copy of `ensureRuntimeSchema` had itself drifted. It
+  now reads `db.ts` and fails if any converged column is missing — which
+  immediately turned up four it was not applying.
+- Fixed `highestLetterOrdinal` reading a malformed code as a base-26 letter
+  (`"not-a-code"` returned 62977, which would have thrown the slide-letter mark
+  far into the future). Letters must now follow a numeric segment.
+- The #81 data-repair gate could not fail: the harness still described racks by
+  the 0.7.2 stack-column rule, so it passed whether or not the app implemented
+  the fix. Both hand ports now match the shipped rule, with a gate built through
+  the cut-group checkboxes — the path the old rule could not see — that fails
+  against the old implementation.
+- **The intermittent end-to-end failure is understood and fixed.** dnd-kit keeps
+  a capture-phase click swallower alive for 50 ms after every drop, and the drag
+  helper returned the instant the mouse came up, so the next click was a coin
+  flip: dispatched on the right button, no error, nothing happened. Eleven specs
+  carried retry loops and forced clicks blaming background refetches and
+  re-render churn; that diagnosis was wrong. They now wait for clicks to
+  propagate again. The suite runs clean with retries disabled.
+
+**Known, deliberately not changed**
+
+- A cut group emptied under 0.7.0–0.7.2 still refills itself once on its first
+  open under 0.7.3, then stays removed. Distinguishing those rows from genuine
+  pre-0.4.6 cut groups is not possible — they are the identical row — and
+  guessing wrong would permanently destroy a real cutting plan. See
+  `docs/audit_0_7_3.md`.
+
 ## 0.7.2 - 2026-08-01
 
 Re-does the 0.7.0/0.7.1 fixes properly. An adversarial audit found most of them

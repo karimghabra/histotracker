@@ -11,6 +11,7 @@ import {
   deleteSlide,
   deleteSlideStack,
   deleteSlideStackIfEmpty,
+  deleteSectionRequestIfEmpty,
   deleteSlidesForStack,
   restoreDbPreservingSession,
   getSample,
@@ -570,17 +571,22 @@ export function useActions() {
   const removeSlides = useCallback(
     async (slideIds: number[]) => {
       if (slideIds.length === 0) return;
-      // Capture the parent stacks so we can drop any that go empty.
+      // Capture the parent stacks AND cut groups so we can drop any that go
+      // empty — read them before the delete, since afterwards the slide rows
+      // that point at them are gone (#83).
+      const parents = await Promise.all(slideIds.map(getSlide));
       const stackIds = [
+        ...new Set(parents.map((slide) => slide?.stack_id).filter((id): id is number => id != null)),
+      ];
+      const sectionIds = [
         ...new Set(
-          (await Promise.all(slideIds.map(getSlide)))
-            .map((slide) => slide?.stack_id)
-            .filter((id): id is number => id != null),
+          parents.map((slide) => slide?.section_request_id).filter((id): id is number => id != null),
         ),
       ];
       await commit(`Delete ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"}`, async () => {
         for (const id of slideIds) await deleteSlide(id);
         for (const id of stackIds) await deleteSlideStackIfEmpty(id);
+        for (const id of sectionIds) await deleteSectionRequestIfEmpty(id);
       });
     },
     [commit],

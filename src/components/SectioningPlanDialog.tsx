@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, Plus, Scissors, X } from "lucide-react";
 import { Button, Modal } from "./ui";
-import { parsePreselectedStains } from "../lib/db";
+import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import type { Sample } from "../lib/types";
 import { cn, displayCode } from "../lib/utils";
 
@@ -179,7 +179,7 @@ export function SectioningPlanDialog({
 
       {preselected && (
         <p className="mb-3 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          Prefilled from {displayCode(current.sample_code)}'s preselected stains ({current.pending_stains}).
+          Prefilled from {displayCode(current.sample_code)}'s preselected stains ({pendingStainNames(current.pending_stains)}).
         </p>
       )}
 

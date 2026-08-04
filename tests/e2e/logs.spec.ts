@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 async function seedSampleWithSlides(page: Page) {
   await page.goto("/?freshdb=1");
@@ -58,6 +59,8 @@ async function drag(page: Page, src: string, col: string) {
   await page.mouse.move(t.x + t.width / 2, t.y + 140, { steps: 10 });
   await page.mouse.move(t.x + t.width / 2, t.y + 142, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 test("Logs: table, drill-down, and stain filter", async ({ page }) => {

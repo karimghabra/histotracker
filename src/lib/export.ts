@@ -10,7 +10,7 @@ import {
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
-import { displayCode, duplicateLabel, todayIso } from "./utils";
+import { displayCode, slideLetterOf, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
 
@@ -76,7 +76,8 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Project", (row) => row.project_code ?? ""],
   ["Sample ID", (row) => displayCode(row.parent_code ?? "")],
   ["Slide ID", (row) => displayCode(row.slide_code)],
-  ["Duplicate", (row) => duplicateLabel(row.slide_ordinal)],
+  // From the CODE, not slide_ordinal — the latter restarts per cut group (#75).
+  ["Duplicate", (row) => slideLetterOf(row.slide_code)],
   ["Purpose", (row) => row.purpose],
   ["Slices", (row) => String(row.slice_count)],
   ["Control Slice", (row) => row.control_agent],

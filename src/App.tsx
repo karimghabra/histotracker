@@ -177,7 +177,17 @@ export default function App() {
   }, []);
 
   // Timed processing auto-advance on mount and every minute.
+  //
+  // Workstation only. A viewer holds overdue rows routinely — it advances only
+  // when the workstation republishes, so for a minute or two after every run
+  // completes the viewer's copy is stale. Ticking there means autoAdvance's
+  // UPDATE is refused by guardWrites, and since tick() is called bare the
+  // rejection is unhandled: the global handler then flashes "read-only viewer"
+  // in the header every 60s for an action nobody took, masking real messages
+  // like "Sync error" that share that slot. Gated like useBackupScheduler and
+  // useIdleLogout above.
   useEffect(() => {
+    if (isViewer) return;
     const tick = async () => {
       const moved = await autoAdvanceProcessingRuns();
       if (moved > 0) {
@@ -188,7 +198,7 @@ export default function App() {
     tick();
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [qc]);
+  }, [qc, isViewer]);
 
   // Global undo/redo shortcuts (ignored while typing in a field).
   useEffect(() => {

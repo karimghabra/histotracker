@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 async function drag(page: Page, src: string, col: string) {
   const card = page.getByText(src, { exact: true }).first();
@@ -12,6 +13,8 @@ async function drag(page: Page, src: string, col: string) {
   await page.mouse.move(t.x + t.width / 2, t.y + 140, { steps: 10 });
   await page.mouse.move(t.x + t.width / 2, t.y + 142, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 async function seedAndEmbed(page: Page) {

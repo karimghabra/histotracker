@@ -389,7 +389,8 @@ function makeApi(db) {
   function highestLetterOrdinal(codes) {
     let highest = 0;
     for (const code of String(codes ?? "").split(",")) {
-      const suffix = /-([A-Za-z]+)$/.exec(code.trim())?.[1];
+      // Letters must follow a numeric segment — see db.ts.
+      const suffix = /\d[^-]*-([A-Za-z]+)$/.exec(code.trim())?.[1];
       if (!suffix) continue;
       let ordinal = 0;
       for (const ch of suffix.toUpperCase()) ordinal = ordinal * 26 + (ch.charCodeAt(0) - 64);
@@ -425,13 +426,45 @@ function makeApi(db) {
   // Port of deleteSlide() — db.ts. Deliberately a BARE delete now: the mark is
   // authoritative, so nothing here has to compensate.
   function deleteSlide(slideId) {
+    const owner = get(`SELECT section_request_id AS s FROM slides WHERE id = ?`, [slideId]);
     run(`DELETE FROM slides WHERE id = ?`, [slideId]);
+    if (owner?.s != null) syncSectionDuplicates(owner.s);
+  }
+  // Port of syncSectionDuplicates() — db.ts. The planned count has to follow the
+  // slides down, or emptying a group re-creates the initialiser's trigger
+  // condition and the group refills itself on the next open (#83).
+  function syncSectionDuplicates(sectionId) {
+    run(`UPDATE section_requests
+            SET duplicates = (SELECT COUNT(*) FROM slides WHERE section_request_id = ?)
+          WHERE id = ?`, [sectionId, sectionId]);
+  }
+  // Port of deleteSectionRequestIfEmpty() — db.ts. Same rule racks already had.
+  function deleteSectionRequestIfEmpty(sectionId) {
+    run(`DELETE FROM section_requests
+          WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE section_request_id = ?)`,
+        [sectionId, sectionId]);
+  }
+  // Port of removeSlides() — useActions.ts. The ORDER matters: the parent ids
+  // have to be read before the delete, because afterwards nothing points at them.
+  function removeSlides(slideIds) {
+    const sectionIds = [...new Set(slideIds
+      .map((id) => get(`SELECT section_request_id AS s FROM slides WHERE id = ?`, [id])?.s)
+      .filter((id) => id != null))];
+    for (const id of slideIds) deleteSlide(id);
+    for (const id of sectionIds) deleteSectionRequestIfEmpty(id);
   }
   // Ports of deleteSlidesForStack() and deleteSectionRequest() — db.ts. These
   // were NEVER mirrored, which is exactly why #73 shipped green: the gates only
   // ever exercised deleteSlide.
   function deleteSlidesForStack(stackId) {
+    const affected = all(
+      `SELECT DISTINCT section_request_id AS s FROM slides
+        WHERE stack_id = ? AND section_request_id IS NOT NULL`, [stackId]);
     run(`DELETE FROM slides WHERE stack_id = ?`, [stackId]);
+    for (const row of affected) {
+      syncSectionDuplicates(row.s);
+      deleteSectionRequestIfEmpty(row.s);
+    }
   }
   function deleteSectionRequest(sectionId) {
     run(`DELETE FROM slides WHERE section_request_id = ?`, [sectionId]);
@@ -447,8 +480,10 @@ function makeApi(db) {
          FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`, [id]);
     if (!row) return;
     if (row.existing_count > 0) return;
+    // 0 means "the bench removed every slide", not "never initialised" (#83).
+    if (row.duplicates <= 0) return;
     let nextLetter = nextSlideLetter(row.sample_id);
-    for (let ordinal = 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
+    for (let ordinal = 1; ordinal <= row.duplicates; ordinal += 1) {
       run(`INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose,
                                assignment_saved, current_stage)
            VALUES (?, ?, ?, 'extra', 1, 'extra')`,
@@ -473,6 +508,18 @@ function makeApi(db) {
           AND stage_refrax_at IS NULL
           AND stage_coverslipped_at IS NULL
           AND stage_dried_at IS NULL
+          -- …and no MEMBER SLIDE has been worked on. The stack columns above are
+          -- written only by the rack drawer's checkboxes; the cut-group drawer's
+          -- stamp slides instead, so a rack advanced that way still looked open
+          -- (#81). The slides are what every path must write.
+          AND NOT EXISTS (
+            SELECT 1 FROM slides sl
+             WHERE sl.stack_id = slide_stacks.id AND sl.purpose = 'stain'
+               AND (sl.stage_stained_at IS NOT NULL
+                 OR sl.stage_refrax_at IS NOT NULL
+                 OR sl.stage_coverslipped_at IS NOT NULL
+                 OR sl.stage_dried_at IS NOT NULL)
+          )
         ORDER BY id ASC LIMIT 1`,
       [assayType, assayName]);
   }
@@ -710,6 +757,24 @@ function makeApi(db) {
     }
   }
 
+  // Port of syncAssayWorkflowStep() step 0 — src/lib/db.ts. This is the SECOND
+  // "Stained" checkbox: the one in the CUT GROUP drawer. It stamps slides and
+  // section_requests and deliberately never touches slide_stacks.
+  //
+  // It was never mirrored here, and that omission is precisely why #81 shipped
+  // green twice: every gate exercised the rack checkbox, so the rack's columns
+  // were always the ones set, and a rack lookup keyed on those columns looked
+  // correct. Mirroring it is what makes the gate below able to fail.
+  function tickSectionStainedCheckbox(sectionRequestId, assayType = "stain") {
+    const ts = now();
+    run(
+      `UPDATE slides SET stage_stained_at = ?
+        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+      [ts, sectionRequestId, assayType]);
+    const sectionColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
+    run(`UPDATE section_requests SET ${sectionColumn} = ? WHERE id = ?`, [ts, sectionRequestId]);
+  }
+
   // Port of syncAssayStackWorkflowStep() step 0 — src/lib/db.ts. This is the
   // "Stained / IHC complete" protocol CHECKBOX. It deliberately stamps only the
   // substage timestamp and leaves current_stage at 'stain_requested' (the stack
@@ -731,7 +796,9 @@ function makeApi(db) {
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
+    tickSectionStainedCheckbox,
     deleteSlide, nextSlideLetter, deleteSlidesForStack, deleteSectionRequest,
+    deleteSectionRequestIfEmpty, removeSlides,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
     requestStainForSample, snapshotDb, restoreDb,
@@ -901,18 +968,39 @@ function reconcileStainRequests(api) {
 function splitContaminatedStainRacks(api) {
   const done = api.get(`SELECT value FROM schema_meta WHERE key = 'stain_racks_split_81'`);
   if (done && done.value === "1") return;
+  // Keyed off the MEMBER SLIDES, not the stack columns. The cut-group drawer's
+  // checkboxes (syncAssayWorkflowStep) stamp slides without touching
+  // slide_stacks, so a rack contaminated through that path has all-NULL stack
+  // columns; the old stack-column form here skipped it entirely and the gate
+  // below passed under BOTH the fixed and the broken rule.
   const contaminated = api.all(
     `SELECT ss.id, ss.assay_type, ss.assay_name
        FROM slide_stacks ss
       WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
         AND ss.current_stage = 'stain_requested'
-        AND (ss.stage_stained_at IS NOT NULL OR ss.stage_ihc_at IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM slides w
+                     WHERE w.stack_id = ss.id AND w.purpose = 'stain'
+                       AND (w.stage_stained_at IS NOT NULL
+                         OR w.stage_refrax_at IS NOT NULL
+                         OR w.stage_coverslipped_at IS NOT NULL
+                         OR w.stage_dried_at IS NOT NULL))
         AND EXISTS (SELECT 1 FROM slides sl
                      WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
-                       AND sl.stage_stained_at IS NULL)`);
+                       AND sl.stage_stained_at IS NULL
+                       AND sl.stage_refrax_at IS NULL
+                       AND sl.stage_coverslipped_at IS NULL
+                       AND sl.stage_dried_at IS NULL)`);
   for (const rack of contaminated) {
+    // A stray has NO substage work of its own. Testing stage_stained_at alone
+    // would evict a member that was coverslipped or dried but never stained —
+    // a slide db.ts deliberately keeps.
     const strays = api.all(
-      `SELECT id FROM slides WHERE stack_id = ? AND purpose = 'stain' AND stage_stained_at IS NULL`,
+      `SELECT id FROM slides
+        WHERE stack_id = ? AND purpose = 'stain'
+          AND stage_stained_at IS NULL
+          AND stage_refrax_at IS NULL
+          AND stage_coverslipped_at IS NULL
+          AND stage_dried_at IS NULL`,
       [rack.id]);
     if (!strays.length) continue;
     const fresh = Number(api.run(
@@ -958,6 +1046,59 @@ issue(81, "an already-merged rack is split on open (data translation)", () => {
   splitContaminatedStainRacks(api);
   eq(api.all(`SELECT id FROM slide_stacks WHERE kind = 'stain' AND assay_name = 'SafO'`).length, 2,
      "re-run is a no-op");
+});
+
+// #81 — the case that actually distinguishes the fixed rule from the broken one.
+//
+// The gate above builds its fixture with tickStainedCheckbox (the RACK drawer),
+// which stamps slide_stacks — so the old stack-column predicate matched it too
+// and the gate passed under BOTH implementations. Build the same contamination
+// through the CUT-GROUP drawer instead: syncAssayWorkflowStep stamps only the
+// slides, leaving the rack's own stage_* columns NULL, which the old rule could
+// not see at all. Also covers the stray test: a member that was coverslipped but
+// never stained is real work and must NOT be evicted.
+issue(81, "a rack contaminated via the cut-group checkboxes is repaired too", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "worked via section drawer"); api.markEmbedded(a.id);
+  const b = api.addSample(p, "EE", "coverslipped, never stained"); api.markEmbedded(b.id);
+  const c = api.addSample(p, "EE", "genuine newcomer"); api.markEmbedded(c.id);
+
+  const rack = stainOneSlide(api, a.id, "stain", "SafO");
+  const sectionOf = (sampleId) => api.get(
+    `SELECT sl.section_request_id AS s FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.purpose = 'stain' ORDER BY sl.id LIMIT 1`, [sampleId]).s;
+
+  // A is worked from the cut-group drawer: slides stamped, rack columns NULL.
+  api.tickSectionStainedCheckbox(sectionOf(a.id), "stain");
+  eq(api.get(`SELECT stage_stained_at FROM slide_stacks WHERE id = ?`, [rack]).stage_stained_at, null,
+     "precondition: the rack's own columns stay NULL on the cut-group path");
+
+  // B and C are then merged into A's rack, as an existing database already holds.
+  for (const sample of [b, c]) {
+    const rackX = stainOneSlide(api, sample.id, "stain", "SafO");
+    const slide = api.get(
+      `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ? AND sl.purpose = 'stain' ORDER BY sl.id LIMIT 1`, [sample.id]);
+    api.run(`UPDATE slides SET stack_id = ? WHERE id = ?`, [rack, slide.id]);
+    api.run(`DELETE FROM slide_stacks WHERE id = ?`, [rackX]);
+    // B carries real work that never touched stage_stained_at.
+    if (sample === b) {
+      api.run(`UPDATE slides SET stage_coverslipped_at = '2026-01-02 10:00' WHERE id = ?`, [slide.id]);
+    }
+  }
+
+  splitContaminatedStainRacks(api);
+
+  const survivors = api.all(
+    `SELECT slide_code AS c FROM slides WHERE stack_id = ? ORDER BY slide_code`, [rack]).map((r) => r.c);
+  eq(survivors.length, 2,
+     "the worked member and the coverslipped one both stay; only the newcomer leaves");
+  const cSlide = api.get(
+    `SELECT sl.stack_id AS s FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.purpose = 'stain' ORDER BY sl.id LIMIT 1`, [c.id]);
+  assert(cSlide.s !== rack, "the genuine newcomer moved to a fresh rack");
 });
 
 invariant("preselected stains auto-plan on embed: N stains + max(2, 4-N) extras (#1/#4)", () => {
@@ -1265,6 +1406,106 @@ issue(73, "removing a middle slide leaves the cut group openable", () => {
   eq(codes.join(","), "EE-0001-A,EE-0001-C", "the removed slide stays removed");
 });
 
+// #83 — the "only initialise an EMPTY section" guard fixed the partial-delete
+// case but left the total-delete case wide open: emptying a cut group puts
+// existing_count back to 0, which is exactly the condition that makes the
+// initialiser fire. So removing every slide from a group RESURRECTED the group
+// at its original size on the next open — and with fresh letters each time, so
+// repeatedly opening the card burned the sample's letter sequence without limit.
+// The planned count has to come down as slides are removed, or "remove them all"
+// is an instruction the database quietly refuses.
+issue(83, "emptying a cut group does not refill it on the next open", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "empty the group");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
+
+  for (const row of api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [section])) {
+    api.deleteSlide(row.id);
+  }
+  eq(api.get(`SELECT duplicates AS d FROM section_requests WHERE id = ?`, [section]).d, 0,
+     "the planned count follows the slides down to zero");
+
+  api.ensureSlidesForSectionRequest(section);
+  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ?`, [section]).n, 0,
+     "an emptied cut group stays empty");
+
+  // ...and the letter sequence is not advanced by the open either.
+  api.ensureSlidesForSectionRequest(section);
+  eq(api.get(`SELECT slides_issued AS n FROM samples WHERE id = ?`, [id]).n, 3,
+     "reopening an emptied group does not burn further letters");
+});
+
+// #83 — and the emptied group must not linger. A cut group with no slides shows
+// as "×0" in Needs Sectioning: a cut that claims to be pending but would produce
+// nothing. Racks already had this rule (deleteSlideStackIfEmpty); cut groups
+// did not, so the fix above traded a resurrecting group for a dead card.
+issue(83, "removing the last slide removes the empty cut group with it", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "remove the lot");
+  api.markEmbedded(id);
+  const [keep, drop] = api.createSectionRequests(id, [{ duplicates: 2 }, { duplicates: 1 }]);
+
+  // Emptying the second group removes it; the first is untouched.
+  api.removeSlides(api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [drop]).map((r) => r.id));
+  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [drop]).n, 0,
+     "the emptied cut group is gone");
+  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [keep]).n, 1,
+     "a group that still holds slides survives");
+
+  // Partially emptying the survivor must NOT remove it.
+  api.removeSlides([api.get(`SELECT id FROM slides WHERE section_request_id = ? LIMIT 1`, [keep]).id]);
+  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [keep]).n, 1,
+     "a partly-emptied group is kept");
+  eq(api.get(`SELECT duplicates AS d FROM section_requests WHERE id = ?`, [keep]).d, 1,
+     "and its planned count tracks what is left");
+});
+
+// #75 — a grouped Needs-Sectioning card shows several cut groups in ONE list.
+// slide_ordinal restarts at 1 in every group, so ordering by it across groups
+// interleaves them: a twice-cut block read A, C, B, D. listAllSlides was fixed
+// for the Logs view; the drawer's own query was not, and had no mirror here.
+issue(75, "slides from several cut groups list in cut order, not interleaved", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "twice cut");
+  api.markEmbedded(id);
+  const [first, second] = api.createSectionRequests(id, [{ duplicates: 2 }, { duplicates: 2 }]);
+
+  // The drawer's query, verbatim from listSlidesForSections.
+  const codes = api.all(
+    `SELECT slide_code AS c FROM slides WHERE section_request_id IN (?, ?)
+      ORDER BY section_request_id, slide_ordinal, id`, [first, second]).map((r) => r.c);
+  eq(codes.join(","), "EE-0001-A,EE-0001-B,EE-0001-C,EE-0001-D",
+     "each cut group's slides stay together, in letter order");
+});
+
+// #83 — the SECOND removal path. Wiring the cleanup into removeSlides alone left
+// "Delete slide stack" emptying a group without deleting it, so the two paths
+// disagreed on the same slides in the same drawer. Reachable without any cut
+// stage change: Request Stain moves a needs_sectioning group's extras into a
+// rack, and deleting that rack takes the group's last slides with it.
+issue(83, "deleting a rack that holds a group's last slides removes the group too", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "rack takes the lot");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+
+  // Both extras go into the H&E rack; the cut group stays at needs_sectioning.
+  api.requestStainForSample(id, "stain", "H&E");
+  api.requestStainForSample(id, "stain", "H&E");
+  const stack = api.get(`SELECT DISTINCT stack_id AS s FROM slides WHERE section_request_id = ?`,
+                        [section]);
+  eq(stack?.s != null, true, "both extras really joined a rack");
+
+  api.deleteSlidesForStack(stack.s);
+  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [section]).n, 0,
+     "the emptied cut group is gone, not left as a ×0 card");
+});
+
 // #73 — the mark must survive delete paths that were NEVER mirrored into this
 // harness (which is why the original fix shipped green). Deleting a whole stain
 // rack, or a whole cut group, must not hand a live letter to the next cut.
@@ -1315,6 +1556,55 @@ issue(73, "the letter mark is backfilled from existing codes on open", () => {
   const d = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-D'`);
   api.deleteSlide(d.id);
   eq(api.nextSlideLetter(id), 5, "the next letter is still E after deleting D");
+});
+
+// #73 — the letter-mark backfill reads slide CODES, and a long-lived database
+// contains the pre-0.3.3 format too: lowercase, with a depth segment
+// ("EE-0001-D01-a"). Those must contribute their real letter, not zero, or the
+// mark would be under-set on exactly the oldest samples.
+issue(73, "the letter mark understands legacy slide-code formats", () => {
+  const api = makeApi(freshDb());
+  eq(api.highestLetterOrdinal("EE-0001-C"), 3, "modern single letter");
+  eq(api.highestLetterOrdinal("EE-0001-AA"), 27, "modern double letter");
+  eq(api.highestLetterOrdinal("EE-0001-D01-a"), 1, "pre-0.3.3 depth format, lowercase");
+  eq(api.highestLetterOrdinal("EE-0001-D01-ab"), 28, "pre-0.3.3 double letter");
+  eq(api.highestLetterOrdinal("EE-0001-D01-a,EE-0001-D02-d,EE-0001-B"), 4, "max across mixed formats");
+  eq(api.highestLetterOrdinal(""), 0, "empty contributes nothing");
+  eq(api.highestLetterOrdinal("not-a-code"), 0, "unparseable contributes nothing");
+});
+
+// #81 — the SECOND "Stained" checkbox. The cut-group drawer's protocol runs
+// through syncAssayWorkflowStep, which stamps slides and section_requests and
+// never touches slide_stacks — so a rack advanced THAT way had all-NULL stack
+// columns and kept absorbing new samples, exactly as originally reported. The
+// first fix only covered the rack drawer's checkbox; every gate used that one,
+// which is why it passed. Rack state is now derived from the member slides.
+issue(81, "a rack stained from the CUT GROUP drawer also stops taking newcomers", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "stained via section"); api.markEmbedded(a.id);
+  const b = api.addSample(p, "EE", "arrives after"); api.markEmbedded(b.id);
+
+  const [sectionA] = api.createSectionRequests(a.id, [{ duplicates: 1 }]);
+  api.sectionToAssignment(sectionA);
+  const slideA = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [sectionA]);
+  api.assignSlide(slideA.id, "stain", "stain", "SafO");
+  api.startAssayWork(sectionA);
+  const rackA = api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slideA.id]).stack_id;
+
+  // Tick "Stained" in the CUT GROUP drawer, not the rack drawer.
+  api.tickSectionStainedCheckbox(sectionA, "stain");
+  const rackRow = api.get(`SELECT * FROM slide_stacks WHERE id = ?`, [rackA]);
+  eq(rackRow.stage_stained_at, null,
+     "precondition: this path leaves the RACK columns untouched — the trap");
+  assert(api.get(`SELECT stage_stained_at FROM slides WHERE id = ?`, [slideA.id]).stage_stained_at,
+     "precondition: the SLIDE carries the stamp");
+
+  // A newcomer must NOT join that rack.
+  const rackB = stainOneSlide(api, b.id, "stain", "SafO");
+  assert(rackB !== rackA, "the later sample starts its own rack");
+  eq(api.all(`SELECT id FROM slides WHERE stack_id = ?`, [rackA]).length, 1,
+     "the stained rack keeps only its own slide");
 });
 
 // #74 — archiving must clear the board, not just the block tile. The shipped fix

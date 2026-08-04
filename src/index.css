@@ -251,7 +251,7 @@
 :root[data-theme="lavender"], :root[data-theme="rose"], :root[data-theme="sunset"],
 :root[data-theme="mint"], :root[data-theme="solarized"], :root[data-theme="arctic"],
 :root[data-theme="sakura"], :root[data-theme="citrus"], :root[data-theme="parchment"],
-:root[data-theme="candy"] { color-scheme: light; }
+:root[data-theme="candy"], :root[data-theme="matcha"] { color-scheme: light; }
 
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {

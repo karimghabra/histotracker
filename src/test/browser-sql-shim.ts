@@ -90,6 +90,17 @@ export default class Database {
     }
     db.run("PRAGMA foreign_keys = ON;");
     const instance = new Database(path, db);
+    // Test-only escape hatch: lets a spec plant a row shape the UI cannot
+    // produce — e.g. a pre-0.4.6 cut group with `duplicates > 0` and no slides,
+    // which is what the read-from-a-write viewer bug needs. This file is aliased
+    // in ONLY by vite.config.playwright.ts, so it never reaches a shipped build.
+    (window as unknown as Record<string, unknown>).__SHIM_SQL__ = (
+      sql: string,
+      params?: unknown[],
+    ) => {
+      db.run(sql, normalizeBinds(params) as never);
+      instance.persist();
+    };
     instance.persist();
     return instance;
   }

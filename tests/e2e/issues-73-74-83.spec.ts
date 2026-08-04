@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 // #73 / #83 (removing slides without recycling their letters) and #74 (archiving
 // a sample) driven through the real UI.
@@ -44,6 +45,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
   await page.mouse.move(dropX, dropY, { steps: 10 });
   await page.mouse.move(dropX, dropY + 2, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 async function embed(page: Page, code: string, batchLabel: string) {

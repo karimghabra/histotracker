@@ -69,6 +69,18 @@ export function displayCode(code: string): string {
 }
 
 /**
+ * The letter a slide actually carries, taken from its code ("EE-0001-C" → "C").
+ *
+ * Not `duplicateLabel(slide_ordinal)`: slide_ordinal is a PER-SECTION counter
+ * that restarts at 1 for every cut group, so the second group's slides reported
+ * "Duplicate A, B" while their codes read E, F (#75). The code is the label the
+ * bench wrote on the physical slide, so it is the authority.
+ */
+export function slideLetterOf(slideCode: string): string {
+  return /-([A-Za-z]+)$/.exec((slideCode ?? "").trim())?.[1]?.toUpperCase() ?? "";
+}
+
+/**
  * Strip leading zeros from EVERY code embedded in a longer string.
  *
  * Some summaries are composed in SQL — `slide_summary` is a GROUP_CONCAT like
@@ -143,4 +155,21 @@ export function compareSlideCodes(a: string, b: string): number {
     left.label.length - right.label.length ||
     left.label.localeCompare(right.label, undefined, { sensitivity: "base" })
   );
+}
+
+/**
+ * Split a pasted description column into one entry per sample.
+ *
+ * Blank lines are KEPT in place, because the paste is positional — line 3 is
+ * sample 3, and silently closing a gap shifts every following description onto
+ * the wrong sample. Trailing blanks are dropped: a spreadsheet column copy ends
+ * in a newline, and counting it would report a mismatch on the commonest paste.
+ *
+ * Both the per-sample rows and the mismatch warning read this one list, so they
+ * cannot disagree about what a "line" is (#86).
+ */
+export function normalizePastedLines(text: string): string[] {
+  const lines = (text ?? "").split("\n").map((line) => line.trim());
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }

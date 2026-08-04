@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 // Real end-to-end drive of the lab workflow in the actual app, used to verify
 // the sectioning/processing issues (#35, #36, #40, #41, #42, #37) against the
@@ -60,6 +61,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
   await page.mouse.move(dropX, dropY, { steps: 10 });
   await page.mouse.move(dropX, dropY + 2, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 // Advance a freshly-created block all the way to Embedded Inventory.

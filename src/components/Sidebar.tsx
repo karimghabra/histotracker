@@ -111,8 +111,14 @@ export function Sidebar({
               )}
             >
               {collapsed ? (
-                <span className={cn("text-xs", active ? "font-bold text-ink" : "font-semibold")}>
-                  {p.code.slice(0, 3).toUpperCase()}
+                // Collapsed, the only cue used to be a 3-letter code with no
+                // active marker at all — so the sidebar gave no answer to "which
+                // project will this sample go into?" (#84). Show a dot.
+                <span className="flex items-center gap-1">
+                  {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-strong" />}
+                  <span className={cn("text-xs", active ? "font-bold text-ink" : "font-semibold")}>
+                    {p.code.slice(0, 3).toUpperCase()}
+                  </span>
                 </span>
               ) : <span className="min-w-0">
                 <span className={cn("block truncate text-sm", active ? "font-bold" : "font-medium")}>

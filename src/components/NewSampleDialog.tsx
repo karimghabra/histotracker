@@ -4,6 +4,7 @@ import { useActions } from "../hooks/useActions";
 import { useAssayCatalog } from "../hooks/useData";
 import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
+import { normalizePastedLines } from "../lib/utils";
 import type { Project, ProcessingType } from "../lib/types";
 
 /**
@@ -45,6 +46,24 @@ export function NewSampleDialog({
   // in the batch its own. Off by default, so existing behaviour is unchanged.
   const [perSample, setPerSample] = useState(false);
   const [descriptions, setDescriptions] = useState<string[]>([]);
+  const [pasted, setPasted] = useState("");
+
+  // ONE normalisation, shared by the rows below and by the mismatch warning.
+  //
+  // They used to disagree: the splitter mapped positionally (blank lines
+  // included) while the warning counted only non-empty lines. A leading or
+  // interior blank — routine when copying a spreadsheet column — therefore
+  // shifted every description down by one and dropped the tail, and the warning
+  // stayed silent because the non-empty count still matched. Trailing blanks are
+  // stripped rather than counted, because an Excel column copy ends in a newline
+  // and counting it would fire a warning on the commonest paste there is.
+  const pastedLines = normalizePastedLines(pasted);
+
+  useEffect(() => {
+    if (pastedLines.length === 0) return;
+    setDescriptions(Array.from({ length: quantity }, (_, i) => pastedLines[i] ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pasted, quantity]);
   // Agents ticked for this sample (issue #1). Keyed "type::name".
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [cutNotes, setCutNotes] = useState("");
@@ -143,16 +162,25 @@ export function NewSampleDialog({
             <div className="mt-2">
               {/* Typing 20 fields one at a time is the thing a technician will
                   refuse to do — they already have the column in a spreadsheet. */}
+              {/* Controlled, and re-split whenever Quantity changes. Left
+                  uncontrolled, raising the quantity after pasting kept showing
+                  every pasted line while silently leaving the new rows blank. */}
               <textarea
                 aria-label="Paste one description per line"
                 rows={2}
+                value={pasted}
                 placeholder="Optional: paste one description per line to fill the list below"
-                onChange={(e) => {
-                  const lines = e.target.value.split("\n").map((l) => l.trim());
-                  if (lines.some(Boolean)) setDescriptions(lines.slice(0, quantity));
-                }}
+                onChange={(e) => setPasted(e.target.value)}
                 className="mb-2 w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
               />
+              {pastedLines.length > 0 && pastedLines.length !== quantity && (
+                <p className="mb-2 text-[11px] text-amber-700">
+                  {pastedLines.length} line(s) pasted for {quantity} sample(s)
+                  {pastedLines.length > quantity
+                    ? " — the extra lines are ignored."
+                    : " — the rest fall back to the shared description."}
+                </p>
+              )}
               <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
                 {Array.from({ length: quantity }, (_, i) => {
                   const code = codeAt(previewCode, i);

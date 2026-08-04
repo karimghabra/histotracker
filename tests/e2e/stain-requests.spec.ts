@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { settleAfterDrop } from "../helpers/drag";
 
 // Stain-request cluster (#41 / #62 / #66): the "needs stain" flag on an embedded
 // block and the Send-for-Cutting prefill are driven by an OUTSTANDING-requests
@@ -21,6 +22,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
   await page.mouse.move(dropX, dropY, { steps: 10 });
   await page.mouse.move(dropX, dropY + 2, { steps: 3 });
   await page.mouse.up();
+  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  await settleAfterDrop(page);
 }
 
 async function boot(page: Page) {

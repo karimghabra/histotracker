@@ -535,7 +535,11 @@ export function Board({
       setSelectedStacks(new Set(rangeSelection(queueOrder, stackAnchor.current, id)));
     } else if (event.ctrlKey || event.metaKey) {
       setSelectedStacks((current) => {
-        const next = new Set(current);
+        // Ctrl-clicking into a DIFFERENT column starts a fresh selection, so a
+        // batch action can never span Staining and Ready for Imaging (#82). The
+        // block column already behaves this way.
+        const sameQueue = [...current].every((stackId) => queueOrder.includes(stackId));
+        const next = sameQueue ? new Set(current) : new Set<number>();
         if (next.has(id)) next.delete(id);
         else next.add(id);
         return next;
@@ -872,7 +876,12 @@ export function Board({
                           batch={batch}
                           selected={selectedBatch === batch.id}
                           onSelect={handleSelectBatch}
-                          onConfirmStart={onConfirmProcessingBatchStart}
+                          // Withheld from viewers, like onTogglePriority below:
+                          // ProcessingBatchRow renders the button whenever the
+                          // prop is present, so a viewer got a full-colour
+                          // "Confirm start" that only ever produced an error
+                          // banner (#72).
+                          onConfirmStart={readOnly ? undefined : onConfirmProcessingBatchStart}
                         />
                       ))}
                       {items.map((sample) => (

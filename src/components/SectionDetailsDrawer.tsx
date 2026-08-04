@@ -8,7 +8,7 @@ import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/u
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { useReadOnly } from "../lib/readOnly";
-import { displayCode, duplicateLabel } from "../lib/utils";
+import { displayCode, slideLetterOf } from "../lib/utils";
 
 const STATUS_ONLY_STAGES = new Set(["needs_sectioning", "assignment_required", "stain_requested"]);
 
@@ -21,10 +21,13 @@ function SlideAssignmentRow({
   slide,
   catalog,
   onDraftChange,
+  readOnly = false,
 }: {
   slide: Slide;
   catalog: Array<{ assay_type: "stain" | "ihc"; name: string }>;
   onDraftChange: (slideId: number, draft: AssignmentDraft) => void;
+  /** A viewer reads the plan; it cannot reassign a slide (#72). */
+  readOnly?: boolean;
 }) {
   const savedSelection =
     slide.purpose === "stain"
@@ -41,7 +44,7 @@ function SlideAssignmentRow({
       <div className="mb-1 flex items-center justify-between">
         <span className="text-xs font-semibold text-ink">{displayCode(slide.slide_code)}</span>
         <span className="text-[10px] uppercase tracking-wide text-ink-faint">
-          Duplicate {duplicateLabel(slide.slide_ordinal)}
+          Duplicate {slideLetterOf(slide.slide_code)}
         </span>
       </div>
       <p className="mb-1.5 text-[10px] text-ink-faint">
@@ -50,6 +53,8 @@ function SlideAssignmentRow({
       <div>
         <select
           value={selection}
+          disabled={readOnly}
+          aria-label={`Purpose for ${displayCode(slide.slide_code)}`}
           onChange={(event) => {
             const next = event.target.value;
             setSelection(next);
@@ -226,7 +231,11 @@ export function SectionDetailsDrawer({
           </div>
         )}
 
-        {showAssignments && !readOnly && (
+        {/* Viewers SEE this section — issue #72 asks for read-only mode to "let
+            users see cutting plans", and this is the cutting plan. Only the
+            controls inside are disabled. Hiding the whole block, as the first
+            pass did, took away a read the viewer is explicitly promised. */}
+        {showAssignments && (
           <section className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
@@ -236,6 +245,7 @@ export function SectionDetailsDrawer({
                 {slides.filter((slide) => slide.assignment_saved === 1).length}/{slides.length} saved
               </span>
             </div>
+            {!readOnly && (
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-[11px] text-ink-faint">
                 {allAssigned && dirtyCount === 0
@@ -269,12 +279,14 @@ export function SectionDetailsDrawer({
                 Save All
               </Button>
             </div>
+            )}
             <div className="space-y-1.5">
               {slides.map((slide) => (
                 <SlideAssignmentRow
                   key={slide.id}
                   slide={slide}
                   catalog={assayCatalog}
+                  readOnly={readOnly}
                   onDraftChange={(slideId, draft) =>
                     setDrafts((current) => ({ ...current, [slideId]: draft }))
                   }

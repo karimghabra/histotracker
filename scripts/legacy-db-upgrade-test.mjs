@@ -53,24 +53,71 @@ function ensureColumn(db, table, column, type) {
   if (cols.includes(column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
-// Port of ensureRuntimeSchema()'s 0023 lines.
+// Port of ensureRuntimeSchema() — src/lib/db.ts. A FULL mirror, not just the
+// columns this fixture happens to lack: ensureColumn is idempotent, and keeping
+// the whole list here is what lets the drift guard below insist on a match.
 function ensureRuntimeSchema(db) {
+  ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
+  ensureColumn(db, "samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "slides", "depth_label", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "slides", "depth_note", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "samples", "slides_issued", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "samples", "archived_at", "TEXT");
+}
+
+/**
+ * DRIFT GUARD for the port above.
+ *
+ * This file is a SECOND hand-port of ensureRuntimeSchema (the harness has the
+ * first). A column added to db.ts but not mirrored here would leave this test
+ * quietly asserting the wrong contract — and the whole point of it is to prove
+ * that an existing database converges. Rather than trust anyone to remember,
+ * read db.ts and require every converged column to appear here too.
+ */
+function assertPortMatchesSource() {
+  const dbSource = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  const guard = /async function ensureRuntimeSchema[\s\S]*?\n}/.exec(dbSource)?.[0] ?? "";
+  if (!guard) throw new Error("could not find ensureRuntimeSchema in db.ts");
+  const wanted = [...guard.matchAll(/ensureColumn\(\s*db,\s*"([^"]+)",\s*"([^"]+)"/g)]
+    .map((m) => `${m[1]}.${m[2]}`);
+  const portSource = readFileSync(join(HERE, "legacy-db-upgrade-test.mjs"), "utf8");
+  const ported = /function ensureRuntimeSchema[\s\S]*?\n}/.exec(portSource)?.[0] ?? "";
+  const missing = wanted.filter((col) => {
+    const [table, column] = col.split(".");
+    return !new RegExp(`"${table}",\\s*"${column}"`).test(ported);
+  });
+  if (missing.length) {
+    throw new Error(
+      `ensureRuntimeSchema port is out of date — missing ${missing.join(", ")}. ` +
+      `Add it here so this test still proves what it claims.`,
+    );
+  }
 }
 // Port of splitContaminatedStainRacks() — src/lib/db.ts.
 function splitContaminatedStainRacks(db) {
   const done = db.prepare(`SELECT value FROM schema_meta WHERE key = 'stain_racks_split_81'`).get();
   if (done && done.value === "1") return;
   const contaminated = db.prepare(
+    // Keyed off the SLIDES, matching db.ts: the cut-group drawer's checkboxes
+    // stamp slides without touching slide_stacks, so a rack contaminated that
+    // way has all-NULL stack columns (#81).
     `SELECT ss.id, ss.assay_type, ss.assay_name FROM slide_stacks ss
       WHERE ss.kind = 'stain' AND ss.closed_at IS NULL AND ss.current_stage = 'stain_requested'
-        AND (ss.stage_stained_at IS NOT NULL OR ss.stage_ihc_at IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM slides w WHERE w.stack_id = ss.id AND w.purpose = 'stain'
+                      AND (w.stage_stained_at IS NOT NULL OR w.stage_refrax_at IS NOT NULL
+                        OR w.stage_coverslipped_at IS NOT NULL OR w.stage_dried_at IS NOT NULL))
         AND EXISTS (SELECT 1 FROM slides sl WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
-                      AND sl.stage_stained_at IS NULL)`).all();
+                      AND sl.stage_stained_at IS NULL AND sl.stage_refrax_at IS NULL
+                      AND sl.stage_coverslipped_at IS NULL AND sl.stage_dried_at IS NULL)`).all();
   for (const rack of contaminated) {
+    // All four substage columns, matching db.ts. Testing stage_stained_at alone
+    // evicts a member that was coverslipped or dried but never stained — a slide
+    // the shipped code keeps in the rack it travelled through the reagents with.
     const strays = db.prepare(
-      `SELECT id FROM slides WHERE stack_id = ? AND purpose = 'stain' AND stage_stained_at IS NULL`,
+      `SELECT id FROM slides
+        WHERE stack_id = ? AND purpose = 'stain'
+          AND stage_stained_at IS NULL AND stage_refrax_at IS NULL
+          AND stage_coverslipped_at IS NULL AND stage_dried_at IS NULL`,
     ).all(rack.id);
     if (!strays.length) continue;
     db.prepare(
@@ -107,6 +154,9 @@ console.log("\nPATH A — plugin-sql applies migration 0023 to the existing file
   const { db } = openCopy("patha");
   const before = db.prepare(`SELECT COUNT(*) AS n FROM slides`).get().n;
   db.exec(readFileSync(MIGRATION_0023, "utf8")); // must not throw on populated data
+  check("this file's ensureRuntimeSchema port is still in step with db.ts", () => {
+    assertPortMatchesSource();
+  });
   check("migration 0023 applies cleanly to a populated database", () => {
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("slides_issued"), "slides_issued added");

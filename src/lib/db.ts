@@ -1773,7 +1773,10 @@ async function nextSlideLetter(db: Database, sampleId: number): Promise<number> 
 function highestLetterOrdinal(codes: string): number {
   let highest = 0;
   for (const code of codes.split(",")) {
-    const suffix = /-([A-Za-z]+)$/.exec(code.trim())?.[1];
+    // The letters must follow a NUMERIC segment — "EE-0001-C", or the pre-0.3.3
+    // "EE-0001-D01-a". Matching a bare trailing word would read "not-a-code" as
+    // the letter "code" (ordinal 62977) and shove the mark into the far future.
+    const suffix = /\d[^-]*-([A-Za-z]+)$/.exec(code.trim())?.[1];
     if (!suffix) continue;
     let ordinal = 0;
     for (const ch of suffix.toUpperCase()) ordinal = ordinal * 26 + (ch.charCodeAt(0) - 64);
@@ -1854,6 +1857,16 @@ export async function createSectionRequests(
   // Slide letters run per sample across all its slides, and are never reused
   // once issued (#73).
   let nextOrdinal = await nextSlideLetter(db, sampleId);
+  // COMPENSATION. This loop writes several rows across two tables with no
+  // transaction, so a failure part-way used to leave a half-built cut group
+  // behind — and the failure was reachable: before the allocator fix a reused
+  // letter threw on UNIQUE(slide_code) mid-loop, leaving a section that claimed
+  // N slides but held fewer. That group's card could not be opened, so it could
+  // not be deleted either. Undo does not help, because commit() only records the
+  // undo entry AFTER the mutation returns. If anything throws, unwind what this
+  // call created so the database is left exactly as it was found.
+  const createdSections: number[] = [];
+  try {
   for (const g of groups) {
     const count = Math.max(1, g.duplicates);
     const preassigned = Boolean(g.assay_type && g.assay_name);
@@ -1863,6 +1876,10 @@ export async function createSectionRequests(
        VALUES (?, ?, ?, 'needs_sectioning', ?)`,
       [sampleId, count, g.stains ?? (preassigned ? g.assay_name : "") ?? "", timestamp],
     );
+    // A section_requests row may already exist even when no id came back, so
+    // record it for cleanup BEFORE deciding whether to continue — skipping
+    // straight to the next group is what orphaned it.
+    if (res.lastInsertId != null) createdSections.push(res.lastInsertId);
     if (res.lastInsertId == null) continue;
     const sectionId = res.lastInsertId;
     ids.push(sectionId);
@@ -1891,6 +1908,16 @@ export async function createSectionRequests(
       }
       nextOrdinal += 1;
     }
+  }
+  } catch (error) {
+    // Unwind newest-first so slides go before their section.
+    for (const sectionId of [...createdSections].reverse()) {
+      await db.execute(`DELETE FROM slides WHERE section_request_id = ?`, [sectionId])
+        .catch(() => undefined);
+      await db.execute(`DELETE FROM section_requests WHERE id = ?`, [sectionId])
+        .catch(() => undefined);
+    }
+    throw error;
   }
   // Burn every letter this cut consumed so a later deletion can't hand one back.
   await recordSlidesIssued(db, sampleId, nextOrdinal - 1);
@@ -1974,6 +2001,19 @@ export function buildAutoSectioningPlan(
 }
 
 /** Parse a sample's stored preselected stains (JSON), tolerating empty/legacy. */
+/**
+ * The preselected agents as a human-readable list ("CD3, H&E").
+ *
+ * `pending_stains` is a JSON blob (listOpenSamples stringifies it), so rendering
+ * the column directly prints `[{"assay_type":"ihc","assay_name":"CD3"}]` at the
+ * user. Three separate places did that; this is the one way to say it.
+ */
+export function pendingStainNames(raw: string | null | undefined): string {
+  return parsePreselectedStains(raw)
+    .map((a) => a.assay_name)
+    .join(", ");
+}
+
 export function parsePreselectedStains(
   raw: string | null | undefined,
 ): Array<{ assay_type: string; assay_name: string }> {
@@ -2056,6 +2096,15 @@ export async function getSectionRequest(id: number): Promise<SectionRequest | nu
 }
 
 async function ensureSlidesForSectionRequest(id: number): Promise<void> {
+  // A viewer must never write — but this is called from READ paths
+  // (listSlidesForSectionRequest / listSlidesForSections). Letting it try the
+  // INSERT means guardWrites rejects, and the rejection propagates out of the
+  // *read*, so the drawer falls back to an empty list. One uninitialised group
+  // would blank the slide rows of every group on the card — destroying exactly
+  // the read #72 promises viewers ("see cutting plans and existing tags").
+  // The initialiser is a workstation-side repair; on a viewer, show what exists.
+  if (viewerReadOnly) return;
+
   const db = await getDb();
   const rows = await db.select<
     Array<{ duplicates: number; sample_id: number; sample_code: string; existing_count: number }>
@@ -2090,11 +2139,18 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   // by remembering to compensate at each delete site.
   if (row.existing_count > 0) return;
 
+  // An emptied group is NOT an uninitialised one. `duplicates` is kept in step
+  // with removals (syncSectionDuplicates), so 0 here means "the bench removed
+  // every slide" — refilling it would undo that, and would do so again on every
+  // open. Legacy rows that genuinely predate eager creation still carry the
+  // column's `NOT NULL DEFAULT 1`, so they initialise as before (#83).
+  if (row.duplicates <= 0) return;
+
   // New slides continue the sample's letter sequence (A, B, …), never reusing a
   // letter a deleted slide already consumed (#73).
   let nextLetter = await nextSlideLetter(db, row.sample_id);
   const cutAt = nowTimestamp();
-  for (let ordinal = 1; ordinal <= Math.max(1, row.duplicates); ordinal += 1) {
+  for (let ordinal = 1; ordinal <= row.duplicates; ordinal += 1) {
     await db.execute(
       `INSERT INTO slides
         (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage, stage_cut_at)
@@ -2124,7 +2180,11 @@ export async function listSlidesForSections(sectionIds: number[]): Promise<Slide
   const db = await getDb();
   const placeholders = sectionIds.map(() => "?").join(", ");
   return db.select<Slide[]>(
-    `SELECT * FROM slides WHERE section_request_id IN (${placeholders}) ORDER BY slide_ordinal, id`,
+    // section_request_id FIRST: slide_ordinal restarts at 1 in every cut group,
+    // so ordering by it across several groups interleaves them — a twice-cut
+    // block listed A, C, B, D (#75). Same correction as listAllSlides.
+    `SELECT * FROM slides WHERE section_request_id IN (${placeholders})
+      ORDER BY section_request_id, slide_ordinal, id`,
     sectionIds,
   );
 }
@@ -2168,7 +2228,7 @@ export async function listStainSlidesForSections(sectionIds: number[]): Promise<
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
       WHERE sl.section_request_id IN (${placeholders}) AND sl.purpose = 'stain'
-      ORDER BY sl.slide_ordinal, sl.id`,
+      ORDER BY sl.section_request_id, sl.slide_ordinal, sl.id`,
     sectionIds,
   );
 }
@@ -2694,7 +2754,23 @@ export async function completeSlideStackImaging(stackId: number): Promise<number
 
 export async function deleteSlidesForStack(stackId: number): Promise<void> {
   const db = await getDb();
+  // Collect the affected cut groups BEFORE the delete — afterwards there is no
+  // row left to tell us which ones to resync (#83).
+  const affected = await db.select<Array<{ section_request_id: number }>>(
+    `SELECT DISTINCT section_request_id FROM slides
+      WHERE stack_id = ? AND section_request_id IS NOT NULL`,
+    [stackId],
+  );
   await db.execute(`DELETE FROM slides WHERE stack_id = ?`, [stackId]);
+  for (const row of affected) {
+    await syncSectionDuplicates(db, row.section_request_id);
+    // ...and drop the group if that emptied it. Wiring this into removeSlides
+    // alone left the two removal paths disagreeing: deleting a rack's slides one
+    // by one removed the group, while "Delete slide stack" — the same slides,
+    // the same drawer — left a "×0" card behind. Doing it here means every
+    // caller inherits the rule instead of each having to remember it.
+    await deleteSectionRequestIfEmpty(row.section_request_id);
+  }
 }
 
 export interface ExtraSlideAssignResult {
@@ -2973,8 +3049,8 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
  */
 export async function deleteSlide(id: number): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ sample_id: number }>>(
-    `SELECT sr.sample_id FROM slides sl
+  const rows = await db.select<Array<{ sample_id: number; section_request_id: number }>>(
+    `SELECT sr.sample_id, sr.id AS section_request_id FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ?`,
     [id],
@@ -2984,6 +3060,33 @@ export async function deleteSlide(id: number): Promise<void> {
     await recordSlidesIssued(db, sampleId, await nextSlideLetter(db, sampleId) - 1);
   }
   await db.execute(`DELETE FROM slides WHERE id = ?`, [id]);
+  if (rows[0]?.section_request_id != null) {
+    await syncSectionDuplicates(db, rows[0].section_request_id);
+  }
+}
+
+/**
+ * Bring a cut group's planned count back in line with the slides it actually
+ * holds, after a removal.
+ *
+ * Restricting `ensureSlidesForSectionRequest` to empty sections fixed removing
+ * SOME slides but left removing ALL of them broken, because emptying a group
+ * restores the very condition the initialiser fires on: the group came back at
+ * its original size on the next open, with fresh letters each time, so reopening
+ * the card burned the sample's letter sequence without bound (#83). `duplicates`
+ * is also what the card and drawer print as "×N", so a stale value was showing a
+ * plan the bench had already deviated from.
+ *
+ * Recomputed from the live rows rather than decremented, so it self-corrects on
+ * databases that already drifted instead of preserving the error.
+ */
+async function syncSectionDuplicates(db: Database, sectionId: number): Promise<void> {
+  await db.execute(
+    `UPDATE section_requests
+        SET duplicates = (SELECT COUNT(*) FROM slides WHERE section_request_id = ?)
+      WHERE id = ?`,
+    [sectionId, sectionId],
+  );
 }
 
 /** Mark every assay slide in a section as imaged for bulk imaging completion. */
@@ -3212,6 +3315,38 @@ export async function deleteSectionRequest(id: number): Promise<void> {
   );
   await db.execute(`DELETE FROM slides WHERE section_request_id = ?`, [id]);
   await db.execute(`DELETE FROM section_requests WHERE id = ?`, [id]);
+}
+
+/**
+ * Drop a cut group once its last slide is gone (#83) — the same rule
+ * `deleteSlideStackIfEmpty` already applies to racks.
+ *
+ * Without this, removing every extra from a group left a "×0" card sitting in
+ * Needs Sectioning: a cut that claims to be pending but would produce nothing.
+ * Undo restores a whole DB image, so this is reversible along with the removal
+ * that triggered it.
+ */
+export async function deleteSectionRequestIfEmpty(id: number): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute(
+    `DELETE FROM section_requests
+      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE section_request_id = ?)`,
+    [id, id],
+  );
+  if (result.rowsAffected > 0) {
+    await db.execute(
+      `DELETE FROM checklist_items
+        WHERE checklist_run_id IN (
+          SELECT id FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?
+        )`,
+      [id],
+    );
+    await db.execute(
+      `DELETE FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?`,
+      [id],
+    );
+  }
+  return result.rowsAffected > 0;
 }
 
 export async function reinsertSlide(snapshot: Slide): Promise<void> {
