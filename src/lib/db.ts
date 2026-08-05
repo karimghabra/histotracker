@@ -595,6 +595,19 @@ export async function nextSampleCode(projectId: number, projectCode: string): Pr
 // ---- Samples ----------------------------------------------------------------
 
 export async function addSample(input: NewSampleInput, projectCode: string): Promise<number> {
+  // #88 — a sample without a description is unidentifiable at the bench and
+  // nobody ever goes back to fill one in, so the batch entered last month stays
+  // anonymous for good. Enforced HERE, at the one place samples are created,
+  // rather than only in the dialog: the dialog's Create button is the thing a
+  // future entry point would forget to reproduce, and this is the invariant the
+  // 0.7.2 review said to fix at the choke point rather than the call site.
+  //
+  // Only NEW samples. Existing blank descriptions are left alone — they are
+  // editable from the Logs row and the sample drawer (#79), and refusing to open
+  // a database because of a row written last year would be absurd.
+  if (!input.sample_description.trim()) {
+    throw new Error("Every sample needs a description.");
+  }
   const db = await getDb();
   const timestamp = nowTimestamp();
   const number = await nextSampleNumber(input.project_id);

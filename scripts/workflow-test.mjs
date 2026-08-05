@@ -124,6 +124,12 @@ function makeApi(db) {
 
   // Port of addSample() — src/lib/db.ts
   function addSample(projectId, projectCode, description, opts = {}) {
+    // Port of addSample()'s description guard — src/lib/db.ts (#88). A sample
+    // with no description is unidentifiable at the bench and nobody goes back to
+    // fill one in.
+    if (!String(description ?? "").trim()) {
+      throw new Error("Every sample needs a description.");
+    }
     const number = nextSampleNumber(projectId);
     // Port of formatSampleCode() — src/lib/utils.ts. STORAGE stays zero-padded
     // to four digits; #87 strips the zeros at RENDER time only (displayCode).
@@ -2305,6 +2311,46 @@ invariant("a removed slide leaves every working view and stays in the record", (
   const parsed = JSON.parse(event.d);
   eq(parsed.slide_id, victim.id, "the timeline entry names the slide it removed");
   eq(parsed.reason, "dropped on the floor", "and carries the reason the user gave");
+});
+
+// #88 — a description was optional at every level: the field could be blank, a
+// per-sample row could be blank, and a blank row fell back to a blank shared
+// value, so "Same as above" resolved to nothing at all. The fallback logic was
+// always right; nothing required the chain to terminate. Enforced at addSample —
+// the single place samples are created — so a future entry point inherits it
+// instead of having to remember the dialog's Create-button check.
+issue(88, "a sample cannot be created without a description", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  for (const blank of ["", "   ", "\n"]) {
+    let threw = null;
+    try { api.addSample(p, "EE", blank); } catch (err) { threw = err.message; }
+    assert(threw != null, `a blank description (${JSON.stringify(blank)}) must be refused`);
+  }
+  eq(api.get(`SELECT COUNT(*) AS n FROM samples`).n, 0, "no half-created rows are left behind");
+  // ...and the numbering is untouched by the refusals, so the first real sample
+  // is still EE-0001 rather than EE-0004.
+  eq(api.addSample(p, "EE", "a real description").code, "EE-0001",
+     "refused attempts do not burn sample numbers");
+});
+
+// #88 — the dialog is the other half: it must refuse BEFORE the write, naming
+// which samples are blank. A batch of 20 rows in a scroll box makes "something
+// is missing" useless, and a thrown error after the fact loses the whole form.
+invariant("the new-sample dialog blocks Create until every sample has a description", () => {
+  const dialog = readFileSync(join(HERE, "..", "src", "components", "NewSampleDialog.tsx"), "utf8");
+  assert(/missingCodes/.test(dialog), "the dialog must compute which samples are still blank");
+  assert(/disabled=\{saving \|\| missingCodes\.length > 0\}/.test(dialog),
+    "Create must be disabled while any sample would be created blank");
+  assert(/if \(missingCodes\.length > 0\) return;/.test(dialog),
+    "save() must re-check — a disabled button is presentation, not a guard");
+  // #86 — the per-sample rows are the primary input, so no checkbox gates them
+  // and the paste shortcut sits BELOW the list it fills.
+  assert(!/perSample/.test(dialog), "the per-sample rows must not be behind a checkbox (#86)");
+  const rowsAt = dialog.indexOf("Description for ${displayCode(code)}");
+  const pasteAt = dialog.indexOf("Paste one description per line");
+  assert(rowsAt > 0 && pasteAt > 0 && rowsAt < pasteAt,
+    "the paste box must come AFTER the per-sample rows (#86)");
 });
 
 // #83 — "nothing is ever deleted" is a rule about the whole app, not one button,

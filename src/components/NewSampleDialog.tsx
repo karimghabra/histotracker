@@ -4,7 +4,7 @@ import { useActions } from "../hooks/useActions";
 import { useAssayCatalog } from "../hooks/useData";
 import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
-import { normalizePastedLines } from "../lib/utils";
+import { cn, displayCode, normalizePastedLines } from "../lib/utils";
 import type { Project, ProcessingType } from "../lib/types";
 
 /**
@@ -42,9 +42,10 @@ export function NewSampleDialog({
   const [processing, setProcessing] = useState<ProcessingType>("Short");
   const [needsDecalc, setNeedsDecalc] = useState(false);
   const [quantity, setQuantity] = useState(1);
-  // #86 — a batch normally shares one description; tick this to give each sample
-  // in the batch its own. Off by default, so existing behaviour is unchanged.
-  const [perSample, setPerSample] = useState(false);
+  // #86 — per-sample descriptions are no longer behind a checkbox. Typing one
+  // description per sample is the PRIMARY way to fill a batch, so the rows are
+  // always shown; the field above them is a shared fallback for the samples that
+  // genuinely are identical.
   const [descriptions, setDescriptions] = useState<string[]>([]);
   const [pasted, setPasted] = useState("");
 
@@ -77,6 +78,28 @@ export function NewSampleDialog({
   // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
   const previewLabel = codeRange(previewCode, quantity);
 
+  /**
+   * #88 — no sample may be created without a description.
+   *
+   * A description was optional at every level: the field could be blank, a
+   * per-sample row could be blank, and a blank row fell back to a blank shared
+   * value. So "Same as above" resolved to nothing at all and the sample was
+   * created with an empty description — permanently, since nobody goes back to
+   * fill in a batch they entered last month. The fallback itself was always
+   * correct; what was missing was anything requiring the chain to end somewhere.
+   */
+  const shared = description.trim();
+  const resolvedDescription = (index: number) =>
+    (descriptions[index] ?? "").trim() || shared;
+  const missingCodes =
+    quantity > 1
+      ? Array.from({ length: quantity }, (_, i) => i)
+          .filter((i) => !resolvedDescription(i))
+          .map((i) => displayCode(codeAt(previewCode, i)))
+      : shared
+        ? []
+        : [displayCode(previewCode)];
+
   const preselectedStains = catalog
     .filter((a) => picked.has(`${a.assay_type}::${a.name}`))
     .map((a) => ({ assay_type: a.assay_type, assay_name: a.name }));
@@ -91,6 +114,9 @@ export function NewSampleDialog({
   }
 
   async function save() {
+    // Belt and braces: the button is disabled, but a batch created with a blank
+    // description is unrecoverable, so the guard does not rely on the UI alone.
+    if (missingCodes.length > 0) return;
     setSaving(true);
     await createSamples(
       {
@@ -107,12 +133,11 @@ export function NewSampleDialog({
       },
       project.code,
       quantity,
-      // Gate on the SAME condition that renders the per-sample UI (#86). Gating
-      // on `perSample` alone meant that ticking the box, filling the rows, then
-      // correcting Quantity back to 1 hid the whole UI but still wrote
-      // descriptions[0] — silently ignoring the Description field the user could
-      // actually see. Same "state nothing renders" shape as #77.
-      perSample && quantity > 1 ? descriptions.slice(0, quantity) : undefined,
+      // Gate on the SAME condition that renders the per-sample rows (#86).
+      // Correcting Quantity back to 1 hides the rows, so their contents must
+      // stop counting too — otherwise descriptions[0] silently overrode the
+      // Description field the user could actually see.
+      quantity > 1 ? descriptions.slice(0, quantity) : undefined,
     );
     setSaving(false);
     onClose();
@@ -134,81 +159,80 @@ export function NewSampleDialog({
           />
         </Field>
       </div>
-      <Field label="Description">
+      <Field label={quantity > 1 ? "Shared description (optional)" : "Description"}>
         <TextInput
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           autoFocus
-          placeholder="e.g. 2 week Stretch PLA"
+          placeholder={
+            quantity > 1
+              ? "Used for any sample below you leave blank"
+              : "e.g. 2 week Stretch PLA"
+          }
         />
       </Field>
       {quantity > 1 && (
         <div className="-mt-2 mb-3">
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
-            <input
-              type="checkbox"
-              checked={perSample}
-              onChange={(e) => setPerSample(e.target.checked)}
-              className="h-3.5 w-3.5 accent-[var(--color-brand)]"
-            />
-            Give each sample its own description
-          </label>
-          {!perSample && (
-            <p className="mt-1 text-xs text-ink-faint">
-              Creates {quantity} samples with identical details, each with its own ID.
+          {/* The per-sample list is the PRIMARY input, so it comes first and is
+              always visible — it used to sit behind a checkbox, below a paste
+              box, which made the shortcut look like the main event (#86). */}
+          <p className="mb-1.5 text-xs text-ink-soft">
+            Every sample needs a description. Fill a row, or leave it blank to use
+            the shared description above.
+          </p>
+          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
+            {Array.from({ length: quantity }, (_, i) => {
+              const code = codeAt(previewCode, i);
+              const empty = !resolvedDescription(i);
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <span className={cn(
+                    "w-20 shrink-0 text-[11px] font-medium",
+                    empty ? "text-red-600" : "text-ink-soft",
+                  )}>
+                    {displayCode(code)}
+                  </span>
+                  <TextInput
+                    aria-label={`Description for ${displayCode(code)}`}
+                    value={descriptions[i] ?? ""}
+                    placeholder={description || "Required"}
+                    onChange={(e) =>
+                      setDescriptions((prev) => {
+                        const next = [...prev];
+                        while (next.length < quantity) next.push("");
+                        next[i] = e.target.value;
+                        return next;
+                      })
+                    }
+                    className={cn("py-1 text-[11px]", empty && "border-red-300")}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-[11px] text-ink-faint">IDs shown are a preview.</p>
+
+          {/* The spreadsheet shortcut, BELOW the list it fills (#86). Typing 20
+              fields one at a time is the thing a technician will refuse to do —
+              but it is the fallback, not the headline. */}
+          {/* Controlled, and re-split whenever Quantity changes. Left
+              uncontrolled, raising the quantity after pasting kept showing every
+              pasted line while silently leaving the new rows blank. */}
+          <textarea
+            aria-label="Paste one description per line"
+            rows={2}
+            value={pasted}
+            placeholder="Or paste one description per line to fill the list above"
+            onChange={(e) => setPasted(e.target.value)}
+            className="mt-2 w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
+          />
+          {pastedLines.length > 0 && pastedLines.length !== quantity && (
+            <p className="mt-1 text-[11px] text-amber-700">
+              {pastedLines.length} line(s) pasted for {quantity} sample(s)
+              {pastedLines.length > quantity
+                ? " — the extra lines are ignored."
+                : " — the rest fall back to the shared description."}
             </p>
-          )}
-          {perSample && (
-            <div className="mt-2">
-              {/* Typing 20 fields one at a time is the thing a technician will
-                  refuse to do — they already have the column in a spreadsheet. */}
-              {/* Controlled, and re-split whenever Quantity changes. Left
-                  uncontrolled, raising the quantity after pasting kept showing
-                  every pasted line while silently leaving the new rows blank. */}
-              <textarea
-                aria-label="Paste one description per line"
-                rows={2}
-                value={pasted}
-                placeholder="Optional: paste one description per line to fill the list below"
-                onChange={(e) => setPasted(e.target.value)}
-                className="mb-2 w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
-              />
-              {pastedLines.length > 0 && pastedLines.length !== quantity && (
-                <p className="mb-2 text-[11px] text-amber-700">
-                  {pastedLines.length} line(s) pasted for {quantity} sample(s)
-                  {pastedLines.length > quantity
-                    ? " — the extra lines are ignored."
-                    : " — the rest fall back to the shared description."}
-                </p>
-              )}
-              <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
-                {Array.from({ length: quantity }, (_, i) => {
-                  const code = codeAt(previewCode, i);
-                  return (
-                    <div key={i} className="flex items-center gap-2">
-                      <span className="w-20 shrink-0 text-[11px] font-medium text-ink-soft">{code}</span>
-                      <TextInput
-                        aria-label={`Description for ${code}`}
-                        value={descriptions[i] ?? ""}
-                        placeholder={description || "Same as above"}
-                        onChange={(e) =>
-                          setDescriptions((prev) => {
-                            const next = [...prev];
-                            while (next.length < quantity) next.push("");
-                            next[i] = e.target.value;
-                            return next;
-                          })
-                        }
-                        className="py-1 text-[11px]"
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="mt-1 text-[11px] text-ink-faint">
-                Blank rows fall back to the description above. IDs shown are a preview.
-              </p>
-            </div>
           )}
         </div>
       )}
@@ -275,11 +299,28 @@ export function NewSampleDialog({
       <Field label="General Notes">
         <TextArea rows={2} value={overallNotes} onChange={(e) => setOverallNotes(e.target.value)} />
       </Field>
+      {/* Name the samples that are still blank rather than just greying the
+          button out — with 20 rows in a scroll box, "something is missing" is
+          not an actionable message (#88). */}
+      {missingCodes.length > 0 && (
+        <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+          {missingCodes.length === 1
+            ? `${missingCodes[0]} needs a description.`
+            : `${missingCodes.length} samples need a description: ${missingCodes.slice(0, 6).join(", ")}${
+                missingCodes.length > 6 ? `, +${missingCodes.length - 6} more` : ""
+              }.`}
+        </p>
+      )}
       <div className="mt-2 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={save} disabled={saving}>
+        <Button
+          variant="primary"
+          onClick={save}
+          disabled={saving || missingCodes.length > 0}
+          title={missingCodes.length > 0 ? "Every sample needs a description" : undefined}
+        >
           Create {quantity > 1 ? `${quantity} Samples` : "Sample"}
         </Button>
       </div>

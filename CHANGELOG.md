@@ -38,6 +38,27 @@ A test now fails the build if any code path deletes a sample, cut group, slide
 or processing run — the only exceptions being the two places that unwind a
 multi-table write that failed part-way, where nothing was ever committed.
 
+**Every sample now needs a description (#88), and batch entry was rebuilt (#86).**
+
+- **"Same as above" could resolve to nothing.** The Description field was
+  optional, a per-sample row could be blank, and a blank row fell back to a blank
+  shared field — so a sample was created with no description at all, permanently,
+  because nobody goes back to fill in a batch entered last month. Create is now
+  blocked until every sample has one, and it **names** the samples that are still
+  blank rather than just greying out. Enforced in the data layer too, so a future
+  entry point inherits the rule instead of having to remember it.
+- **Per-sample descriptions are no longer behind a checkbox.** Set a quantity
+  above 1 and you get one row per sample straight away, each labelled with the ID
+  it will become. The field above them is now **"Shared description (optional)"** —
+  a fallback for the samples that genuinely are identical, not the main event.
+- **The paste shortcut moved below the list it fills**, where it reads as the
+  shortcut it is. It still maps line-for-line, and a blank line in a pasted
+  column now shows up as a named blank sample instead of silently shifting every
+  description down by one.
+
+Existing samples with blank descriptions are left alone and stay editable from
+the Logs row and the sample drawer.
+
 ## 0.7.3 - 2026-08-02
 
 Follow-up to 0.7.2, from a second review pass over the same code. Fixes one more
