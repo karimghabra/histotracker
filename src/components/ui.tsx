@@ -52,7 +52,14 @@ export function Modal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
       onMouseDown={onClose}
     >
+      {/* role/aria-modal/aria-label: a screen reader had no way to tell this
+          apart from the page behind it, and neither did a test — a dialog whose
+          confirm button repeats the label of the button that opened it was
+          simply ambiguous. Scoping by role resolves both. */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={cn("w-full rounded-2xl bg-panel shadow-2xl", width)}
         onMouseDown={(e) => e.stopPropagation()}
       >

@@ -106,7 +106,8 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
     await drawerClose.click().catch(() => undefined);
   }
 
-  // Open the Extras inventory and remove slide C (#83).
+  // Open the Extras inventory and remove slide C (#83). Removal now demands a
+  // reason and keeps the record — the old flow was a confirm() that deleted.
   const extras = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Extras", exact: true }) });
@@ -115,13 +116,38 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
   await row.locator('input[type="checkbox"]').check();
   await page.getByRole("button", { name: /Remove 1 slide/ }).click();
 
-  await expect(page.getByText("EE-1-C")).toHaveCount(0, { timeout: 15000 });
+  // The dialog must REFUSE to proceed until a reason is given. Scoped to the
+  // dialog: the drawer's trigger button carries the same label.
+  const dialog = page.getByRole("dialog", { name: "Remove slides from inventory" });
+  await expect(dialog).toBeVisible();
+  const confirmRemove = dialog.getByRole("button", { name: "Remove 1 slide", exact: true });
+  await expect(confirmRemove).toBeDisabled();
+  await dialog.getByLabel("Reason for removal").fill("dropped during coverslipping");
+  await expect(confirmRemove).toBeEnabled();
+  await confirmRemove.click();
+
+  // Gone from the inventory...
+  await expect(page.locator("label").filter({ hasText: "EE-1-C" })).toHaveCount(0, {
+    timeout: 15000,
+  });
+
+  // ...but still in the Logs, flagged, with the reason (#83: nothing is deleted).
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  const removedRow = page.locator("div").filter({ hasText: /^EE-1-C/ }).last();
+  await expect(removedRow.getByText("Removed", { exact: true })).toBeVisible();
+  await removedRow.getByText("EE-1-C", { exact: true }).click();
+  await expect(page.getByText("dropped during coverslipping")).toBeVisible();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click(); // collapse
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
 
   // Cut again — the next slide must be E, and D must not be duplicated.
   await cut(page, "EE-1");
   const after = await slideCodesInLogs(page, "EE-1");
   expect(after).toContain("EE-1-E");
-  expect(after).not.toContain("EE-1-C");
+  // C is still listed — it is a removed slide, not an erased one. What must NOT
+  // happen is a SECOND C, which is what letter recycling would produce.
+  expect(after.filter((c) => c === "EE-1-C")).toHaveLength(1);
   expect(after.filter((c) => c === "EE-1-D")).toHaveLength(1);
   expect(new Set(after).size).toBe(after.length); // no duplicate codes at all
 });

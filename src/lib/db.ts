@@ -25,6 +25,7 @@ import {
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import {
+  displayCode,
   duplicateLabel,
   formatSampleCode,
   nowTimestamp,
@@ -162,7 +163,8 @@ async function reconcileStainRequests(db: Database): Promise<void> {
     const producedRows = await db.select<Array<{ assay_name: string }>>(
       `SELECT DISTINCT sl.assay_name FROM slides sl
          JOIN section_requests sr ON sr.id = sl.section_request_id
-        WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assay_name <> ''`,
+        WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assay_name <> ''
+          AND sl.current_stage != 'removed'`,
       [s.id],
     );
     const produced = new Set(producedRows.map((r) => r.assay_name.toLowerCase()));
@@ -893,6 +895,50 @@ export async function listAuditEvents(limit = 500): Promise<AuditEvent[]> {
       LIMIT ?`,
     [limit],
   );
+}
+
+export interface SlideRemoval {
+  slide_id: number;
+  reason: string;
+  at: string;
+  user_name: string;
+}
+
+/**
+ * Why each removed slide was removed, keyed by slide id (#83).
+ *
+ * Read from the sample timeline rather than the slide row: the reason belongs to
+ * the *event*, and putting it there is what let removal ship without a schema
+ * change. Rows whose `details` predate the JSON shape, or that were written by a
+ * build that stored bare text, degrade to that text as the reason rather than
+ * being dropped — a removal with an unparseable reason is still a removal, and
+ * losing the flag would be worse than losing the wording.
+ */
+export async function listSlideRemovals(): Promise<SlideRemoval[]> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ details: string; created_at: string; user_name: string | null }>>(
+    `SELECT e.details, e.created_at, u.name AS user_name
+       FROM sample_timeline_events e
+       LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.event_type = 'slide_removed'
+      ORDER BY e.created_at DESC, e.id DESC`,
+  );
+  const out: SlideRemoval[] = [];
+  for (const row of rows) {
+    try {
+      const parsed = JSON.parse(row.details ?? "") as { slide_id?: number; reason?: string };
+      if (typeof parsed?.slide_id !== "number") continue;
+      out.push({
+        slide_id: parsed.slide_id,
+        reason: parsed.reason?.trim() || "No reason recorded.",
+        at: row.created_at,
+        user_name: row.user_name ?? "",
+      });
+    } catch {
+      continue;
+    }
+  }
+  return out;
 }
 
 export async function listSampleTimelineEvents(sampleId: number): Promise<SampleTimelineEvent[]> {
@@ -1689,7 +1735,8 @@ export async function syncAssayWorkflowStep(
 
   const assayTypes = await db.select<Array<{ assay_type: "stain" | "ihc" }>>(
     `SELECT DISTINCT assay_type FROM slides
-      WHERE section_request_id = ? AND purpose = 'stain' AND assay_type IN ('stain', 'ihc')`,
+      WHERE section_request_id = ? AND purpose = 'stain' AND assay_type IN ('stain', 'ihc')
+        AND current_stage != 'removed'`,
     [sectionRequestId],
   );
   if (assayTypes.length === 0) return;
@@ -1748,13 +1795,17 @@ function slideCodeFor(parentCode: string, ordinal: number): string {
  * takes over from there.
  */
 async function nextSlideLetter(db: Database, sampleId: number): Promise<number> {
-  // NEVER a live COUNT. A count is lowered by any delete, and there are several
-  // delete paths (deleteSlide, deleteSlidesForStack, deleteSectionRequest, and
-  // ON DELETE CASCADE) — requiring each of them to compensate is exactly the
-  // per-call-site fragility that let #73 ship broken. Both terms below only ever
-  // rise: the persisted mark, and the highest letter still visible in the
-  // sample's slide codes (a safety net for rows written before the mark existed,
-  // or by any future path that forgets to record).
+  // NEVER a live COUNT. A count is lowered by any removal, and requiring each
+  // removal path to compensate is exactly the per-call-site fragility that let
+  // #73 ship broken. Both terms below only ever rise: the persisted mark, and
+  // the highest letter still visible in the sample's slide codes (a safety net
+  // for rows written before the mark existed, or by any future path that forgets
+  // to record).
+  //
+  // The code scan below deliberately has NO `current_stage != 'removed'` filter.
+  // A removed slide keeps its code, and that is the point: its letter must stay
+  // burned (#83). Sample deletion still cascades, which is why the persisted
+  // mark is the primary term rather than this scan.
   const rows = await db.select<Array<{ issued: number; codes: string }>>(
     `SELECT COALESCE((SELECT slides_issued FROM samples WHERE id = ?), 0) AS issued,
             COALESCE((SELECT GROUP_CONCAT(sl.slide_code)
@@ -2074,8 +2125,13 @@ export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
        FROM section_requests sr
        JOIN samples s  ON s.id = sr.sample_id
        JOIN projects p ON p.id = s.project_id
-      LEFT JOIN slides sl ON sl.section_request_id = sr.id
+      -- Removed slides must not reach the card's slide summary or its counts,
+      -- so they are excluded in the JOIN rather than the WHERE — a WHERE clause
+      -- would drop the whole GROUPed row for a group whose only slide is gone
+      -- (#83).
+      LEFT JOIN slides sl ON sl.section_request_id = sr.id AND sl.current_stage != 'removed'
       WHERE p.is_active = 1 AND sr.current_stage != 'analyzed'
+        AND sr.current_stage != 'removed' -- a retired cut group leaves the board (#83)
         AND s.archived_at IS NULL -- archiving clears the board (#74)
       GROUP BY sr.id
       HAVING NOT (
@@ -2112,7 +2168,7 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
     `SELECT sr.duplicates, sr.sample_id, s.sample_code, COUNT(sl.id) AS existing_count
        FROM section_requests sr
        JOIN samples s ON s.id = sr.sample_id
-       LEFT JOIN slides sl ON sl.section_request_id = sr.id
+       LEFT JOIN slides sl ON sl.section_request_id = sr.id AND sl.current_stage != 'removed'
       WHERE sr.id = ?
       GROUP BY sr.id`,
     [id],
@@ -2166,7 +2222,8 @@ export async function listSlidesForSectionRequest(id: number): Promise<Slide[]> 
   await ensureSlidesForSectionRequest(id);
   const db = await getDb();
   return db.select<Slide[]>(
-    `SELECT * FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`,
+    `SELECT * FROM slides WHERE section_request_id = ? AND current_stage != 'removed'
+      ORDER BY slide_ordinal`,
     [id],
   );
 }
@@ -2184,6 +2241,7 @@ export async function listSlidesForSections(sectionIds: number[]): Promise<Slide
     // so ordering by it across several groups interleaves them — a twice-cut
     // block listed A, C, B, D (#75). Same correction as listAllSlides.
     `SELECT * FROM slides WHERE section_request_id IN (${placeholders})
+        AND current_stage != 'removed'
       ORDER BY section_request_id, slide_ordinal, id`,
     sectionIds,
   );
@@ -2228,6 +2286,7 @@ export async function listStainSlidesForSections(sectionIds: number[]): Promise<
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
       WHERE sl.section_request_id IN (${placeholders}) AND sl.purpose = 'stain'
+        AND sl.current_stage != 'removed'
       ORDER BY sl.section_request_id, sl.slide_ordinal, sl.id`,
     sectionIds,
   );
@@ -2325,42 +2384,41 @@ export async function getSlideStack(id: number): Promise<SlideStack | null> {
   return rows[0] ?? null;
 }
 
-export async function deleteSlideStack(id: number): Promise<void> {
+/**
+ * Retire a rack outright — it was merged into another, or the user retired it.
+ *
+ * Closed, not deleted (#83). The rack and its protocol checklist are the record
+ * of reagent steps that were actually performed on real slides; dropping the row
+ * because the rack was consumed by a merge would erase that. Every rack read
+ * already filters `closed_at IS NULL`, so this is invisible on the board.
+ */
+export async function closeSlideStack(id: number): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `DELETE FROM checklist_items
-      WHERE checklist_run_id IN (
-        SELECT id FROM checklist_runs WHERE scope_type = 'slide_stack' AND scope_id = ?
-      )`,
-    [id],
+    `UPDATE slide_stacks SET closed_at = COALESCE(closed_at, ?) WHERE id = ?`,
+    [nowTimestamp(), id],
   );
-  await db.execute(
-    `DELETE FROM checklist_runs WHERE scope_type = 'slide_stack' AND scope_id = ?`,
-    [id],
-  );
-  await db.execute(`DELETE FROM slide_stacks WHERE id = ?`, [id]);
 }
 
-export async function deleteSlideStackIfEmpty(id: number): Promise<boolean> {
+/**
+ * Retire a rack once its last slide has left it (#83).
+ *
+ * Closed, not deleted — nothing in this app is ever deleted. `closed_at` is the
+ * mechanism 0018 already built for exactly this, and every rack lookup already
+ * filters `closed_at IS NULL`, so the board behaves identically to the old
+ * DELETE while the rack (and its completed protocol checklist) survives for the
+ * record. The checklist runs are kept for the same reason: they are the evidence
+ * that the reagent steps were performed.
+ */
+export async function closeSlideStackIfEmpty(id: number): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute(
-    `DELETE FROM slide_stacks
-      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`,
-    [id, id],
+    `UPDATE slide_stacks
+        SET closed_at = ?
+      WHERE id = ? AND closed_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`,
+    [nowTimestamp(), id, id],
   );
-  if (result.rowsAffected > 0) {
-    await db.execute(
-      `DELETE FROM checklist_items
-        WHERE checklist_run_id IN (
-          SELECT id FROM checklist_runs WHERE scope_type = 'slide_stack' AND scope_id = ?
-        )`,
-      [id],
-    );
-    await db.execute(
-      `DELETE FROM checklist_runs WHERE scope_type = 'slide_stack' AND scope_id = ?`,
-      [id],
-    );
-  }
   return result.rowsAffected > 0;
 }
 
@@ -2456,7 +2514,8 @@ async function attachSectionStainSlidesToRacks(sectionId: number): Promise<void>
   const agents = await db.select<Array<{ assay_type: string; assay_name: string }>>(
     `SELECT DISTINCT assay_type, assay_name
        FROM slides
-      WHERE section_request_id = ? AND purpose = 'stain'`,
+      WHERE section_request_id = ? AND purpose = 'stain'
+        AND current_stage != 'removed'`,
     [sectionId],
   );
   for (const agent of agents) {
@@ -2643,7 +2702,7 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
         slideColumn ? [target, stageKey, timestamp, member.id] : [target, stageKey, member.id],
       );
     }
-    await deleteSlideStack(stackId); // rack consumed
+    await closeSlideStack(stackId); // rack consumed
     return stackId;
   }
 
@@ -2659,7 +2718,7 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
       `UPDATE slide_stacks SET ${column} = COALESCE(${column}, ?) WHERE id = ?`,
       [timestamp, mergeTarget.id],
     );
-    await deleteSlideStack(source.id);
+    await closeSlideStack(source.id);
     return mergeTarget.id;
   }
   await db.execute(
@@ -2752,25 +2811,24 @@ export async function completeSlideStackImaging(stackId: number): Promise<number
   return updateSlideStackStage(stackId, "pictures_taken");
 }
 
-export async function deleteSlidesForStack(stackId: number): Promise<void> {
+export async function removeSlidesForStack(stackId: number, reason: string): Promise<void> {
   const db = await getDb();
-  // Collect the affected cut groups BEFORE the delete — afterwards there is no
-  // row left to tell us which ones to resync (#83).
-  const affected = await db.select<Array<{ section_request_id: number }>>(
-    `SELECT DISTINCT section_request_id FROM slides
-      WHERE stack_id = ? AND section_request_id IS NOT NULL`,
+  // Read the membership BEFORE removing anything — `removeSlide` detaches each
+  // slide from the rack, so afterwards nothing points back here (#83).
+  const members = await db.select<Array<{ id: number; section_request_id: number }>>(
+    `SELECT id, section_request_id FROM slides
+      WHERE stack_id = ? AND current_stage != 'removed'`,
     [stackId],
   );
-  await db.execute(`DELETE FROM slides WHERE stack_id = ?`, [stackId]);
-  for (const row of affected) {
-    await syncSectionDuplicates(db, row.section_request_id);
-    // ...and drop the group if that emptied it. Wiring this into removeSlides
-    // alone left the two removal paths disagreeing: deleting a rack's slides one
-    // by one removed the group, while "Delete slide stack" — the same slides,
-    // the same drawer — left a "×0" card behind. Doing it here means every
-    // caller inherits the rule instead of each having to remember it.
-    await deleteSectionRequestIfEmpty(row.section_request_id);
-  }
+  // Routed through removeSlide rather than one bulk UPDATE so this path gets the
+  // same letter high-water mark and the same per-slide timeline entry as the
+  // drawer's one-at-a-time removal. The two paths disagreeing on the same slides
+  // in the same drawer is exactly what #83 was reopened for.
+  for (const member of members) await removeSlide(member.id, reason);
+  const affected = [
+    ...new Set(members.map((m) => m.section_request_id).filter((id) => id != null)),
+  ];
+  for (const sectionId of affected) await removeSectionRequestIfEmpty(sectionId);
 }
 
 export interface ExtraSlideAssignResult {
@@ -3023,7 +3081,8 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
     `SELECT COUNT(*) AS total,
             SUM(CASE WHEN stage_pictures_taken_at IS NOT NULL THEN 1 ELSE 0 END) AS complete
        FROM slides
-      WHERE section_request_id = ? AND purpose = 'stain'`,
+      WHERE section_request_id = ? AND purpose = 'stain'
+        AND current_stage != 'removed'`,
     [slide.section_request_id],
   );
   const total = progress[0]?.total ?? 0;
@@ -3038,30 +3097,69 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
 }
 
 /**
- * Remove a physical slide — mis-entered, or lost at the bench (#73/#83).
+ * Retire a physical slide — mis-entered, or lost at the bench (#73/#83).
+ *
+ * NOTHING IS EVER DELETED. This is a posterity application: a slide that was
+ * cut and then lost has to read as *cut, then removed*, never as though it had
+ * never existed. So the row stays, keeps every timestamp it earned, and is
+ * parked at `current_stage='removed'` with the reason recorded on the sample's
+ * timeline. It leaves the board and its stack; the Logs view still shows it,
+ * flagged, with the reason.
+ *
+ * Parking it on a STAGE rather than a new column is what makes this safe. No
+ * list in `stages.ts` contains 'removed', so a removed slide routes to no board
+ * queue and matches no rack query — a read that forgets about removal shows
+ * nothing rather than leaking a dead slide. Board-facing reads that select
+ * slides regardless of stage still need `current_stage != 'removed'` explicitly;
+ * grep for that string to find the full set.
  *
  * The letter it consumed must NOT come back. Freezing the high-water mark
- * BEFORE the row disappears is what makes that true on databases that predate
+ * BEFORE the stage changes is what makes that true on databases that predate
  * `slides_issued`: there the mark reads 0 and the live count is still governing,
- * so deleting C from A–D would otherwise leave count=3 and reissue "D" — a
+ * so removing C from A–D would otherwise leave count=3 and reissue "D" — a
  * duplicate of a slide that still exists. Recording the mark first pins the
  * sequence at 4, so the next slide is E.
  */
-export async function deleteSlide(id: number): Promise<void> {
+export async function removeSlide(id: number, reason: string): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ sample_id: number; section_request_id: number }>>(
-    `SELECT sr.sample_id, sr.id AS section_request_id FROM slides sl
+  const rows = await db.select<
+    Array<{ sample_id: number; section_request_id: number; slide_code: string }>
+  >(
+    `SELECT sr.sample_id, sr.id AS section_request_id, sl.slide_code FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ?`,
     [id],
   );
-  const sampleId = rows[0]?.sample_id;
-  if (sampleId != null) {
-    await recordSlidesIssued(db, sampleId, await nextSlideLetter(db, sampleId) - 1);
-  }
-  await db.execute(`DELETE FROM slides WHERE id = ?`, [id]);
-  if (rows[0]?.section_request_id != null) {
-    await syncSectionDuplicates(db, rows[0].section_request_id);
+  const row = rows[0];
+  // Already removed, or never existed — either way there is nothing to record,
+  // and re-stamping would put a second event on the timeline for one removal.
+  if (!row) return;
+  await recordSlidesIssued(db, row.sample_id, await nextSlideLetter(db, row.sample_id) - 1);
+  // stack_id = NULL is what takes it out of the rack it was sitting in. Every
+  // rack read joins on stack_id, so this alone removes it from the board side
+  // and lets an emptied rack close.
+  await db.execute(
+    `UPDATE slides SET current_stage = 'removed', stack_id = NULL WHERE id = ?`,
+    [id],
+  );
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'slide_removed', ?, ?, ?)`,
+    [
+      row.sample_id,
+      `Removed slide ${displayCode(row.slide_code)}`,
+      // JSON rather than bare text so the Logs view can tie the reason back to
+      // the exact slide. `sample_timeline_events` has no entity_id column, and
+      // `details` already carries JSON elsewhere (see saveSectioningPlan), so
+      // this needs no schema change.
+      JSON.stringify({ slide_id: id, slide_code: row.slide_code, reason: reason.trim() }),
+      nowTimestamp(),
+    ],
+  );
+  if (row.section_request_id != null) {
+    await syncSectionDuplicates(db, row.section_request_id);
   }
 }
 
@@ -3083,7 +3181,8 @@ export async function deleteSlide(id: number): Promise<void> {
 async function syncSectionDuplicates(db: Database, sectionId: number): Promise<void> {
   await db.execute(
     `UPDATE section_requests
-        SET duplicates = (SELECT COUNT(*) FROM slides WHERE section_request_id = ?)
+        SET duplicates = (SELECT COUNT(*) FROM slides
+                           WHERE section_request_id = ? AND current_stage != 'removed')
       WHERE id = ?`,
     [sectionId, sectionId],
   );
@@ -3094,7 +3193,8 @@ export async function completeSectionImaging(sectionId: number): Promise<void> {
   const db = await getDb();
   const timestamp = nowTimestamp();
   const rows = await db.select<Array<{ total: number }>>(
-    `SELECT COUNT(*) AS total FROM slides WHERE section_request_id = ? AND purpose = 'stain'`,
+    `SELECT COUNT(*) AS total FROM slides
+      WHERE section_request_id = ? AND purpose = 'stain' AND current_stage != 'removed'`,
     [sectionId],
   );
   if ((rows[0]?.total ?? 0) === 0) return;
@@ -3122,7 +3222,8 @@ export async function listAssayCatalog(includeInactive = false): Promise<AssayCa
     `SELECT c.*,
             (SELECT COUNT(*) FROM slides s
                WHERE s.assay_type = c.assay_type
-                 AND s.assay_name = c.name COLLATE NOCASE) AS slide_count
+                 AND s.assay_name = c.name COLLATE NOCASE
+                 AND s.current_stage != 'removed') AS slide_count
        FROM assay_catalog c
       ${includeInactive ? "" : "WHERE c.is_active = 1"}
       ORDER BY c.assay_type, c.name COLLATE NOCASE`,
@@ -3155,7 +3256,8 @@ export async function deleteAssay(id: number): Promise<void> {
   const rows = await db.select<Array<{ n: number }>>(
     `SELECT COUNT(*) AS n FROM slides s
        JOIN assay_catalog c ON c.id = ?
-      WHERE s.assay_type = c.assay_type AND s.assay_name = c.name COLLATE NOCASE`,
+      WHERE s.assay_type = c.assay_type AND s.assay_name = c.name COLLATE NOCASE
+        AND s.current_stage != 'removed'`,
     [id],
   );
   if ((rows[0]?.n ?? 0) > 0) {
@@ -3189,7 +3291,8 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
   if (stageKey === "stain_requested") {
     const rows = await db.select<Array<{ unassigned: number }>>(
       `SELECT COUNT(*) AS unassigned
-         FROM slides WHERE section_request_id = ? AND assignment_saved = 0`,
+         FROM slides WHERE section_request_id = ? AND assignment_saved = 0
+            AND current_stage != 'removed'`,
       [id],
     );
     if ((rows[0]?.unassigned ?? 0) > 0) {
@@ -3203,7 +3306,8 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
     );
     const assayRows = await db.select<Array<{ total: number }>>(
       `SELECT COUNT(*) AS total FROM slides
-        WHERE section_request_id = ? AND purpose = 'stain'`,
+        WHERE section_request_id = ? AND purpose = 'stain'
+          AND current_stage != 'removed'`,
       [id],
     );
     if ((assayRows[0]?.total ?? 0) === 0) {
@@ -3300,52 +3404,54 @@ export async function setSectionTimestamp(
   await db.execute(`UPDATE section_requests SET ${column} = ? WHERE id = ?`, [value, id]);
 }
 
-export async function deleteSectionRequest(id: number): Promise<void> {
+/**
+ * Retire a whole cut group and every slide in it (#83).
+ *
+ * This used to DELETE the group, its slides and its checklist runs outright. It
+ * is the same destruction `removeSlide` exists to prevent, reached by a
+ * different button — "Delete this cut group" in the section drawer — so it has
+ * to obey the same rule, or the two paths disagree about the same slides again.
+ * Each slide goes through `removeSlide` so it gets its own timeline entry and
+ * its letter stays burned; the group then follows.
+ */
+export async function removeSectionRequest(id: number, reason: string): Promise<void> {
   const db = await getDb();
-  await db.execute(
-    `DELETE FROM checklist_items
-      WHERE checklist_run_id IN (
-        SELECT id FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?
-      )`,
+  const members = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`,
     [id],
   );
+  for (const member of members) await removeSlide(member.id, reason);
   await db.execute(
-    `DELETE FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?`,
+    `UPDATE section_requests SET current_stage = 'removed' WHERE id = ?`,
     [id],
   );
-  await db.execute(`DELETE FROM slides WHERE section_request_id = ?`, [id]);
-  await db.execute(`DELETE FROM section_requests WHERE id = ?`, [id]);
 }
 
 /**
- * Drop a cut group once its last slide is gone (#83) — the same rule
- * `deleteSlideStackIfEmpty` already applies to racks.
+ * Retire a cut group once its last live slide is gone (#83) — the same rule
+ * `closeSlideStackIfEmpty` applies to racks.
  *
  * Without this, removing every extra from a group left a "×0" card sitting in
  * Needs Sectioning: a cut that claims to be pending but would produce nothing.
- * Undo restores a whole DB image, so this is reversible along with the removal
- * that triggered it.
+ *
+ * Marked removed rather than DELETEd. That reverses the 0.7.3 behaviour, and
+ * deliberately: the group is still the record of a cut that happened, so it
+ * leaves the board but stays in the log alongside the slides it produced. Its
+ * checklist runs are kept for the same reason — they are the evidence the
+ * protocol steps were performed.
  */
-export async function deleteSectionRequestIfEmpty(id: number): Promise<boolean> {
+export async function removeSectionRequestIfEmpty(id: number): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute(
-    `DELETE FROM section_requests
-      WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE section_request_id = ?)`,
+    `UPDATE section_requests
+        SET current_stage = 'removed'
+      WHERE id = ? AND current_stage != 'removed'
+        AND NOT EXISTS (
+          SELECT 1 FROM slides
+           WHERE section_request_id = ? AND current_stage != 'removed'
+        )`,
     [id, id],
   );
-  if (result.rowsAffected > 0) {
-    await db.execute(
-      `DELETE FROM checklist_items
-        WHERE checklist_run_id IN (
-          SELECT id FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?
-        )`,
-      [id],
-    );
-    await db.execute(
-      `DELETE FROM checklist_runs WHERE scope_type = 'section_request' AND scope_id = ?`,
-      [id],
-    );
-  }
   return result.rowsAffected > 0;
 }
 

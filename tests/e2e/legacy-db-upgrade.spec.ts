@@ -99,8 +99,11 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   await expect(page.getByRole("cell", { name: "EE-3", exact: true })).toBeVisible();
   await page.getByLabel("Show archived").uncheck();
 
-  // #73 — the legacy sample has A–D and slides_issued = 0 (never tracked). Delete
+  // #73 — the legacy sample has A–D and slides_issued = 0 (never tracked). Remove
   // C from the Extras inventory; the next cut must give E, not a duplicate D.
+  // #83 — removal on a LEGACY image must behave exactly as on a fresh one: the
+  // row survives at current_stage='removed', a value the old schema accepts
+  // without alteration because the column has no CHECK constraint.
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   const extras = page
     .locator("div.rounded-lg")
@@ -108,7 +111,12 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   await extras.getByText("EE-1").first().click();
   await page.locator("label").filter({ hasText: "EE-1-C" }).locator('input[type="checkbox"]').check();
   await page.getByRole("button", { name: /Remove 1 slide/ }).click();
-  await expect(page.getByText("EE-1-C")).toHaveCount(0, { timeout: 15000 });
+  const removeDialog = page.getByRole("dialog", { name: "Remove slides from inventory" });
+  await removeDialog.getByLabel("Reason for removal").fill("legacy image removal");
+  await removeDialog.getByRole("button", { name: "Remove 1 slide", exact: true }).click();
+  await expect(page.locator("label").filter({ hasText: "EE-1-C" })).toHaveCount(0, {
+    timeout: 15000,
+  });
 
   // Cut again on the legacy block.
   await page.getByText("EE-1", { exact: true }).first().click();
@@ -120,6 +128,7 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
   expect(after).toContain("EE-1-E");
-  expect(after).not.toContain("EE-1-C");
+  // C is listed once, as a removed slide — the letter was never handed back.
+  expect(after.filter((c) => c === "EE-1-C")).toHaveLength(1);
   expect(new Set(after).size).toBe(after.length); // no duplicate codes
 });

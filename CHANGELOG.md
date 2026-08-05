@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.4 - unreleased
+
+**Nothing is ever deleted (#83).** Histometer is a record, so a slide that was
+cut and then lost now reads as *cut, then removed* rather than as though it never
+existed. **No schema change** — no migration, no new columns, and a 0.7.3 build
+opens a 0.7.4 database without trouble.
+
+- **Removing slides keeps them.** "Remove slides" in the Extras inventory and in
+  a rack, "Remove cut group" in the section drawer, and "Remove slide stack" all
+  stop deleting rows. The slide leaves the board and its rack, keeps every
+  timestamp it earned, and stays in the Logs flagged **Removed** — click the
+  slide to read why it went, who recorded it, and when.
+- **A reason is now required.** Each of those actions asks for one and refuses to
+  proceed without it, replacing a confirmation box whose only content was a note
+  about letter sequencing. The reason is stored on the sample's timeline, so it
+  is part of the permanent record rather than a throwaway prompt.
+- **Removed slides do not distort progress.** They are excluded from the
+  analyzed fraction and from the sample's phase — previously a lost slide would
+  have stranded its sample at "3/4 analyzed" for good. The Logs slide count shows
+  the live total with the removed count beside it.
+- **Emptied cut groups and racks retire instead of vanishing.** A cut group whose
+  last slide is removed leaves the board but stays in the log; a rack emptied the
+  same way is closed rather than dropped, keeping its completed protocol
+  checklist as evidence the reagent steps were performed. This reverses 0.7.3,
+  which deleted both.
+- Dialogs are now announced to screen readers (`role="dialog"`).
+
 ## 0.7.3 - 2026-08-02
 
 Follow-up to 0.7.2, from a second review pass over the same code. Fixes one more

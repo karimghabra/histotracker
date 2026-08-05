@@ -7,6 +7,7 @@ import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useReadOnly } from "../lib/readOnly";
 import { displayCode, slideLetterOf } from "../lib/utils";
 
@@ -127,6 +128,7 @@ export function SectionDetailsDrawer({
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<number, AssignmentDraft>>({});
   const [savingAll, setSavingAll] = useState(false);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const suggestions = useMemo(() => stainSuggestions(section), [section]);
   const showAssignments = ["sectioned", "assignment_required"].includes(section.current_stage);
   const allAssigned = slides.length > 0 && slides.every((slide) => slide.assignment_saved === 1);
@@ -502,19 +504,31 @@ export function SectionDetailsDrawer({
             <CheckCircle2 size={15} /> {analysisBatchIds.length > 1 ? `Mark Analyzed (${analysisBatchIds.length})` : "Mark Analyzed"}
           </Button>
         )}
-        <Button
-          variant="danger"
-          onClick={() => {
-            if (confirm(activeSelection.length > 1 ? `Delete ${activeSelection.length} selected cut groups? You can undo this.` : "Delete this section? You can undo this.")) {
-              void removeSections(activeSelection.map((candidate) => candidate.id));
-              onClose();
-            }
-          }}
-        >
+        <Button variant="danger" onClick={() => setConfirmingRemoval(true)}>
           <Trash2 size={15} />
         </Button>
         </div>
       </div>
+      )}
+
+      {confirmingRemoval && (
+        <RemovalReasonDialog
+          title={activeSelection.length > 1 ? "Remove cut groups" : "Remove this cut group"}
+          what={
+            activeSelection.length > 1
+              ? `${activeSelection.length} cut groups and their slides`
+              : "this cut group and its slides"
+          }
+          confirmLabel={
+            activeSelection.length > 1 ? `Remove ${activeSelection.length} cut groups` : "Remove cut group"
+          }
+          onClose={() => setConfirmingRemoval(false)}
+          onConfirm={(reason) => {
+            setConfirmingRemoval(false);
+            void removeSections(activeSelection.map((candidate) => candidate.id), reason);
+            onClose();
+          }}
+        />
       )}
     </div>
   );

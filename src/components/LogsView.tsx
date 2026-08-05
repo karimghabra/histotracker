@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
+import type { SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
-import { useAllSamples, useAllSlides, useAssayCatalog } from "../hooks/useData";
+import { useAllSamples, useAllSlides, useAssayCatalog, useSlideRemovals } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { cn, compareSlideCodes, displayCode, sampleCodeVariants } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
@@ -29,12 +30,25 @@ const PHASE_RANK: Record<PhaseKey, number> = Object.fromEntries(
   LOG_PHASES.map((p, i) => [p.key, i]),
 ) as Record<PhaseKey, number>;
 
+/**
+ * A slide that was removed at the bench (#83). It keeps its row and stays
+ * visible here — that is the whole point — but it is no longer work in progress,
+ * so it must not count towards the sample's phase or its analyzed fraction.
+ */
+function isRemoved(slide: Slide): boolean {
+  return slide.current_stage === "removed";
+}
+
 function samplePhase(sample: Sample, slides: Slide[]): PhaseKey {
-  const assay = slides.filter((s) => s.purpose !== "extra");
+  const live = slides.filter((s) => !isRemoved(s));
+  const assay = live.filter((s) => s.purpose !== "extra");
   if (assay.length > 0 && assay.every((s) => Boolean(s.stage_analyzed_at))) return "analyzed";
   if (assay.some((s) => s.stage_ready_for_imaging_at || s.stage_pictures_taken_at)) return "imaging";
   if (assay.some((s) => s.stage_stained_at || s.stage_coverslipped_at || s.stage_dried_at)) return "staining";
-  if (slides.length > 0) return "sectioned";
+  // `live`, not `slides`: a sample whose only slide was removed has no slides at
+  // the bench any more, so it reads by its block stage again rather than being
+  // pinned at "Sectioned" forever.
+  if (live.length > 0) return "sectioned";
   return (STAGE_ORDER[sample.current_stage] ?? 0) >= (STAGE_ORDER.embedded ?? 99) ? "embedded" : "preprocessing";
 }
 
@@ -58,9 +72,11 @@ function lastActivityOf(sample: Sample, slides: Slide[]): string {
   return latest;
 }
 
-// Analyzed progress across a sample's assay slides (extras never analyze).
+// Analyzed progress across a sample's assay slides (extras never analyze, and a
+// removed slide never will either — leaving it in the denominator would strand
+// the sample at 3/4 for good, #83).
 function analyzedProgress(slides: Slide[]): { done: number; total: number } {
-  const assay = slides.filter((s) => s.purpose !== "extra");
+  const assay = slides.filter((s) => s.purpose !== "extra" && !isRemoved(s));
   return { done: assay.filter((s) => Boolean(s.stage_analyzed_at)).length, total: assay.length };
 }
 
@@ -215,6 +231,11 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
   const { data: samples = [] } = useAllSamples();
   const { data: slides = [] } = useAllSlides();
   const { data: catalog = [] } = useAssayCatalog(true);
+  const { data: removalList = [] } = useSlideRemovals();
+  const removals = useMemo(
+    () => new Map(removalList.map((entry) => [entry.slide_id, entry])),
+    [removalList],
+  );
 
   const [project, setProject] = useState("all");
   const [stain, setStain] = useState("all");
@@ -267,7 +288,12 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
         const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
         const phase = samplePhase(sample, slidesForSample);
         const progress = analyzedProgress(slidesForSample);
-        const extras = slidesForSample.length - progress.total;
+        // Removed slides are listed in the drill-down but are not inventory, so
+        // they are excluded from both the "N slides" column and the extras
+        // arithmetic — otherwise a removed assay slide silently reappeared as an
+        // extra (#83).
+        const removedCount = slidesForSample.filter(isRemoved).length;
+        const extras = slidesForSample.length - removedCount - progress.total;
         const hasNotes =
           Boolean(sample.overall_notes?.trim()) || slidesForSample.some((s) => Boolean(s.notes?.trim()));
         return {
@@ -277,6 +303,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
           phase,
           progress,
           extras,
+          removedCount,
           hasNotes,
           lastActivity: lastActivityOf(sample, slidesForSample),
         };
@@ -569,6 +596,8 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
                   phaseLabel={PHASE_LABEL[row.phase]}
                   progress={row.progress}
                   extras={row.extras}
+                  removedCount={row.removedCount}
+                  removals={removals}
                   hasNotes={row.hasNotes}
                   lastActivity={row.lastActivity}
                   open={isOpen}
@@ -673,6 +702,8 @@ function FragmentRow({
   phaseLabel,
   progress,
   extras,
+  removedCount,
+  removals,
   hasNotes,
   lastActivity,
   open,
@@ -690,6 +721,9 @@ function FragmentRow({
   phaseLabel: string;
   progress: { done: number; total: number };
   extras: number;
+  removedCount: number;
+  /** Reason per removed slide id (#83). */
+  removals: Map<number, SlideRemoval>;
   hasNotes: boolean;
   lastActivity: string;
   open: boolean;
@@ -717,7 +751,13 @@ function FragmentRow({
     stainFilter && onlyMatching
       ? slides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
       : slides;
-  const slideTitle = extras > 0 ? `${progress.total} assay · ${extras} extra` : `${slides.length} slides`;
+  const liveSlideCount = slides.length - removedCount;
+  const slideTitle = [
+    extras > 0 ? `${progress.total} assay · ${extras} extra` : `${liveSlideCount} slides`,
+    removedCount > 0 ? `${removedCount} removed (listed below)` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
@@ -781,7 +821,10 @@ function FragmentRow({
           {agents.length ? agents.join(", ") : "—"}
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
-          {slides.length}
+          {liveSlideCount}
+          {removedCount > 0 && (
+            <span className="ml-1 text-[10px] font-medium text-red-600">−{removedCount}</span>
+          )}
         </td>
         <td className="px-2 py-1.5 text-ink-faint" title={sample.date_added}>
           {(sample.date_added || "").slice(0, 10)}
@@ -886,8 +929,10 @@ function FragmentRow({
                   const match =
                     stainFilter && slide.assay_name?.toLowerCase() === stainFilter.toLowerCase();
                   const slideOpen = openSlides.has(slide.id);
+                  const removed = isRemoved(slide);
+                  const removal = removed ? removals.get(slide.id) : undefined;
                   return (
-                    <div key={slide.id} className={cn(match && "bg-amber-100/50")}>
+                    <div key={slide.id} className={cn(match && "bg-amber-100/50", removed && "bg-red-50/60")}>
                       <div className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-brand/5">
                         <input
                           type="checkbox"
@@ -902,7 +947,9 @@ function FragmentRow({
                           className="flex flex-1 items-center gap-2 text-left"
                         >
                           {slideOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                          <span className="font-medium text-ink">{displayCode(slide.slide_code)}</span>
+                          <span className={cn("font-medium", removed ? "text-ink-faint line-through" : "text-ink")}>
+                            {displayCode(slide.slide_code)}
+                          </span>
                           {slide.assay_type && (
                             <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
                               {slide.assay_type}
@@ -917,11 +964,34 @@ function FragmentRow({
                               {slide.depth_label}
                             </span>
                           )}
-                          <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
+                          {/* The flag IS the affordance: it sits inside the row
+                              button, so clicking it opens the row and reveals the
+                              reason panel below (#83). */}
+                          {removed ? (
+                            <span className="ml-auto rounded-full bg-red-600 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-white">
+                              Removed
+                            </span>
+                          ) : (
+                            <span className="ml-auto text-ink-faint">{slideStage(slide.current_stage)}</span>
+                          )}
                         </button>
                       </div>
                       {slideOpen && (
                         <div className="space-y-2 px-3 pb-2 pl-7">
+                          {removed && (
+                            <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-red-700">
+                                Removed{removal?.at ? ` · ${fmtTime(removal.at)}` : ""}
+                                {removal?.user_name ? ` · ${removal.user_name}` : ""}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-red-900">
+                                {/* A removal recorded before the reason was kept,
+                                    or by a build that stored it differently, still
+                                    shows as removed — just without wording. */}
+                                {removal?.reason ?? "No reason recorded."}
+                              </p>
+                            </div>
+                          )}
                           <Timeline events={recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE)} />
                           <NotesEditor
                             value={slide.notes ?? ""}

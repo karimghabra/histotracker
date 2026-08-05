@@ -6,6 +6,7 @@ import { useActions } from "../hooks/useActions";
 import { useReadOnly } from "../lib/readOnly";
 import { displayCode } from "../lib/utils";
 import { Button } from "./ui";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 
 type AssaySelection = `${"stain" | "ihc"}:${string}`;
 
@@ -25,6 +26,7 @@ export function ExtraSlideDetailsDrawer({
   const [assays, setAssays] = useState<Record<number, AssaySelection | "">>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const parentCode = slides[0]?.parent_code ?? "Extra slides";
   const description = slides[0]?.sample_description ?? "";
   const projectCode = slides[0]?.project_code ?? "";
@@ -173,31 +175,14 @@ export function ExtraSlideDetailsDrawer({
             : "Select slides to assign"}
         </Button>
         {/* Slides get mis-entered or physically lost, so they have to be
-            removable from the inventory too (#83/#73). The letters they used
-            stay burned — the next slide continues the sequence. */}
+            removable from the inventory too (#83/#73). Nothing is deleted: the
+            slide leaves the inventory but stays in the Logs with its reason, and
+            the letter it used stays burned. */}
         <Button
           variant="subtle"
           className="mt-2 w-full justify-center text-red-600"
           disabled={selectedSlides.length === 0 || busy}
-          onClick={() => {
-            const codes = selectedSlides.map((slide) => slide.slide_code);
-            if (
-              !confirm(
-                `Remove ${codes.length === 1 ? codes[0] : `${codes.length} slides`} from the inventory?\n\n` +
-                  `This deletes the slide record. Slide letters are not reused, so the next slide cut ` +
-                  `will continue the sequence rather than take this one's letter.`,
-              )
-            ) {
-              return;
-            }
-            setBusy(true);
-            void removeSlides(selectedSlides.map((slide) => slide.id))
-              .catch((cause: unknown) => setError(String(cause)))
-              .finally(() => {
-                setSelected(new Set());
-                setBusy(false);
-              });
-          }}
+          onClick={() => setConfirmingRemoval(true)}
         >
           <Trash2 size={15} />
           {selectedSlides.length > 0
@@ -207,6 +192,29 @@ export function ExtraSlideDetailsDrawer({
         </>
         )}
       </div>
+
+      {confirmingRemoval && (
+        <RemovalReasonDialog
+          title="Remove slides from inventory"
+          what={
+            selectedSlides.length === 1
+              ? displayCode(selectedSlides[0].slide_code)
+              : `${selectedSlides.length} slides`
+          }
+          confirmLabel={`Remove ${selectedSlides.length} slide${selectedSlides.length === 1 ? "" : "s"}`}
+          onClose={() => setConfirmingRemoval(false)}
+          onConfirm={(reason) => {
+            setConfirmingRemoval(false);
+            setBusy(true);
+            void removeSlides(selectedSlides.map((slide) => slide.id), reason)
+              .catch((cause: unknown) => setError(String(cause)))
+              .finally(() => {
+                setSelected(new Set());
+                setBusy(false);
+              });
+          }}
+        />
+      )}
     </div>
   );
 }

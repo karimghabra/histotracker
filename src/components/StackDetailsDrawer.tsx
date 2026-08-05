@@ -7,6 +7,7 @@ import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
 import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useReadOnly } from "../lib/readOnly";
 import { displayCode } from "../lib/utils";
 
@@ -47,6 +48,8 @@ export function StackDetailsDrawer({
   const [error, setError] = useState<string | null>(null);
   const [selectingSlides, setSelectingSlides] = useState(false);
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
+  // Which removal the reason dialog is currently collecting a reason for (#83).
+  const [removing, setRemoving] = useState<"slides" | "stacks" | null>(null);
   const activeStacks = selectedStacks.length > 0 ? selectedStacks : [stack];
   const activeIds = activeStacks.map((candidate) => candidate.id);
   const stainStackIds = activeStacks
@@ -159,18 +162,7 @@ export function StackDetailsDrawer({
               variant="subtle"
               className="mb-2 w-full justify-center text-red-600"
               disabled={selectedSlideIds.size === 0}
-              onClick={() => {
-                if (
-                  confirm(
-                    `Delete ${selectedSlideIds.size} selected slide${selectedSlideIds.size === 1 ? "" : "s"}? You can undo this.\n\n` +
-                      `Slide letters are not reused, so the next slide cut will continue the sequence.`,
-                  )
-                ) {
-                  void run(() => removeSlides([...selectedSlideIds]));
-                  setSelectedSlideIds(new Set());
-                  setSelectingSlides(false);
-                }
-              }}
+              onClick={() => setRemoving("slides")}
             >
               <Trash2 size={14} />
               {selectedSlideIds.size > 0
@@ -294,18 +286,41 @@ export function StackDetailsDrawer({
           )}
           <Button
             variant="danger"
-            title="Delete selected slide stacks"
-            onClick={() => {
-              if (confirm(`Delete ${activeIds.length === 1 ? "this slide stack" : `${activeIds.length} slide stacks`}? You can undo this.`)) {
-                void removeSlideStacks(activeIds);
-                onClose();
-              }
-            }}
+            title="Remove selected slide stacks"
+            onClick={() => setRemoving("stacks")}
           >
             <Trash2 size={15} />
           </Button>
         </div>
       </div>
+      )}
+
+      {removing === "slides" && (
+        <RemovalReasonDialog
+          title="Remove slides from this rack"
+          what={`${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"}`}
+          confirmLabel={`Remove ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"}`}
+          onClose={() => setRemoving(null)}
+          onConfirm={(reason) => {
+            setRemoving(null);
+            void run(() => removeSlides([...selectedSlideIds], reason));
+            setSelectedSlideIds(new Set());
+            setSelectingSlides(false);
+          }}
+        />
+      )}
+      {removing === "stacks" && (
+        <RemovalReasonDialog
+          title={activeIds.length === 1 ? "Remove this slide stack" : "Remove slide stacks"}
+          what={activeIds.length === 1 ? "this slide stack and its slides" : `${activeIds.length} slide stacks and their slides`}
+          confirmLabel={activeIds.length === 1 ? "Remove stack" : `Remove ${activeIds.length} stacks`}
+          onClose={() => setRemoving(null)}
+          onConfirm={(reason) => {
+            setRemoving(null);
+            void removeSlideStacks(activeIds, reason);
+            onClose();
+          }}
+        />
       )}
     </div>
   );

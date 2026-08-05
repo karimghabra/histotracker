@@ -423,52 +423,81 @@ function makeApi(db) {
       if (highest > 0) recordSlidesIssued(row.sample_id, highest);
     }
   }
-  // Port of deleteSlide() — db.ts. Deliberately a BARE delete now: the mark is
-  // authoritative, so nothing here has to compensate.
-  function deleteSlide(slideId) {
-    const owner = get(`SELECT section_request_id AS s FROM slides WHERE id = ?`, [slideId]);
-    run(`DELETE FROM slides WHERE id = ?`, [slideId]);
-    if (owner?.s != null) syncSectionDuplicates(owner.s);
+  // Port of removeSlide() — db.ts. NOTHING IS DELETED (#83): the row stays, is
+  // parked at current_stage='removed', detached from its rack, and the reason
+  // goes on the sample timeline. The letter mark is authoritative, so the letter
+  // stays burned without this path compensating.
+  function removeSlide(slideId, reason) {
+    const owner = get(
+      `SELECT sr.sample_id AS sample, sr.id AS s, sl.slide_code AS code FROM slides sl
+         JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sl.id = ?`, [slideId]);
+    if (!owner) return;
+    recordSlidesIssued(owner.sample, nextSlideLetter(owner.sample) - 1);
+    run(`UPDATE slides SET current_stage = 'removed', stack_id = NULL WHERE id = ?`, [slideId]);
+    run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
+         VALUES (?, 'slide_removed', ?, ?, datetime('now'))`,
+        [owner.sample, `Removed slide ${owner.code}`,
+         JSON.stringify({ slide_id: slideId, slide_code: owner.code, reason: String(reason ?? '').trim() })]);
+    syncSectionDuplicates(owner.s);
   }
   // Port of syncSectionDuplicates() — db.ts. The planned count has to follow the
-  // slides down, or emptying a group re-creates the initialiser's trigger
+  // LIVE slides down, or emptying a group re-creates the initialiser's trigger
   // condition and the group refills itself on the next open (#83).
   function syncSectionDuplicates(sectionId) {
     run(`UPDATE section_requests
-            SET duplicates = (SELECT COUNT(*) FROM slides WHERE section_request_id = ?)
+            SET duplicates = (SELECT COUNT(*) FROM slides
+                               WHERE section_request_id = ? AND current_stage != 'removed')
           WHERE id = ?`, [sectionId, sectionId]);
   }
-  // Port of deleteSectionRequestIfEmpty() — db.ts. Same rule racks already had.
-  function deleteSectionRequestIfEmpty(sectionId) {
-    run(`DELETE FROM section_requests
-          WHERE id = ? AND NOT EXISTS (SELECT 1 FROM slides WHERE section_request_id = ?)`,
+  // Port of removeSectionRequestIfEmpty() — db.ts. Same rule racks already had,
+  // and like them it now RETIRES rather than deletes.
+  function removeSectionRequestIfEmpty(sectionId) {
+    run(`UPDATE section_requests
+            SET current_stage = 'removed'
+          WHERE id = ? AND current_stage != 'removed'
+            AND NOT EXISTS (SELECT 1 FROM slides
+                             WHERE section_request_id = ? AND current_stage != 'removed')`,
         [sectionId, sectionId]);
   }
   // Port of removeSlides() — useActions.ts. The ORDER matters: the parent ids
-  // have to be read before the delete, because afterwards nothing points at them.
-  function removeSlides(slideIds) {
+  // have to be read first, because removal detaches each slide from its rack.
+  function removeSlides(slideIds, reason = 'test removal') {
     const sectionIds = [...new Set(slideIds
       .map((id) => get(`SELECT section_request_id AS s FROM slides WHERE id = ?`, [id])?.s)
       .filter((id) => id != null))];
-    for (const id of slideIds) deleteSlide(id);
-    for (const id of sectionIds) deleteSectionRequestIfEmpty(id);
+    const stackIds = [...new Set(slideIds
+      .map((id) => get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [id])?.s)
+      .filter((id) => id != null))];
+    for (const id of slideIds) removeSlide(id, reason);
+    for (const id of stackIds) closeSlideStackIfEmpty(id);
+    for (const id of sectionIds) removeSectionRequestIfEmpty(id);
   }
-  // Ports of deleteSlidesForStack() and deleteSectionRequest() — db.ts. These
-  // were NEVER mirrored, which is exactly why #73 shipped green: the gates only
-  // ever exercised deleteSlide.
-  function deleteSlidesForStack(stackId) {
-    const affected = all(
-      `SELECT DISTINCT section_request_id AS s FROM slides
-        WHERE stack_id = ? AND section_request_id IS NOT NULL`, [stackId]);
-    run(`DELETE FROM slides WHERE stack_id = ?`, [stackId]);
-    for (const row of affected) {
-      syncSectionDuplicates(row.s);
-      deleteSectionRequestIfEmpty(row.s);
+  // Port of closeSlideStackIfEmpty() — db.ts. Racks close, they never drop.
+  function closeSlideStackIfEmpty(stackId) {
+    run(`UPDATE slide_stacks SET closed_at = datetime('now')
+          WHERE id = ? AND closed_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`, [stackId, stackId]);
+  }
+  // Ports of removeSlidesForStack() and removeSectionRequest() — db.ts. These
+  // were NEVER mirrored before, which is exactly why #73 shipped green: the
+  // gates only ever exercised the single-slide path.
+  function removeSlidesForStack(stackId, reason = 'test removal') {
+    const members = all(
+      `SELECT id, section_request_id AS s FROM slides
+        WHERE stack_id = ? AND current_stage != 'removed'`, [stackId]);
+    for (const member of members) removeSlide(member.id, reason);
+    for (const s of [...new Set(members.map((m) => m.s).filter((id) => id != null))]) {
+      removeSectionRequestIfEmpty(s);
     }
   }
-  function deleteSectionRequest(sectionId) {
-    run(`DELETE FROM slides WHERE section_request_id = ?`, [sectionId]);
-    run(`DELETE FROM section_requests WHERE id = ?`, [sectionId]);
+  function removeSectionRequest(sectionId, reason = 'test removal') {
+    for (const row of all(
+      `SELECT id FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`,
+      [sectionId])) {
+      removeSlide(row.id, reason);
+    }
+    run(`UPDATE section_requests SET current_stage = 'removed' WHERE id = ?`, [sectionId]);
   }
   // Port of ensureSlidesForSectionRequest() — db.ts. ONLY initialises a section
   // with no slides; it used to top up from a live COUNT, which both resurrected
@@ -797,8 +826,8 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     tickSectionStainedCheckbox,
-    deleteSlide, nextSlideLetter, deleteSlidesForStack, deleteSectionRequest,
-    deleteSectionRequestIfEmpty, removeSlides,
+    removeSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest,
+    removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
     requestStainForSample, snapshotDb, restoreDb,
@@ -1341,14 +1370,18 @@ issue(73, "deleting a slide does not hand its letter to the next cut", () => {
   const { id } = api.addSample(p, "EE", "letters");
   api.markEmbedded(id);
   api.createSectionRequests(id, [{ duplicates: 4 }]); // A B C D
+  // LIVE slides only. Removal no longer deletes the row (#83) — C keeps its
+  // record, and keeping it is precisely what guarantees the letter stays burned.
   const codes = () => api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-      WHERE sr.sample_id = ? ORDER BY sl.id`, [id]).map((r) => r.c);
+      WHERE sr.sample_id = ? AND sl.current_stage != 'removed' ORDER BY sl.id`, [id]).map((r) => r.c);
   eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-C,EE-0001-D", "four slides A–D");
 
   const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
-  api.deleteSlide(c.id);
-  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-D", "C is gone, D untouched");
+  api.removeSlide(c.id, "broken at the bench");
+  eq(codes().join(","), "EE-0001-A,EE-0001-B,EE-0001-D", "C is gone from the bench, D untouched");
+  eq(api.get(`SELECT current_stage AS s FROM slides WHERE id = ?`, [c.id]).s, "removed",
+     "C's row survives, flagged removed — nothing is ever deleted");
 
   api.createSectionRequests(id, [{ duplicates: 1 }]);
   assert(codes().includes("EE-0001-E"), "the next slide is E, not a recycled C");
@@ -1369,7 +1402,7 @@ issue(73, "an existing database cannot reissue a letter after a delete", () => {
   api.run(`UPDATE samples SET slides_issued = 0 WHERE id = ?`, [id]);
 
   const c = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-C'`);
-  api.deleteSlide(c.id);
+  api.removeSlide(c.id);
   api.createSectionRequests(id, [{ duplicates: 1 }]);
   const codes = api.all(
     `SELECT sl.slide_code AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
@@ -1393,7 +1426,7 @@ issue(73, "removing a middle slide leaves the cut group openable", () => {
   const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
 
   const middle = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-B'`);
-  api.deleteSlide(middle.id);
+  api.removeSlide(middle.id);
 
   // Opening the card runs the top-up; it must not throw and must not resurrect B.
   let threw = null;
@@ -1401,9 +1434,12 @@ issue(73, "removing a middle slide leaves the cut group openable", () => {
   eq(threw, null, "opening the cut group after a middle delete does not throw");
 
   const codes = api.all(
-    `SELECT slide_code AS c FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`,
+    `SELECT slide_code AS c FROM slides
+      WHERE section_request_id = ? AND current_stage != 'removed' ORDER BY slide_ordinal`,
     [section]).map((r) => r.c);
   eq(codes.join(","), "EE-0001-A,EE-0001-C", "the removed slide stays removed");
+  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ?`, [section]).n, 3,
+     "all three rows are still on file — B is flagged, not deleted (#83)");
 });
 
 // #83 — the "only initialise an EMPTY section" guard fixed the partial-delete
@@ -1422,14 +1458,17 @@ issue(83, "emptying a cut group does not refill it on the next open", () => {
   const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
 
   for (const row of api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [section])) {
-    api.deleteSlide(row.id);
+    api.removeSlide(row.id, "cut discarded");
   }
   eq(api.get(`SELECT duplicates AS d FROM section_requests WHERE id = ?`, [section]).d, 0,
-     "the planned count follows the slides down to zero");
+     "the planned count follows the LIVE slides down to zero");
 
   api.ensureSlidesForSectionRequest(section);
-  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ?`, [section]).n, 0,
-     "an emptied cut group stays empty");
+  eq(api.get(
+    `SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`,
+    [section]).n, 0, "an emptied cut group stays empty");
+  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ?`, [section]).n, 3,
+     "all three rows survive for the log (#83)");
 
   // ...and the letter sequence is not advanced by the open either.
   api.ensureSlidesForSectionRequest(section);
@@ -1439,25 +1478,32 @@ issue(83, "emptying a cut group does not refill it on the next open", () => {
 
 // #83 — and the emptied group must not linger. A cut group with no slides shows
 // as "×0" in Needs Sectioning: a cut that claims to be pending but would produce
-// nothing. Racks already had this rule (deleteSlideStackIfEmpty); cut groups
+// nothing. Racks already had this rule (closeSlideStackIfEmpty); cut groups
 // did not, so the fix above traded a resurrecting group for a dead card.
-issue(83, "removing the last slide removes the empty cut group with it", () => {
+//
+// The group is RETIRED, not deleted — it is still the record of a cut that
+// happened, so it leaves the board and stays in the log (#83).
+issue(83, "removing the last slide retires the empty cut group with it", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "remove the lot");
   api.markEmbedded(id);
   const [keep, drop] = api.createSectionRequests(id, [{ duplicates: 2 }, { duplicates: 1 }]);
 
-  // Emptying the second group removes it; the first is untouched.
+  // Emptying the second group retires it; the first is untouched.
   api.removeSlides(api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [drop]).map((r) => r.id));
-  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [drop]).n, 0,
-     "the emptied cut group is gone");
-  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [keep]).n, 1,
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [drop]).s, "removed",
+     "the emptied cut group leaves the board");
+  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [drop]).n, 1,
+     "...but its row survives for the log — nothing is deleted (#83)");
+  assert(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [keep]).s !== "removed",
      "a group that still holds slides survives");
 
-  // Partially emptying the survivor must NOT remove it.
-  api.removeSlides([api.get(`SELECT id FROM slides WHERE section_request_id = ? LIMIT 1`, [keep]).id]);
-  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [keep]).n, 1,
+  // Partially emptying the survivor must NOT retire it.
+  api.removeSlides([api.get(
+    `SELECT id FROM slides WHERE section_request_id = ? AND current_stage != 'removed' LIMIT 1`,
+    [keep]).id]);
+  assert(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [keep]).s !== "removed",
      "a partly-emptied group is kept");
   eq(api.get(`SELECT duplicates AS d FROM section_requests WHERE id = ?`, [keep]).d, 1,
      "and its planned count tracks what is left");
@@ -1487,7 +1533,7 @@ issue(75, "slides from several cut groups list in cut order, not interleaved", (
 // disagreed on the same slides in the same drawer. Reachable without any cut
 // stage change: Request Stain moves a needs_sectioning group's extras into a
 // rack, and deleting that rack takes the group's last slides with it.
-issue(83, "deleting a rack that holds a group's last slides removes the group too", () => {
+issue(83, "removing a rack that holds a group's last slides retires the group too", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "rack takes the lot");
@@ -1501,9 +1547,12 @@ issue(83, "deleting a rack that holds a group's last slides removes the group to
                         [section]);
   eq(stack?.s != null, true, "both extras really joined a rack");
 
-  api.deleteSlidesForStack(stack.s);
-  eq(api.get(`SELECT COUNT(*) AS n FROM section_requests WHERE id = ?`, [section]).n, 0,
-     "the emptied cut group is gone, not left as a ×0 card");
+  api.removeSlidesForStack(stack.s, "rack dropped");
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s, "removed",
+     "the emptied cut group leaves the board, not left as a ×0 card");
+  eq(api.get(
+    `SELECT COUNT(*) AS n FROM slides WHERE section_request_id = ? AND current_stage = 'removed'`,
+    [section]).n, 2, "both slides are on file as removed, with their reason (#83)");
 });
 
 // #73 — the mark must survive delete paths that were NEVER mirrored into this
@@ -1511,8 +1560,8 @@ issue(83, "deleting a rack that holds a group's last slides removes the group to
 // rack, or a whole cut group, must not hand a live letter to the next cut.
 issue(73, "letters are not reused after ANY delete path", () => {
   for (const [label, wipe] of [
-    ["deleteSlidesForStack", (api, ctx) => api.deleteSlidesForStack(ctx.stackId)],
-    ["deleteSectionRequest", (api, ctx) => api.deleteSectionRequest(ctx.section)],
+    ["removeSlidesForStack", (api, ctx) => api.removeSlidesForStack(ctx.stackId)],
+    ["removeSectionRequest", (api, ctx) => api.removeSectionRequest(ctx.section)],
   ]) {
     const api = makeApi(freshDb());
     const p = api.seedProject();
@@ -1554,7 +1603,7 @@ issue(73, "the letter mark is backfilled from existing codes on open", () => {
 
   // Now a delete cannot lower it.
   const d = api.get(`SELECT id FROM slides WHERE slide_code = 'EE-0001-D'`);
-  api.deleteSlide(d.id);
+  api.removeSlide(d.id);
   eq(api.nextSlideLetter(id), 5, "the next letter is still E after deleting D");
 });
 
@@ -2213,6 +2262,74 @@ invariant("deleteSlideStackIfEmpty removes only childless stacks", () => {
   eq(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE id = ?`, [stackId]).c, 0, "emptied stack is pruned");
 });
 
+// #83 — the ONE check that a removed slide is gone from the bench and kept in
+// the record. Removal is spread across a stage flag, a stack detach and a dozen
+// board-facing queries; "did I remember to exclude it everywhere?" is a question
+// that belongs in a test rather than in a code review, because the last two
+// times it was answered by code review the answer shipped wrong.
+invariant("a removed slide leaves every working view and stays in the record", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "removal sweep");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
+  api.requestStainForSample(id, "stain", "H&E"); // pulls one extra into a rack
+
+  const victim = api.get(
+    `SELECT id, stack_id, slide_code AS code FROM slides
+      WHERE section_request_id = ? AND stack_id IS NOT NULL LIMIT 1`, [section]);
+  assert(victim != null, "an extra really joined a rack");
+  api.removeSlide(victim.id, "dropped on the floor");
+
+  // --- gone from the bench -------------------------------------------------
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [victim.id]).s, null,
+     "detached from its rack");
+  eq(api.listExtraSlides().filter((s) => s.id === victim.id).length, 0,
+     "gone from the Extras inventory");
+  eq(api.all(
+    `SELECT id FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`,
+    [section]).filter((s) => s.id === victim.id).length, 0,
+     "gone from the cut group's slide list");
+  eq(api.get(`SELECT duplicates AS d FROM section_requests WHERE id = ?`, [section]).d, 2,
+     "the group's planned count came down with it");
+
+  // --- kept in the record --------------------------------------------------
+  const row = api.get(`SELECT current_stage AS s, slide_code AS code, stage_cut_at AS cut
+                         FROM slides WHERE id = ?`, [victim.id]);
+  eq(row.s, "removed", "the row is still there, flagged");
+  eq(row.code, victim.code, "and keeps its code, so its letter stays burned");
+  const event = api.get(
+    `SELECT details AS d FROM sample_timeline_events
+      WHERE sample_id = ? AND event_type = 'slide_removed'`, [id]);
+  assert(event != null, "the removal is on the sample timeline");
+  const parsed = JSON.parse(event.d);
+  eq(parsed.slide_id, victim.id, "the timeline entry names the slide it removed");
+  eq(parsed.reason, "dropped on the floor", "and carries the reason the user gave");
+});
+
+// #83 — the Logs view is the one place removed slides MUST still appear, and the
+// one place they must not be counted. Source-scanned because the arithmetic
+// lives in React, not SQL: listAllSlides deliberately has no stage filter, so
+// nothing but these two call sites keeps a removed slide out of the fraction.
+invariant("the Logs view shows removed slides but excludes them from progress", () => {
+  const logs = readFileSync(join(HERE, "..", "src", "components", "LogsView.tsx"), "utf8");
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  assert(/function isRemoved/.test(logs), "LogsView needs one shared isRemoved predicate");
+  assert(/function analyzedProgress[\s\S]{0,240}!isRemoved/.test(logs),
+    "analyzedProgress must drop removed slides, or a sample strands at 3/4 forever");
+  assert(/function samplePhase[\s\S]{0,240}!isRemoved/.test(logs),
+    "samplePhase must drop removed slides, or the sample stays 'Sectioned' forever");
+  assert(logs.includes("Removed"), "the Logs row needs a visible Removed flag");
+  // Scoped to the function BODY (up to the next top-level export), not a fixed
+  // character window — a window silently ran into the next function and made
+  // this assertion about the wrong query.
+  const listAll = /export async function listAllSlides[\s\S]*?\n(?=export )/.exec(db)?.[0];
+  assert(listAll != null, "listAllSlides must exist in db.ts");
+  assert(listAll.includes("FROM slides"), "listAllSlides must read the slides table");
+  assert(!listAll.includes("current_stage != 'removed'"),
+    "listAllSlides must NOT filter removed slides — the log is where they live");
+});
+
 invariant("downstream UI and actions address durable stack IDs", () => {
   const app = readFileSync(join(HERE, "..", "src", "App.tsx"), "utf8");
   const drawer = readFileSync(join(HERE, "..", "src", "components", "StackDetailsDrawer.tsx"), "utf8");
@@ -2221,8 +2338,8 @@ invariant("downstream UI and actions address durable stack IDs", () => {
     "App must not translate stack moves back into section IDs");
   assert(drawer.includes('scopeType="slide_stack"') && drawer.includes("useStackSlides(stack.id)"),
     "stack drawer must query and mutate stack-owned workflow state");
-  assert(drawer.includes("removeSlides([...selectedSlideIds])"),
-    "stack drawer must support one combined delete for selected slides");
+  assert(drawer.includes("removeSlides([...selectedSlideIds], reason)"),
+    "stack drawer must remove selected slides in one call, WITH a reason (#83)");
   assert(actions.includes("await snapshotDb()"),
     "stack moves are undoable via the whole-DB snapshot");
 });

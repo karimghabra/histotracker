@@ -7,12 +7,12 @@ import {
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
   deleteSample,
-  deleteSectionRequest,
-  deleteSlide,
-  deleteSlideStack,
-  deleteSlideStackIfEmpty,
-  deleteSectionRequestIfEmpty,
-  deleteSlidesForStack,
+  removeSectionRequest,
+  removeSlide,
+  closeSlideStack,
+  closeSlideStackIfEmpty,
+  removeSectionRequestIfEmpty,
+  removeSlidesForStack,
   restoreDbPreservingSession,
   getSample,
   getSectionRequest,
@@ -84,6 +84,8 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["stain-requests"] });
     qc.invalidateQueries({ queryKey: ["all-samples"] });
     qc.invalidateQueries({ queryKey: ["all-slides"] });
+    qc.invalidateQueries({ queryKey: ["slide-removals"] });
+    qc.invalidateQueries({ queryKey: ["audit-events"] });
     // Undo/redo swap the whole DB image; the session-preserving restore re-adds
     // the current users + signed-in user, so refetch those too (#1).
     qc.invalidateQueries({ queryKey: ["users"] });
@@ -552,15 +554,19 @@ export function useActions() {
     [moveSlideStacks],
   );
 
+  // Every removal below takes a REASON and destroys nothing (#83). The slides
+  // keep their rows, their timestamps and their letters; they leave the board and
+  // their rack, and the Logs view shows them flagged with the reason. See
+  // `removeSlide` in db.ts for why the stage carries this rather than a column.
   const removeSlideStacks = useCallback(
-    (stackIds: number[]) => {
+    (stackIds: number[], reason: string) => {
       if (stackIds.length === 0) return Promise.resolve();
       return commit(
-        `Delete ${stackIds.length} slide stack${stackIds.length === 1 ? "" : "s"}`,
+        `Remove ${stackIds.length} slide stack${stackIds.length === 1 ? "" : "s"}`,
         async () => {
           for (const id of stackIds) {
-            await deleteSlidesForStack(id);
-            await deleteSlideStack(id);
+            await removeSlidesForStack(id, reason);
+            await closeSlideStack(id);
           }
         },
       );
@@ -569,11 +575,11 @@ export function useActions() {
   );
 
   const removeSlides = useCallback(
-    async (slideIds: number[]) => {
+    async (slideIds: number[], reason: string) => {
       if (slideIds.length === 0) return;
-      // Capture the parent stacks AND cut groups so we can drop any that go
-      // empty — read them before the delete, since afterwards the slide rows
-      // that point at them are gone (#83).
+      // Capture the parent stacks AND cut groups so we can retire any that go
+      // empty — read them first, because removal detaches each slide from its
+      // stack, so afterwards nothing points back (#83).
       const parents = await Promise.all(slideIds.map(getSlide));
       const stackIds = [
         ...new Set(parents.map((slide) => slide?.stack_id).filter((id): id is number => id != null)),
@@ -583,17 +589,17 @@ export function useActions() {
           parents.map((slide) => slide?.section_request_id).filter((id): id is number => id != null),
         ),
       ];
-      await commit(`Delete ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"}`, async () => {
-        for (const id of slideIds) await deleteSlide(id);
-        for (const id of stackIds) await deleteSlideStackIfEmpty(id);
-        for (const id of sectionIds) await deleteSectionRequestIfEmpty(id);
+      await commit(`Remove ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"}`, async () => {
+        for (const id of slideIds) await removeSlide(id, reason);
+        for (const id of stackIds) await closeSlideStackIfEmpty(id);
+        for (const id of sectionIds) await removeSectionRequestIfEmpty(id);
       });
     },
     [commit],
   );
 
   const removeSections = useCallback(
-    async (sectionIds: number[]) => {
+    async (sectionIds: number[], reason: string) => {
       if (sectionIds.length === 0) return;
       const stackIds = [
         ...new Set(
@@ -603,16 +609,16 @@ export function useActions() {
             .filter((id): id is number => id != null),
         ),
       ];
-      await commit(sectionIds.length === 1 ? "Delete section" : `Delete ${sectionIds.length} cut groups`, async () => {
-        for (const id of sectionIds) await deleteSectionRequest(id);
-        for (const id of stackIds) await deleteSlideStackIfEmpty(id);
+      await commit(sectionIds.length === 1 ? "Remove cut group" : `Remove ${sectionIds.length} cut groups`, async () => {
+        for (const id of sectionIds) await removeSectionRequest(id, reason);
+        for (const id of stackIds) await closeSlideStackIfEmpty(id);
       });
     },
     [commit],
   );
 
   const removeSection = useCallback(
-    (sectionId: number) => removeSections([sectionId]),
+    (sectionId: number, reason: string) => removeSections([sectionId], reason),
     [removeSections],
   );
 
