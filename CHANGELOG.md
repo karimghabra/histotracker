@@ -59,6 +59,19 @@ multi-table write that failed part-way, where nothing was ever committed.
 Existing samples with blank descriptions are left alone and stay editable from
 the Logs row and the sample drawer.
 
+**The sidebar says SELECTED, and stops clipping (#84).**
+
+- The badge on the current project now reads **SELECTED**, and the heading above
+  the list is just **Projects**. Every project in that list is active, so the old
+  wording answered a question nobody asked while the real one — which project
+  will a new sample go into? — went unanswered.
+- **The selected row no longer sits proud of its neighbours.** Its highlight ring
+  was drawn *outside* the row's box, making it 4px wider than every other row.
+- **The project code no longer clips when the sidebar is minimised.** At 56px
+  wide the selected project was carrying both a coloured fill and a dot, and
+  dot + gap + three letters needed more room than the row had. The fill is the
+  marker; the dot is gone.
+
 ## 0.7.3 - 2026-08-02
 
 Follow-up to 0.7.2, from a second review pass over the same code. Fixes one more

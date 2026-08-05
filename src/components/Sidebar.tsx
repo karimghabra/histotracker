@@ -62,7 +62,10 @@ export function Sidebar({
       </nav>
 
       <div className={cn("flex items-center pb-2 pt-3", collapsed ? "flex-col gap-1 px-2" : "justify-between px-5")}>
-        {!collapsed && <span className="text-xs font-semibold uppercase tracking-wider text-ink-soft">Active Projects</span>}
+        {/* "Projects", not "Active Projects" — every project in this list is
+            active, so the word distinguished nothing and collided with the
+            SELECTED one below (#84). */}
+        {!collapsed && <span className="text-xs font-semibold uppercase tracking-wider text-ink-soft">Projects</span>}
         <div className="flex items-center gap-1">
         <button
           onClick={onAddProject}
@@ -76,7 +79,7 @@ export function Sidebar({
         </button>
         <button
           onClick={toggleCollapsed}
-          title={collapsed ? "Expand active projects" : "Collapse active projects"}
+          title={collapsed ? "Expand projects" : "Collapse projects"}
           className="rounded-md p-1 text-ink-soft transition hover:bg-brand/10 hover:text-ink"
         >
           {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
@@ -87,7 +90,7 @@ export function Sidebar({
       <div className={cn("flex-1 overflow-y-auto thin-scroll", collapsed ? "px-1.5" : "px-3")}>
         {projects.length === 0 && !collapsed && (
           <p className="px-2 py-4 text-sm text-ink-faint">
-            No active projects yet. Add one to begin.
+            No projects yet. Add one to begin.
           </p>
         )}
         {projects.map((p) => {
@@ -98,27 +101,41 @@ export function Sidebar({
               onClick={() => onSelectProject(p.id)}
               title={collapsed ? `${p.name} (${p.code})` : undefined}
               aria-current={active ? "true" : undefined}
-              // The active project decides which project a new sample lands in,
-              // so it has to be unmistakable at a glance — a dim tint was being
-              // missed and samples were created under the wrong project (#84).
-              // Solid brand fill + a left accent bar + weight, not tint alone.
+              // The selected project decides which project a new sample lands
+              // in, so it has to be unmistakable at a glance — a dim tint was
+              // being missed and samples were created under the wrong project
+              // (#84). Solid brand fill + a left accent bar + weight.
+              //
+              // ring-INSET, not ring. A plain Tailwind ring is a box-shadow
+              // painted OUTSIDE the border box, so the selected row rendered 4px
+              // wider than every other row and sat proud of the list — the
+              // "darker box doesn't fit in the larger box" in the report. Inset
+              // keeps every row exactly the same width, selected or not.
               className={cn(
                 "relative mb-1 flex w-full items-center justify-between rounded-lg py-2 text-left transition",
-                collapsed ? "justify-center pl-2 pr-1" : "pl-4 pr-3",
+                collapsed ? "justify-center px-1" : "pl-4 pr-3",
                 active
-                  ? "bg-brand/45 text-ink ring-2 ring-brand shadow-sm before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1.5 before:rounded-l-lg before:bg-brand-strong"
+                  ? "bg-brand/45 text-ink ring-2 ring-inset ring-brand shadow-sm before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1.5 before:rounded-l-lg before:bg-brand-strong"
                   : "opacity-80 hover:opacity-100 hover:bg-brand/8",
               )}
             >
               {collapsed ? (
                 // Collapsed, the only cue used to be a 3-letter code with no
-                // active marker at all — so the sidebar gave no answer to "which
-                // project will this sample go into?" (#84). Show a dot.
-                <span className="flex items-center gap-1">
-                  {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-strong" />}
-                  <span className={cn("text-xs", active ? "font-bold text-ink" : "font-semibold")}>
-                    {p.code.slice(0, 3).toUpperCase()}
-                  </span>
+                // marker at all — so the sidebar gave no answer to "which project
+                // will this sample go into?" (#84).
+                //
+                // The fill IS the marker. There was also a dot, and dot + gap +
+                // three letters needed 33px in a 31px content box, so the code
+                // was clipped — the report's "boxes clip when the menu is
+                // minimised". At 56px wide there is no room for two indicators,
+                // and the redundant one goes.
+                <span
+                  className={cn(
+                    "block w-full truncate text-center text-xs leading-none",
+                    active ? "font-bold text-ink" : "font-semibold",
+                  )}
+                >
+                  {p.code.slice(0, 3).toUpperCase()}
                 </span>
               ) : <span className="min-w-0">
                 <span className={cn("block truncate text-sm", active ? "font-bold" : "font-medium")}>
@@ -129,10 +146,15 @@ export function Sidebar({
                     {p.code}
                   </span>
                   {active && (
+                    // "Selected", not "Active": every project in this list is
+                    // active, so the badge was answering a question nobody asked
+                    // while the real one — which project will a new sample go
+                    // into? — went unanswered (#84).
+                    //
                     // text-surface, not text-white: brand-strong is a LIGHT tone
                     // in the dark themes, where white would wash out.
                     <span className="rounded-sm bg-brand-strong px-1 py-px text-[9px] font-bold uppercase tracking-wider text-surface">
-                      Active
+                      Selected
                     </span>
                   )}
                 </span>
