@@ -164,10 +164,11 @@ test("a planned run's sample list is editable in the drawer (#32)", async ({ pag
   await drawer.getByRole("button", { name: /EE-2/ }).click({ force: true });
   await expect(page.getByText(/protocol · 2 samples/)).toBeVisible();
 
-  // And it can be removed again (X on the member row).
+  // And it can be removed again (X on the member row). Addressed by aria-label,
+  // which names the sample: the button's TITLE now varies with whether the run
+  // is planned or already going (#91), so it is no longer a stable handle.
   await drawer
-    .getByRole("button", { name: "Remove from this planned run" })
-    .first()
+    .getByRole("button", { name: "Remove EE-1 from this run" })
     .click({ force: true });
   await expect(page.getByText(/protocol · 1 samples/)).toBeVisible();
 });

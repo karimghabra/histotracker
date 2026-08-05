@@ -31,6 +31,9 @@ import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
 type EmbeddedSort = "embedded_date" | "name" | "sample_id";
 type ExtraSlidesSort = "sample_id" | "name";
+// #89 — Pre-processing is where every sample enters, so it fills up fastest and
+// needs the same project filter and sort the downstream queues already have.
+type PreprocessingSort = "received_date" | "name" | "sample_id";
 
 /** Shared empty list so an absent queue keeps a stable identity across renders. */
 const NO_STACKS: SlideStack[] = [];
@@ -58,6 +61,31 @@ function sortEmbedded(samples: Sample[], key: EmbeddedSort): Sample[] {
       case "embedded_date":
       default:
         return (a.stage_embedded_at ?? "").localeCompare(b.stage_embedded_at ?? "");
+    }
+  });
+  return copy;
+}
+
+function sortPreprocessing(samples: Sample[], key: PreprocessingSort): Sample[] {
+  const copy = [...samples];
+  copy.sort((a, b) => {
+    if (a.is_priority !== b.is_priority) return b.is_priority - a.is_priority;
+    switch (key) {
+      case "name":
+        return (a.sample_description || a.sample_code).localeCompare(
+          b.sample_description || b.sample_code,
+        );
+      case "sample_id":
+        return (
+          (a.project_code ?? "").localeCompare(b.project_code ?? "") ||
+          (a.project_sample_number ?? 0) - (b.project_sample_number ?? 0)
+        );
+      case "received_date":
+      default:
+        // Received, not embedded: nothing in this queue has been embedded yet,
+        // so sortEmbedded's key would compare a column that is NULL for every
+        // row here and leave the order to the tie-break.
+        return (a.stage_received_at ?? "").localeCompare(b.stage_received_at ?? "");
     }
   });
   return copy;
@@ -163,6 +191,9 @@ export function Board({
   const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
   const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
+  // Pre-processing gets the same two controls (#89).
+  const [preprocessingFilter, setPreprocessingFilter] = useState<number | "all">("all");
+  const [preprocessingSort, setPreprocessingSort] = useState<PreprocessingSort>("received_date");
   const [extraSlidesFilter, setExtraSlidesFilter] = useState<string>("all");
   const [extraSlidesSort, setExtraSlidesSort] = useState<ExtraSlidesSort>("sample_id");
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
@@ -292,6 +323,36 @@ export function Board({
     }
     return sortEmbedded(items, embeddedSort);
   }, [blocksByQueue, embeddedFilter, embeddedSort]);
+
+  // ---- Pre-processing filter + sort (#89) ----
+  const projectsInPreprocessing = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const sample of blocksByQueue.preprocessing ?? []) {
+      if (sample.project_code) seen.set(sample.project_id, sample.project_code);
+    }
+    return [...seen.entries()];
+  }, [blocksByQueue]);
+
+  const displayedPreprocessingItems = useMemo(() => {
+    let items = blocksByQueue.preprocessing ?? [];
+    if (preprocessingFilter !== "all") {
+      items = items.filter((sample) => sample.project_id === preprocessingFilter);
+    }
+    return sortPreprocessing(items, preprocessingSort);
+  }, [blocksByQueue, preprocessingFilter, preprocessingSort]);
+
+  // A <select> whose selected option disappears keeps reporting the stale value
+  // and fires no change event, so the column filters itself down to nothing
+  // while other projects' samples sit there unshown. That is bug #85 exactly;
+  // drop the filter for real once its value is off the menu.
+  useEffect(() => {
+    if (
+      preprocessingFilter !== "all" &&
+      !projectsInPreprocessing.some(([id]) => id === preprocessingFilter)
+    ) {
+      setPreprocessingFilter("all");
+    }
+  }, [preprocessingFilter, projectsInPreprocessing]);
 
   // ---- Ready for Imaging filters (#82) ----
   const agentsOf = (stack: SlideStack): string[] =>
@@ -818,8 +879,11 @@ export function Board({
                   let items = blocksByQueue[queueKey] ?? [];
                   const queueBatches = batchesByQueue[queueKey] ?? [];
                   const isEmbedded = queueKey === "embedded_inventory";
+                  const isPreprocessing = queueKey === "preprocessing";
                   if (isEmbedded) {
                     items = displayedEmbeddedItems;
+                  } else if (isPreprocessing) {
+                    items = displayedPreprocessingItems;
                   }
                   const selectedCount = items.filter((item) => selectedBlocks.has(item.id)).length;
                   return (
@@ -863,6 +927,36 @@ export function Board({
                               onChange={(event) => setEmbeddedSort(event.target.value as EmbeddedSort)}
                             >
                               <option value="embedded_date">Date embedded</option>
+                              <option value="name">Name</option>
+                              <option value="sample_id">Sample ID</option>
+                            </select>
+                          </div>
+                        ) : isPreprocessing ? (
+                          <div className="flex gap-1">
+                            <select
+                              aria-label="Filter pre-processing by project"
+                              className={selectClass}
+                              value={String(preprocessingFilter)}
+                              onChange={(event) =>
+                                setPreprocessingFilter(
+                                  event.target.value === "all" ? "all" : Number(event.target.value),
+                                )
+                              }
+                            >
+                              <option value="all">All Projects</option>
+                              {projectsInPreprocessing.map(([id, code]) => (
+                                <option key={id} value={id}>{code}</option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label="Sort pre-processing"
+                              className={selectClass}
+                              value={preprocessingSort}
+                              onChange={(event) =>
+                                setPreprocessingSort(event.target.value as PreprocessingSort)
+                              }
+                            >
+                              <option value="received_date">Date received</option>
                               <option value="name">Name</option>
                               <option value="sample_id">Sample ID</option>
                             </select>

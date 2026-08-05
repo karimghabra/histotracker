@@ -1378,23 +1378,38 @@ export async function getBatchMemberIds(batchId: number): Promise<number[]> {
 }
 
 /**
- * Replace a planned run's member samples (issue #32). Only planned runs are
- * editable; the new set must share the protocol, have completed preprocessing,
- * and not already be committed to a different open batch.
+ * Replace a run's member samples (issues #32, #91).
+ *
+ * Both PLANNED and RUNNING batches are editable. Forgetting a sample, or not
+ * selecting them all when the batch was created, is a routine mistake that is
+ * only noticed once the processor is already going — and until #91 the only
+ * remedy was to abandon the run. The new set must share the protocol, have
+ * completed preprocessing (the reporter's own note), and not already be
+ * committed to a different open batch.
+ *
+ * Editing a RUNNING batch has to move samples between stages, which a planned
+ * batch never needed: its members are still sitting in pre-processing either
+ * way. Added samples join the run in progress; removed ones go back to where
+ * they came from.
  */
-export async function updatePlannedBatchMembers(
+export async function updateBatchMembers(
   batchId: number,
   sampleIds: number[],
 ): Promise<void> {
-  if (sampleIds.length === 0) throw new Error("A planned run needs at least one sample.");
+  if (sampleIds.length === 0) throw new Error("A run needs at least one sample.");
   const db = await getDb();
-  const batchRows = await db.select<Array<{ status: string; processing_type: string }>>(
-    `SELECT status, processing_type FROM processing_batches WHERE id = ?`,
+  const batchRows = await db.select<
+    Array<{ status: string; processing_type: string; started_at: string }>
+  >(
+    `SELECT status, processing_type, started_at FROM processing_batches WHERE id = ?`,
     [batchId],
   );
   const batch = batchRows[0];
   if (!batch) throw new Error("That processing batch no longer exists.");
-  if (batch.status !== "planned") throw new Error("Only a planned run's samples can be edited.");
+  if (batch.status !== "planned" && batch.status !== "processing") {
+    throw new Error("Only a planned or running batch's samples can be edited.");
+  }
+  const running = batch.status === "processing";
   const placeholders = sampleIds.map(() => "?").join(", ");
   const samples = await db.select<Sample[]>(
     `SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`,
@@ -1427,12 +1442,47 @@ export async function updatePlannedBatchMembers(
   if (conflict.length > 0) {
     throw new Error(`Already committed to another batch: ${conflict.map((r) => r.sample_code).join(", ")}`);
   }
+
+  // Who is joining and who is leaving — read BEFORE the membership is rewritten.
+  const previousIds = (
+    await db.select<Array<{ sample_id: number }>>(
+      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
+      [batchId],
+    )
+  ).map((r) => r.sample_id);
+  const next = new Set(sampleIds);
+  const joined = sampleIds.filter((id) => !previousIds.includes(id));
+  const left = previousIds.filter((id) => !next.has(id));
+
   await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
   for (const id of sampleIds) {
     await db.execute(
       `INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`,
       [batchId, id],
     );
+  }
+
+  // A PLANNED run needs nothing further: nobody has moved, so membership is the
+  // whole story. A RUNNING one is a physical fact — the samples are in the
+  // machine — so the stage has to follow the membership or the board shows a
+  // block sitting in pre-processing while it is actually being processed.
+  if (!running) return;
+  for (const id of joined) {
+    // The run's own start time, not now(): one batch, one timer. The sample
+    // shares the existing ready_at, which is the honest reading of "I put it in
+    // the same load" — it gets less than the full protocol duration, and the
+    // drawer says so before you add it.
+    await db.execute(
+      `UPDATE samples SET current_stage = 'processing_started', processing_started_at = ?
+        WHERE id = ?`,
+      [batch.started_at, id],
+    );
+  }
+  for (const id of left) {
+    // Back to the end of pre-processing, which is where a sample waits to be
+    // loaded. revertToStage clears every timestamp after the target, so the
+    // sample does not keep a processing_started_at for a run it is no longer in.
+    await revertToStage(id, "in_ethanol");
   }
 }
 

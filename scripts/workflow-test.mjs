@@ -255,14 +255,28 @@ function makeApi(db) {
   }
 
   // Port of updatePlannedBatchMembers() — src/lib/db.ts (issue #32).
-  function updatePlannedBatchMembers(batchId, sampleIds) {
-    if (!sampleIds.length) throw new Error("A planned run needs at least one sample.");
-    const batch = get(`SELECT status, processing_type FROM processing_batches WHERE id = ?`, [batchId]);
+  // Port of updateBatchMembers() — db.ts. PLANNED **and** RUNNING batches are
+  // editable (#91); a running one also has to move samples between stages,
+  // because its members are physically in the machine.
+  function updateBatchMembers(batchId, sampleIds) {
+    if (!sampleIds.length) throw new Error("A run needs at least one sample.");
+    const batch = get(
+      `SELECT status, processing_type, started_at FROM processing_batches WHERE id = ?`, [batchId]);
     if (!batch) throw new Error("That processing batch no longer exists.");
-    if (batch.status !== "planned") throw new Error("Only a planned run's samples can be edited.");
+    if (batch.status !== "planned" && batch.status !== "processing") {
+      throw new Error("Only a planned or running batch's samples can be edited.");
+    }
+    const running = batch.status === "processing";
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
     if (samples.some((s) => s.processing_type !== batch.processing_type)) throw new Error("PROTOCOL_MISMATCH");
+    // The reporter's own note: only fully preprocessed samples reach the
+    // processor. This was already enforced and must stay so when adding to a
+    // run that is already going.
+    const notReady = samples.filter((s) =>
+      (s.needs_decalcification === 1 && !s.decalc_completed_at) ||
+      !s.fixative_placed_at || !s.fixative_removed_at || !s.ethanol_placed_at);
+    if (notReady.length) throw new Error("NOT_PREPROCESSED");
     const conflict = all(
       `SELECT s.sample_code FROM processing_batch_members pbm
          JOIN processing_batches pb ON pb.id = pbm.batch_id
@@ -270,8 +284,48 @@ function makeApi(db) {
         WHERE pbm.sample_id IN (${placeholders}) AND pb.id != ? AND pb.status IN ('planned', 'processing')`,
       [...sampleIds, batchId]);
     if (conflict.length) throw new Error("ALREADY_BATCHED");
+
+    const previousIds = all(
+      `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
+    const next = new Set(sampleIds);
+    const joined = sampleIds.filter((id) => !previousIds.includes(id));
+    const left = previousIds.filter((id) => !next.has(id));
+
     run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
     for (const id of sampleIds) run(`INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`, [batchId, id]);
+    if (!running) return;
+    for (const id of joined) {
+      // The RUN's start time, not now(): one batch, one timer.
+      run(`UPDATE samples SET current_stage = 'processing_started', processing_started_at = ? WHERE id = ?`,
+          [batch.started_at, id]);
+    }
+    for (const id of left) revertToStage(id, "in_ethanol");
+  }
+
+  // Port of revertToStage() — db.ts. Clears every stage timestamp AFTER the
+  // target, so a sample pulled out of a run does not keep a
+  // processing_started_at for a run it is no longer in.
+  function revertToStage(sampleId, stageKey) {
+    const ORDER = ["received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol",
+      "processing_started", "processed", "picked_up", "needs_embedding", "embedded",
+      "needs_sectioning", "sectioned", "stain_requested", "stained", "ihc_complete",
+      "pictures_taken", "analyzed"];
+    const COLUMN = {
+      received: "stage_received_at", in_fixative: "fixative_placed_at",
+      fixative_removed: "fixative_removed_at", decalcified: "decalc_completed_at",
+      in_ethanol: "ethanol_placed_at", processing_started: "processing_started_at",
+      processed: "stage_processed_at", picked_up: "stage_picked_up_at",
+      needs_embedding: "stage_needs_embedding_at", embedded: "stage_embedded_at",
+      needs_sectioning: "stage_needs_sectioning_at", sectioned: "stage_sectioned_at",
+      stain_requested: "stage_stain_requested_at", stained: "stage_stained_at",
+      ihc_complete: "stage_ihc_at", pictures_taken: "stage_pictures_taken_at",
+      analyzed: "stage_analyzed_at",
+    };
+    const target = ORDER.indexOf(stageKey);
+    if (target < 0) throw new Error(`Unknown stage: ${stageKey}`);
+    const clear = ORDER.slice(target + 1).map((k) => `${COLUMN[k]} = NULL`);
+    run(`UPDATE samples SET ${["current_stage = ?", ...clear].join(", ")} WHERE id = ?`,
+        [stageKey, sampleId]);
   }
 
   function moveBatch(batchId, stageKey) {
@@ -835,7 +889,7 @@ function makeApi(db) {
     removeSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
-    planProcessingBatch, confirmProcessingBatchStart, updatePlannedBatchMembers,
+    planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
     requestStainForSample, snapshotDb, restoreDb,
   };
 }
@@ -1205,23 +1259,80 @@ issue(38, "pre-assigned section goes straight from sectioning to staining", () =
   eq(api.listExtraSlides().length, 3, "the three extras surface in inventory");
 });
 
-// #32 — a planned run's sample list is editable; a running one is not.
+// #32 — a planned run's sample list is editable.
 issue(32, "planned run sample list is editable", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const a = api.addSample(p, "EE", "A"); api.completePreprocessing(a.id);
   const b = api.addSample(p, "EE", "B"); api.completePreprocessing(b.id);
   const batchId = api.planProcessingBatch({ sampleIds: [a.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
-  api.updatePlannedBatchMembers(batchId, [a.id, b.id]);
+  api.updateBatchMembers(batchId, [a.id, b.id]);
   eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 2,
      "a second sample can be added to a planned run");
-  api.updatePlannedBatchMembers(batchId, [b.id]);
+  api.updateBatchMembers(batchId, [b.id]);
   eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 1,
      "a sample can be removed from a planned run");
-  api.confirmProcessingBatchStart(batchId);
-  let rejected = false;
-  try { api.updatePlannedBatchMembers(batchId, [a.id, b.id]); } catch { rejected = true; }
-  assert(rejected, "a running run's sample list is locked");
+  // A PLANNED run moves nobody: its members are still in pre-processing, so
+  // membership is the whole story.
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [b.id]).s, "in_ethanol",
+     "a planned run does not move its members' stage");
+});
+
+// #91 — "forgot to put a sample in the batch" is noticed once the processor is
+// already going, which is exactly when the planned-only rule refused to help:
+// the only remedy was to abandon the run. A RUNNING batch is now editable too,
+// and because its members are physically in the machine the stage has to follow
+// the membership — otherwise the board shows a block in pre-processing while it
+// is actually being processed.
+issue(91, "a RUNNING processor run's sample list is editable", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "already in"); api.completePreprocessing(a.id);
+  const b = api.addSample(p, "EE", "forgotten"); api.completePreprocessing(b.id);
+  const c = api.addSample(p, "EE", "wrongly included"); api.completePreprocessing(c.id);
+  const batchId = api.startProcessingBatch({ sampleIds: [a.id, c.id], processingType: "Short", startedAt: "2026-08-01 08:00" });
+  const started = api.get(`SELECT started_at AS s, ready_at AS r FROM processing_batches WHERE id = ?`, [batchId]);
+
+  // ADD the forgotten sample to the run in progress.
+  api.updateBatchMembers(batchId, [a.id, c.id, b.id]);
+  const added = api.get(`SELECT current_stage AS s, processing_started_at AS at FROM samples WHERE id = ?`, [b.id]);
+  eq(added.s, "processing_started", "the added sample joins the run, not the pre-processing queue");
+  eq(added.at, started.s, "and takes the RUN's start time — one batch, one timer");
+  eq(api.get(`SELECT ready_at AS r FROM processing_batches WHERE id = ?`, [batchId]).r, started.r,
+     "adding a sample does not move the run's ready time");
+
+  // REMOVE the one that should not have been included.
+  api.updateBatchMembers(batchId, [a.id, b.id]);
+  const removed = api.get(
+    `SELECT current_stage AS s, processing_started_at AS at FROM samples WHERE id = ?`, [c.id]);
+  eq(removed.s, "in_ethanol", "the removed sample goes back to the end of pre-processing");
+  eq(removed.at, null, "...and does not keep a start time for a run it is no longer in");
+  eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 2,
+     "membership is exactly the new set");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [a.id]).s, "processing_started",
+     "an untouched member is left alone");
+});
+
+// #91 — the reporter's own note: "only fully preprocessed samples can be moved
+// to the processor". Editing a run must not become a back door around the guard
+// that starting one already enforces.
+issue(91, "a half-preprocessed sample cannot be added to a running run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "ready"); api.completePreprocessing(a.id);
+  const half = api.addSample(p, "EE", "still in fixative");
+  // In fixative and no further: the ethanol step never happened.
+  api.run(`UPDATE samples SET current_stage = 'in_fixative', fixative_placed_at = ? WHERE id = ?`,
+          ["2026-01-01 08:00", half.id]);
+  const batchId = api.startProcessingBatch({ sampleIds: [a.id], processingType: "Short", startedAt: "2026-08-01 08:00" });
+
+  let threw = null;
+  try { api.updateBatchMembers(batchId, [a.id, half.id]); } catch (err) { threw = err.message; }
+  eq(threw, "NOT_PREPROCESSED", "the half-preprocessed sample is refused");
+  eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 1,
+     "and the run's membership is untouched by the refusal");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [half.id]).s, "in_fixative",
+     "the refused sample stays where it was");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample

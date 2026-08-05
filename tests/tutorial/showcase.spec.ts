@@ -131,7 +131,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await boxes.nth(0).check();
   await boxes.nth(1).check();
   await shot(page, "15-logs-slides-selected", true);
-  await page.getByRole("button", { name: "Tag depth" }).click();
+  await page.getByRole("button", { name: "Create Tag" }).click();
   await expect(page.getByRole("heading", { name: /Tag 2 slides at a depth/ })).toBeVisible();
   await page.getByLabel("Depth label").fill("100µm deep");
   await page.getByLabel("Note (optional)").fill("mid-section pair");

@@ -46,7 +46,7 @@ export default function App() {
   const { data: activeUser = null } = useActiveUser();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
-  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editPlannedBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
+  const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
 
@@ -277,10 +277,15 @@ export default function App() {
     () => batches.find((batch) => batch.id === selectedBatchId) ?? null,
     [batches, selectedBatchId],
   );
-  // Samples that could be added to the selected planned run (issue #32): same
+  // Samples that could be added to the selected run (issues #32, #91): same
   // protocol, preprocessing complete, and not already committed to a batch.
-  const plannedBatchCandidates = useMemo(() => {
-    if (!selectedBatch || selectedBatch.status !== "planned") return [];
+  //
+  // Running batches are included, not just planned ones. "Forgot to put a sample
+  // in the batch" is noticed once the processor is already going, which is
+  // exactly when the old planned-only rule refused to help.
+  const batchCandidates = useMemo(() => {
+    if (!selectedBatch) return [];
+    if (selectedBatch.status !== "planned" && selectedBatch.status !== "processing") return [];
     const committed = new Set(
       batches.filter((batch) => batch.id !== selectedBatch.id).flatMap((batch) => batch.member_ids),
     );
@@ -469,9 +474,9 @@ export default function App() {
       key={selectedBatch.id}
       batch={selectedBatch}
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
-      candidates={plannedBatchCandidates}
+      candidates={batchCandidates}
       onEditMembers={(batchId, sampleIds) =>
-        void editPlannedBatchMembers(batchId, sampleIds).catch((error) => flash(String(error)))
+        void editBatchMembers(batchId, sampleIds).catch((error) => flash(String(error)))
       }
       onMove={moveBatchWithConfirmation}
       onEditStart={(batchId, startedAt) =>

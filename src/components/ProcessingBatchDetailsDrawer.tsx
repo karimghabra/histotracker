@@ -37,7 +37,7 @@ export function ProcessingBatchDetailsDrawer({
   onEditStart?: (batchId: number, startedAt: string) => void;
   /** Confirm a planned run actually started (issue #4). */
   onConfirmStart?: (batchId: number, actualStartedAt?: string) => void;
-  /** Replace a planned run's sample list (issue #32). */
+  /** Replace the run's sample list (issues #32, #91). */
   onEditMembers?: (batchId: number, sampleIds: number[]) => void;
   width?: number;
   onClose: () => void;
@@ -45,8 +45,12 @@ export function ProcessingBatchDetailsDrawer({
   // A viewer reads the run and its countdown, but cannot move or edit it (#72).
   const readOnly = useReadOnly();
   const isPlanned = batch.status === "planned";
+  // #91 — a run already in the processor is editable too. Forgetting a sample is
+  // noticed once the machine is going, which is precisely when the planned-only
+  // rule refused to help and the only remedy was to abandon the run.
+  const isRunning = batch.status === "processing";
   const memberIds = samples.map((sample) => sample.id);
-  const canEditMembers = isPlanned && Boolean(onEditMembers) && !readOnly;
+  const canEditMembers = (isPlanned || isRunning) && Boolean(onEditMembers) && !readOnly;
   const [adding, setAdding] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [confirmAt, setConfirmAt] = useState(() =>
@@ -121,7 +125,12 @@ export function ProcessingBatchDetailsDrawer({
               </div>
               {canEditMembers && samples.length > 1 && (
                 <button
-                  title="Remove from this planned run"
+                  title={
+                    isRunning
+                      ? `Take ${displayCode(sample.sample_code)} out of this run — it returns to pre-processing`
+                      : "Remove from this planned run"
+                  }
+                  aria-label={`Remove ${displayCode(sample.sample_code)} from this run`}
                   onClick={() => onEditMembers?.(batch.id, memberIds.filter((id) => id !== sample.id))}
                   className="shrink-0 rounded p-1 text-ink-faint hover:bg-red-50 hover:text-red-600"
                 >
@@ -136,6 +145,18 @@ export function ProcessingBatchDetailsDrawer({
             <div className="mb-1 text-[11px] font-medium text-ink-faint">
               Add {batch.processing_type} samples ready for processing
             </div>
+            {/* Say it before they click, not after. One batch means one timer:
+                a sample added to a run already under way inherits the run's
+                existing ready time, so it gets less than the full protocol
+                duration. Anyone who wants the full duration should start a
+                separate run (#91). */}
+            {isRunning && (
+              <div className="mb-1.5 rounded border border-amber-300 bg-amber-50 px-1.5 py-1 text-[10px] text-amber-800">
+                This run is already under way. An added sample shares its ready
+                time ({batch.ready_at ?? "—"}), so it gets less than a full
+                {" "}{batch.processing_type.toLowerCase()} cycle.
+              </div>
+            )}
             {candidates.length === 0 ? (
               <div className="text-[11px] text-ink-faint">No eligible samples.</div>
             ) : (

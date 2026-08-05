@@ -21,7 +21,7 @@ import {
   moveProcessingBatch as moveProcessingBatchDb,
   planProcessingBatch as planProcessingBatchDb,
   confirmProcessingBatchStart as confirmProcessingBatchStartDb,
-  updatePlannedBatchMembers,
+  updateBatchMembers,
   requestStainForSample as requestStainForSampleDb,
   recordAuditEvent,
   snapshotDb,
@@ -224,9 +224,9 @@ export function useActions() {
     [commit],
   );
 
-  const editPlannedBatchMembers = useCallback(
+  const editBatchMembers = useCallback(
     (batchId: number, sampleIds: number[]) =>
-      commit("Edit planned run samples", () => updatePlannedBatchMembers(batchId, sampleIds)),
+      commit("Edit run samples", () => updateBatchMembers(batchId, sampleIds)),
     [commit],
   );
 
@@ -692,7 +692,7 @@ export function useActions() {
     startProcessingBatch,
     planProcessingBatch,
     confirmProcessingBatchStart,
-    editPlannedBatchMembers,
+    editBatchMembers,
     moveProcessingBatch,
     editBatchStart,
     editTimestamp,

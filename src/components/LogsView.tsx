@@ -628,7 +628,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
               <span className="text-[11px] text-ink-faint">Read-only viewer — tagging is done on the workstation</span>
             ) : (
               <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
-                <Tag size={13} /> Tag depth
+                <Tag size={13} /> Create Tag
               </Button>
             )}
             <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSelectedSlideIds(new Set())}>

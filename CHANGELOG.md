@@ -59,6 +59,33 @@ multi-table write that failed part-way, where nothing was ever committed.
 Existing samples with blank descriptions are left alone and stay editable from
 the Logs row and the sample drawer.
 
+**A processor run can be edited after it has started (#91).**
+
+Forgetting a sample, or not selecting them all when the batch was created, is
+noticed once the machine is already going — which is exactly when the old
+planned-runs-only rule refused to help, leaving no remedy but abandoning the run.
+Both planned and running batches are now editable from the batch drawer.
+
+- A sample **added** to a run in progress joins it properly: it moves into the
+  processor rather than sitting in Pre-processing on the board while physically
+  being processed.
+- A sample **removed** goes back to the end of pre-processing, ready to be loaded
+  again, and does not keep a start time for a run it is no longer in.
+- **One batch, one timer.** An added sample shares the run's existing ready time,
+  so it gets less than a full cycle — the drawer says so before you add it, with
+  the actual ready time. Start a separate run if you need the full duration.
+- Every existing guard still applies: same protocol, no double-booking, and
+  **only fully preprocessed samples**, so editing a run is not a back door around
+  the check that starting one already enforces.
+
+**Pre-processing filters by project and sorts (#89).** The queue where every
+sample enters now has the same two controls as Embedded Inventory and Ready for
+Imaging — filter by project, sort by date received, name or sample ID. The filter
+clears itself when its project empties, rather than silently hiding everything
+else.
+
+**"Tag depth" is now "Create Tag" in the Logs (#90).**
+
 **The sidebar says SELECTED, and stops clipping (#84).**
 
 - The badge on the current project now reads **SELECTED**, and the heading above

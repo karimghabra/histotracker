@@ -313,7 +313,7 @@ test("#72: a viewer with real slides still cannot tag a depth", async ({ browser
   await slideCheckboxes.first().check();
 
   // Selection is allowed (viewers may inspect), but tagging is not offered.
-  await expect(vw.getByRole("button", { name: /Tag depth/ })).toHaveCount(0);
+  await expect(vw.getByRole("button", { name: /Create Tag/ })).toHaveCount(0);
   await expect(vw.getByText(/Read-only viewer/).first()).toBeVisible();
 
   // And the workstation, with the identical selection, DOES offer it — which is
@@ -321,7 +321,7 @@ test("#72: a viewer with real slides still cannot tag a depth", async ({ browser
   await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
   await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
   await ws.getByRole("checkbox", { name: /Select slide/ }).first().check();
-  await expect(ws.getByRole("button", { name: /Tag depth/ })).toBeVisible();
+  await expect(ws.getByRole("button", { name: /Create Tag/ })).toBeVisible();
 
   await wsCtx.close();
   await vwCtx.close();

@@ -78,7 +78,7 @@ test("select slides in Logs and tag them at a depth (#69)", async ({ page }) => 
   await expect(page.getByText("2 slides selected")).toBeVisible();
 
   // Tag them at a depth with a note.
-  await page.getByRole("button", { name: "Tag depth" }).click();
+  await page.getByRole("button", { name: "Create Tag" }).click();
   await expect(page.getByRole("heading", { name: /Tag 2 slides at a depth/ })).toBeVisible();
   await page.getByLabel("Depth label").fill("100um deep");
   await page.getByLabel("Note (optional)").fill("mid-section");
