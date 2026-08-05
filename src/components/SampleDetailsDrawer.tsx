@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Archive, CheckCircle2, Pencil, Scissors, Trash2, X } from "lucide-react";
+import { Archive, CheckCircle2, Pencil, Scissors, X } from "lucide-react";
 import type { Sample } from "../lib/types";
 import { BLOCK_TIMELINE_STAGES, STAGE_ORDER } from "../lib/stages";
 import { Button } from "./ui";
@@ -26,8 +26,7 @@ export function SampleDetailsDrawer({
 }) {
   const {
     moveSamples,
-    removeSample,
-    removeSamples,
+    setArchivedSamples,
     saveSectioningPlan,
     sendPlansToCutting,
     setExhausted,
@@ -71,6 +70,7 @@ export function SampleDetailsDrawer({
   );
   const isEmbedded = sample.current_stage === "embedded";
   const selectedGroup = selectedSamples.length > 0 ? selectedSamples : [sample];
+  const archiveTargets = selectedGroup.map((selected) => selected.id);
   const selectedEmbedded = selectedGroup.filter((selected) => selected.current_stage === "embedded");
   const needsEmbedding = sample.current_stage === "needs_embedding";
 
@@ -449,18 +449,38 @@ export function SampleDetailsDrawer({
             <CheckCircle2 size={15} /> Start / Plan Run{processingSamples.length > 1 ? ` (${processingSamples.length})` : ""}
           </Button>
         ) : null}
+        {/* Archive, not Delete (#83). Deleting a sample cascaded through its cut
+            groups and every slide they held — the single most destructive action
+            in the app, sitting next to Start Run. Archiving does what the button
+            was actually being used for: the block leaves the board and the log's
+            default view, keeps every record, renumbers nothing, and comes back
+            whole from the Logs "Show archived" toggle. */}
         <Button
           variant="danger"
+          title={
+            archiveTargets.length > 1
+              ? `Archive ${archiveTargets.length} selected samples`
+              : `Archive ${displayCode(sample.sample_code)}`
+          }
+          aria-label={
+            archiveTargets.length > 1
+              ? `Archive ${archiveTargets.length} samples`
+              : `Archive ${displayCode(sample.sample_code)}`
+          }
           onClick={() => {
-            const deleteTargets = selectedGroup.map((selected) => selected.id);
-            if (confirm(`Delete ${deleteTargets.length === 1 ? sample.sample_code : `${deleteTargets.length} selected samples`}? You can undo this.`)) {
-              if (deleteTargets.length > 1) removeSamples(deleteTargets);
-              else removeSample(sample.id);
+            if (
+              confirm(
+                `Archive ${archiveTargets.length === 1 ? displayCode(sample.sample_code) : `${archiveTargets.length} selected samples`}?\n\n` +
+                  `Nothing is deleted. The block leaves the board and is hidden from ` +
+                  `the Logs until you tick "Show archived", where you can restore it.`,
+              )
+            ) {
+              void setArchivedSamples(archiveTargets, true);
               onClose();
             }
           }}
         >
-          <Trash2 size={15} />
+          <Archive size={15} />
         </Button>
         </div>
       </div>

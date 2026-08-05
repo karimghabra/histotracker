@@ -25,7 +25,18 @@ opens a 0.7.4 database without trouble.
   same way is closed rather than dropped, keeping its completed protocol
   checklist as evidence the reagent steps were performed. This reverses 0.7.3,
   which deleted both.
+- **The sample drawer's Delete is gone.** It cascaded through the block's cut
+  groups into every slide they held — the most destructive action in the app,
+  sitting beside Start Run. It is now **Archive**, which does what the button was
+  actually being used for: the block leaves the board and the Logs' default view,
+  keeps every record, renumbers nothing, and comes back whole from "Show
+  archived". The underlying delete functions were removed outright, along with an
+  unused one that would have erased a processing run and its protocol checklist.
 - Dialogs are now announced to screen readers (`role="dialog"`).
+
+A test now fails the build if any code path deletes a sample, cut group, slide
+or processing run — the only exceptions being the two places that unwind a
+multi-table write that failed part-way, where nothing was ever committed.
 
 ## 0.7.3 - 2026-08-02
 

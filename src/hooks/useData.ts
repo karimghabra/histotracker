@@ -4,7 +4,6 @@ import {
   addUser,
   addSample,
   autoAdvanceProcessingRuns,
-  deleteSample,
   listAllSamples,
   listAllSlides,
   listSlideRemovals,
@@ -273,10 +272,7 @@ export function useSampleMutations() {
     onSuccess: invalidate,
   });
 
-  const remove = useMutation({
-    mutationFn: (sampleId: number) => deleteSample(sampleId),
-    onSuccess: invalidate,
-  });
+  // No `remove` mutation: samples are archived, never deleted (#83).
 
   const autoAdvance = useMutation({
     mutationFn: autoAdvanceProcessingRuns,
@@ -285,5 +281,5 @@ export function useSampleMutations() {
     },
   });
 
-  return { create, move, updateDetails, remove, autoAdvance };
+  return { create, move, updateDetails, autoAdvance };
 }

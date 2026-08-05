@@ -6,7 +6,6 @@ import {
   assignExtraSlideToAssay,
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
-  deleteSample,
   removeSectionRequest,
   removeSlide,
   closeSlideStack,
@@ -319,25 +318,8 @@ export function useActions() {
     [commit],
   );
 
-  const removeSample = useCallback(
-    async (sampleId: number) => {
-      const before = await getSample(sampleId);
-      if (!before) return;
-      await commit(`Delete ${before.sample_code}`, () => deleteSample(sampleId));
-    },
-    [commit],
-  );
-
-  const removeSamples = useCallback(
-    async (sampleIds: number[]) => {
-      if (sampleIds.length === 0) return;
-      if (sampleIds.length === 1) return removeSample(sampleIds[0]);
-      await commit(`Delete ${sampleIds.length} samples`, async () => {
-        for (const id of sampleIds) await deleteSample(id);
-      });
-    },
-    [commit, removeSample],
-  );
+  // removeSample/removeSamples are GONE (#83) — see the note where
+  // deleteSample() used to live in db.ts. Use setArchived/setArchivedSamples.
 
   const createSample = useCallback(
     (input: NewSampleInput, projectCode: string) =>
@@ -721,8 +703,6 @@ export function useActions() {
     editSlideNotes,
     tagSlidesDepth,
     saveSectioningPlan,
-    removeSample,
-    removeSamples,
     createSample,
     createSamples,
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),

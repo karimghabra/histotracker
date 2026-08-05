@@ -788,10 +788,14 @@ export async function updateSampleDetails(
   );
 }
 
-export async function deleteSample(sampleId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(`DELETE FROM samples WHERE id = ?`, [sampleId]);
-}
+// deleteSample() is GONE (#83). Deleting a sample cascaded through
+// section_requests into slides, so one click erased a block, every cut group it
+// ever had, and every slide those groups produced — the single most destructive
+// operation in a product whose job is to be a record. There is no non-destructive
+// rewrite of it either, because "the sample never existed" is not a state this
+// app should be able to reach. `setSampleArchived` is the replacement and always
+// was: it clears the board, hides the row from the Logs by default, renumbers
+// nothing, and restores whole.
 
 export async function getSample(sampleId: number): Promise<Sample | null> {
   const db = await getDb();
@@ -1573,22 +1577,11 @@ export async function updateProcessingBatchStart(
   );
 }
 
-export async function deleteProcessingBatch(batchId: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(
-    `DELETE FROM checklist_items
-      WHERE checklist_run_id IN (
-        SELECT id FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?
-      )`,
-    [batchId],
-  );
-  await db.execute(
-    `DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
-    [batchId],
-  );
-  await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
-  await db.execute(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
-}
+// deleteProcessingBatch() is GONE (#83). It erased a processing run, its members
+// and its protocol checklist — the evidence that the run happened and that its
+// steps were performed. Nothing ever called it, so it was a loaded gun with no
+// trigger; under "nothing is ever deleted" it should not be sitting there for a
+// future button to wire up either.
 
 export async function listChecklistItems(
   scopeType: string,

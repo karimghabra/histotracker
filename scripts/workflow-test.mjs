@@ -2307,6 +2307,40 @@ invariant("a removed slide leaves every working view and stays in the record", (
   eq(parsed.reason, "dropped on the floor", "and carries the reason the user gave");
 });
 
+// #83 — "nothing is ever deleted" is a rule about the whole app, not one button,
+// so it is enforced as one. Every future DELETE against a lab-record table has
+// to justify itself by being added to the allow-list below, in review, rather
+// than slipping in as the obvious way to make a new button work.
+invariant("no code path deletes a sample, cut group or slide", () => {
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  const RECORD_TABLES = ["samples", "slides", "section_requests", "processing_batches"];
+  // The ONLY legitimate delete: unwinding a multi-table write that failed
+  // part-way. Nothing was ever committed to the record, so there is nothing to
+  // preserve — and leaving the fragments behind is what created the phantom cut
+  // group 0.7.3 had to fix.
+  // Two call sites: createSectionRequests' catch block (slides +
+  // section_requests) and startProcessingBatch's (processing_batches).
+  const ALLOWED_ABORT_UNWIND = 3;
+  // Strip comments first. The tombstone notes left where deleteSample() and
+  // deleteProcessingBatch() used to live NAME the statements they describe, so
+  // scanning raw source counted the explanation as an offence.
+  const code = db.replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const deletes = [...code.matchAll(/DELETE FROM (\w+)/g)].map((m) => m[1]);
+  const recordDeletes = deletes.filter((t) => RECORD_TABLES.includes(t));
+  eq(recordDeletes.length, ALLOWED_ABORT_UNWIND,
+     `db.ts deletes lab records ${recordDeletes.length} times (${recordDeletes.join(", ")}); ` +
+     `only the ${ALLOWED_ABORT_UNWIND} abort-unwind deletes are allowed (#83)`);
+  for (const gone of ["deleteSample", "deleteProcessingBatch", "deleteSlidesForStack"]) {
+    assert(!new RegExp(`export async function ${gone}\\b`).test(db),
+      `${gone} must stay deleted — archive or retire instead (#83)`);
+  }
+  const drawer = readFileSync(join(HERE, "..", "src", "components", "SampleDetailsDrawer.tsx"), "utf8");
+  assert(!/removeSamples?\(/.test(drawer),
+    "the sample drawer must not offer Delete — Archive is the non-destructive equivalent");
+  assert(/setArchivedSamples\(/.test(drawer),
+    "...and it must offer Archive in its place, or a mis-entered block is stuck on the board");
+});
+
 // #83 — the Logs view is the one place removed slides MUST still appear, and the
 // one place they must not be counted. Source-scanned because the arithmetic
 // lives in React, not SQL: listAllSlides deliberately has no stage filter, so
