@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // Verifies the workstation → viewer sync end to end: two ISOLATED browser
@@ -28,7 +29,7 @@ const base = {
 // Sign in a user, create a project + one sample on the (editable) workstation.
 async function seedWorkstation(page: Page) {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
@@ -213,7 +214,7 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   // 6. Staining (mark sectioned mints the stain rack). Wait for the workstation
   // to finish (rack visible) BEFORE publishing, so we don't snapshot a half-done
   // operation.
-  await ws.getByText("4 slides").first().click();
+  await ws.getByText("3 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await expect(column(ws, "Staining / IHC").getByText("Alcian Blue").first()).toBeVisible({ timeout: 15000 });
@@ -330,7 +331,7 @@ test("viewer request auto-pulls an available extra into Staining and acknowledge
   await ws.getByRole("button", { name: /Send for Cutting/ }).click();
   await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await ws.getByText("4 slides").first().click();
+  await ws.getByText("3 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
   // The section drawer auto-closes once the all-extras section leaves Needs Sectioning.
   await expect(column(ws, "Extras").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });

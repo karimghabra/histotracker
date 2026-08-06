@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // #73 / #83 (removing slides without recycling their letters) and #74 (archiving
@@ -9,7 +10,7 @@ async function signInAndProject(page: Page) {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -90,15 +91,12 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
   await embed(page, "EE-1", "Batch 1");
   await cut(page, "EE-1");
 
-  expect(await slideCodesInLogs(page, "EE-1")).toEqual([
-    "EE-1-A",
-    "EE-1-B",
-    "EE-1-C",
-    "EE-1-D",
-  ]);
+  // Three, not four: the default slides-per-block is a setting now and defaults
+  // to 3 (#92).
+  expect(await slideCodesInLogs(page, "EE-1")).toEqual(["EE-1-A", "EE-1-B", "EE-1-C"]);
 
   // The cut group has to leave Needs Sectioning before its extras are inventory.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   // The drawer may close itself once the group moves on — only close it if it didn't.
   const drawerClose = page.locator("button:has(svg.lucide-x)").first();

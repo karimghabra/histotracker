@@ -92,6 +92,18 @@ export const STAGE_TO_QUEUE: Record<string, string> = Object.fromEntries(
   BOARD_QUEUES.flatMap((q) => q.stages.map((s) => [s, q.key])),
 );
 
+/**
+ * The stages a block occupies BEFORE it is loaded into the processor (#91).
+ *
+ * A sample can only join a processor run while it is in one of these. The
+ * eligibility rules were purely timestamp-based — fixative in, fixative out,
+ * ethanol in, decalc done if required — and every one of those is still true of
+ * a block that has since been processed, embedded and sectioned. So the Add list
+ * offered the whole Embedded Inventory, and adding one would have dragged a
+ * finished block back into the machine.
+ */
+export const PREPROCESSING_STAGES = new Set(QUEUE_BY_KEY.preprocessing.stages);
+
 export const LANE_COLORS = ["var(--color-lane-a)", "var(--color-lane-b)"];
 
 // ---- Section-request workflow (children of embedded blocks) ------------------

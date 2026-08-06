@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openBackups, openManage } from "../helpers/app";
 
 // End-to-end backup + revert against the real snapshot/restore rails (sql.js
 // shim). Proves: a manual backup is written and listed, and reverting to it
@@ -14,7 +15,7 @@ async function seedSample(page: Page, description: string) {
 async function firstSample(page: Page) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -38,7 +39,7 @@ test("manual backup captures state; revert rolls back a later change", async ({ 
   await firstSample(page); // EE-1 exists
 
   // Take a manual backup of the current state (only EE-1 present).
-  await page.getByRole("button", { name: "Backups" }).click();
+  await openBackups(page);
   await expect(page.getByRole("heading", { name: "Database backups" })).toBeVisible();
   await page.getByRole("button", { name: "Back up now" }).click();
   // The new backup row appears (reason "Manual").
@@ -52,7 +53,7 @@ test("manual backup captures state; revert rolls back a later change", async ({ 
   await expect(page.getByText("EE-2")).toBeVisible();
 
   // Revert to the backup → EE-2 must disappear, EE-1 remains.
-  await page.getByRole("button", { name: "Backups" }).click();
+  await openBackups(page);
   await expect(page.getByRole("heading", { name: "Database backups" })).toBeVisible();
   await page.getByRole("button", { name: "Revert" }).first().click();
 

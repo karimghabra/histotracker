@@ -375,6 +375,76 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## Sixth wave (#92–#95) + 0.7.4 follow-ups — status as of 0.8.0
+
+Three of these five are **second reports on issues already marked fixed**. In
+every case the data layer was correct and the surface the user actually touches
+was not, which is why each fix below carries a browser-driven check that was
+observed failing with the fix removed (`node scripts/revert-verify.mjs <case>`).
+
+- **#83 follow-up — removed slides unreadable in dark mode · ✅ fixed.**
+  *Root cause:* the struck-off row was `bg-red-50/60` and its reason panel
+  `bg-red-50` — FIXED near-white Tailwind paints — while the text on them is
+  theme-aware (`text-ink`, `text-ink-faint`). In the eleven dark themes that is
+  pale grey on bright pink. *Fix:* `.row-removed` / `.note-removed` /
+  `.text-removed` in `index.css` blend the theme's own `--color-panel` and
+  `--color-ink` with the accent via `color-mix`, so one rule covers every present
+  and future theme instead of a per-theme override list. The same was done for
+  the stain-filter match tint, which had the identical defect one expression
+  away. *Test:* `issues-92-95.spec.ts` measures the computed background
+  luminance and the WCAG contrast ratio of the reason text against its actual
+  painted background — not the class name.
+- **#86 follow-up — "shared description currently does nothing" · ✅ fixed.**
+  *Root cause:* the shared field was a pure FALLBACK, consulted only when a row
+  was blank and discarded entirely once a row had anything in it. Filling in both
+  is the natural thing to do, and it threw away the half that was true of every
+  sample. *Fix:* `composeDescription(shared, own)` in `utils.ts` — `shared |
+  own`, either half alone if that is all there is, `""` only when both are blank
+  (which #88 already refuses). One function, read by both the dialog's preview
+  and `createSamples`, so they cannot disagree. The row list renders the shared
+  half inline as a prefix so the composed result is visible while typing.
+- **#91 follow-up — the Add list offered the Embedded Inventory · ✅ fixed.**
+  *Root cause:* eligibility was entirely "has this timestamp been set" —
+  fixative in, fixative out, ethanol in, decalc done. Every one of those stays
+  true for the rest of the block's life, so a block that had been processed,
+  embedded and sectioned satisfied all of them. *Fix:* `PREPROCESSING_STAGES` in
+  `stages.ts`, derived from the board's own pre-processing queue definition;
+  applied both in `App.tsx`'s candidate memo and — for joiners only — in
+  `updateBatchMembers`, since an existing member of a running run is past
+  pre-processing by definition. *Test:* harness gate `issue(91, "a block that is
+  already embedded…")` plus an e2e check that a still-waiting block IS offered,
+  so the assertion cannot pass on an empty list.
+- **#95 — a slide read as Cut the moment its group was queued · ✅ fixed.**
+  *Root cause:* `createSectionRequests` stamped `stage_cut_at` at INSERT, which
+  is when the group is *created* and dropped into Needs Sectioning. This is also
+  the whole of the original report ("sectioned, undone, redone — it still shows
+  as cut"): undo/redo swaps whole DB images and was never broken, but the stamp
+  predated the action being undone, so no amount of rewinding could clear it.
+  *Fix:* three parts. The INSERT no longer stamps. `updateSectionStage` stamps
+  once, for **any** stage past `needs_sectioning` — two specific destinations
+  used to stamp it individually and a group dragged straight to Ready for
+  Imaging was never recorded as cut at all. `revertSectionToStage` clears it
+  when a group goes back into the queue. On the read side, `slideCutAt()` refuses
+  to report a cut for a slide whose group is still queued, which is what corrects
+  rows **already written** by 0.7.4 without rewriting history; it keeps the
+  `created_at` fallback for genuinely old slides (early builds inserted slides
+  with no `stage_cut_at` at all — see `f26448a`). *Test:* harness gate covers the
+  write, e2e covers the read; verified separately, because either mechanism alone
+  makes the other's revert look vacuous.
+- **#92/#93/#94 — settings dialogue · ✅ shipped.** Slides per block (default 4
+  → **3**), minimum extras, idle sign-out window and Manifest visibility are now
+  rows in `app_settings` — a table that has existed since 0.5, so **no
+  migration** and a 0.7.x build opens the database unchanged. Manage, Backups and
+  the theme picker moved out of the header; Manifest moved to the foot of the
+  left panel above the cog. *Landmine found and fixed during testing:*
+  `useAppSettings` seeded with `initialData` was stamped as fetched *now*, and
+  the client-wide `staleTime: 5000` then suppressed the mount fetch — so for the
+  first five seconds after launch the app silently used the built-in defaults
+  rather than the lab's. `initialDataUpdatedAt: 0` marks the seed stale on
+  arrival. This is the case `revert-verify.mjs 92-settings` reproduces.
+
+---
+
 ## Fourth wave (#85–#87) + 0.7.0 follow-ups — status as of 0.7.1
 
 - **#85 — Ready for Imaging empties itself · ✅ fixed (regression from 0.7.0).**

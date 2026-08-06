@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage, setTheme } from "../helpers/app";
 
 // #84 — the active project drives which project a new sample lands in, so it has
 // to be obvious at a glance. Three projects, so "which one is selected?" is a
@@ -9,7 +10,7 @@ async function boot(page: Page) {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -69,11 +70,11 @@ test("#84: the selected project stands out against its neighbours", async ({ pag
 
   await sidebar.screenshot({ path: "test-results/84-sidebar-light.png" });
 
-  await page.getByLabel("Visual theme").selectOption("dark");
+  await setTheme(page, "dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await sidebar.screenshot({ path: "test-results/84-sidebar-dark.png" });
 
-  await page.getByLabel("Visual theme").selectOption("matcha");
+  await setTheme(page, "matcha");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "matcha");
   await sidebar.screenshot({ path: "test-results/84-sidebar-matcha.png" });
 });

@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 
 /**
  * #88 — every sample must have a description.
@@ -11,7 +12,7 @@ async function signInAndProject(page: Page) {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -76,18 +77,22 @@ test("#86/#88: a batch shows a row per sample and blocks Create until each is fi
   await expect(create).toBeDisabled();
   await expect(page.getByText("EE-3 needs a description.")).toBeVisible();
 
-  // The shared field satisfies the remaining blank row — the fallback works,
-  // it just can no longer resolve to nothing.
-  await page.getByPlaceholder("Used for any sample below you leave blank").fill("distal");
+  // The shared field satisfies the remaining blank row, AND composes with the
+  // rows that are filled (#86). It used to be a pure fallback, thrown away the
+  // moment a row had anything in it — which is what made it "do nothing".
+  await page.getByPlaceholder(/added to every sample below/).fill("2 week PLA");
   await expect(create).toBeEnabled();
+  // The composed result is visible while typing, not just after saving.
+  await expect(page.getByText("2 week PLA |").first()).toBeVisible();
   await create.click();
 
-  // Each sample carries its own description, and the blank row took the shared one.
+  // Each sample carries "shared | its own"; the blank row takes the shared half
+  // on its own.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   for (const [code, description] of [
-    ["EE-1", "proximal"],
-    ["EE-2", "mid"],
-    ["EE-3", "distal"],
+    ["EE-1", "2 week PLA | proximal"],
+    ["EE-2", "2 week PLA | mid"],
+    ["EE-3", "2 week PLA"],
   ]) {
     const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: code, exact: true }) });
     await expect(row.getByRole("cell", { name: description, exact: true })).toBeVisible();

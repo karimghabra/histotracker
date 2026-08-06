@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // Real end-to-end drive of the lab workflow in the actual app, used to verify
@@ -8,7 +9,7 @@ import { settleAfterDrop } from "../helpers/drag";
 async function seedSample(page: Page, description = "Workflow block") {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -112,21 +113,21 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
 
   // Mark Sectioned → the section leaves Needs Sectioning and a stain rack tile
   // ("Alcian Blue") is minted in Staining.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
   const staining = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
   await expect(staining.getByText("Alcian Blue").first()).toBeVisible(); // rack minted in Staining
-  await expect(page.getByText("4 slides")).toHaveCount(0); // section left Needs Sectioning
+  await expect(page.getByText("3 slides")).toHaveCount(0); // section left Needs Sectioning
 
   // Undo the transfer → the minted tile must disappear from Staining (no ghost)
   // and the Needs Sectioning card must return. Under whole-DB-image undo this is
   // just a restore of the prior state, so nothing is left behind.
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
   await expect(staining.getByText("Alcian Blue")).toHaveCount(0); // no ghost tile in Staining
-  await expect(page.getByText("4 slides").first()).toBeVisible(); // section restored
+  await expect(page.getByText("3 slides").first()).toBeVisible(); // section restored
 });
 
 test("a planned run's sample list is editable in the drawer (#32)", async ({ page }) => {
@@ -185,15 +186,15 @@ test("sectioning: per-slide cutting, no stale plan tag, slide-count button (#35/
   await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
-  await expect(page.getByText(/4 slides · 0 stained · 4 extra/)).toBeVisible();
+  await expect(page.getByText(/3 slides · 0 stained · 3 extra/)).toBeVisible();
 
   // Send the default cut → a Needs Sectioning card appears for the sample.
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await expect(page.getByText("4 slides").first()).toBeVisible();
+  await expect(page.getByText("3 slides").first()).toBeVisible();
 
-  // #40: the Mark Sectioned button counts SLIDES (4), not stain types (0).
-  await page.getByText("4 slides").first().click();
-  await expect(page.getByRole("button", { name: "Mark Sectioned (4)" })).toBeVisible();
+  // #40: the Mark Sectioned button counts SLIDES (3), not stain types (0).
+  await page.getByText("3 slides").first().click();
+  await expect(page.getByRole("button", { name: "Mark Sectioned (3)" })).toBeVisible();
 });
 
 test("requesting a stain flags the embedded block and prefills the cut dialog (#41)", async ({ page }) => {
@@ -227,7 +228,7 @@ test("needs-sectioning card exposes a real multi-select checkbox (#37)", async (
   await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await expect(page.getByText("4 slides").first()).toBeVisible();
+  await expect(page.getByText("3 slides").first()).toBeVisible();
 
   // The card's checkbox is a real input that toggles selection on click.
   // Scope to the Needs Sectioning column (the block also sits in Embedded
@@ -264,7 +265,7 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
 
   // Mark Sectioned → a stain rack ("Alcian Blue") is minted in Staining.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
   const staining = page
@@ -323,7 +324,7 @@ test("Logs status partition + CSV export", async ({ page }) => {
     .first()
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   const staining = page
@@ -406,7 +407,7 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
 
   // Open the grouped Needs Sectioning card → the drawer shows BOTH assay slides,
   // not just the first cut group's one slide.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await expect(page.getByText("Assay slides")).toBeVisible();
   await expect(page.getByText("EE-1-A", { exact: true })).toBeVisible();
   await expect(page.getByText("EE-1-B", { exact: true })).toBeVisible();
@@ -424,7 +425,7 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
@@ -445,7 +446,7 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
   await expect(col("Staining / IHC").getByText("Alcian Blue").first()).toBeVisible({ timeout: 15000 });
   await expect(col("Ready for Imaging").getByText("EE-1")).toHaveCount(0);
-  await expect(col("Needs Sectioning").getByText("4 slides")).toHaveCount(0);
+  await expect(col("Needs Sectioning").getByText("3 slides")).toHaveCount(0);
 });
 
 test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)", async ({ page }) => {
@@ -460,7 +461,7 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 

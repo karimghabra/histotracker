@@ -1,11 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 
 // The tabbed Manage dialog: users (implicitly covered by every seed helper),
 // projects, and the stain/IHC catalog.
 async function seed(page: Page) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
@@ -18,7 +19,7 @@ async function seed(page: Page) {
 
 test("Manage → Projects: rename and delete", async ({ page }) => {
   await seed(page);
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByRole("button", { name: "Projects", exact: true }).click();
   await expect(page.getByText("Enthesis Engineering")).toBeVisible();
 
@@ -35,7 +36,7 @@ test("Manage → Projects: rename and delete", async ({ page }) => {
 
 test("Manage → Stains: add, deactivate/reactivate, and delete a catalog agent", async ({ page }) => {
   await seed(page);
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByRole("button", { name: "Stains & IHC" }).click();
   // Seeded agents are present.
   await expect(page.getByText("H&E")).toBeVisible();

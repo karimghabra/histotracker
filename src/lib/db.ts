@@ -21,9 +21,16 @@ import {
   SECTION_STAGES,
   SECTION_STAGE_COLUMNS,
   SECTION_STAGE_ORDER,
+  PREPROCESSING_STAGES,
   processingDurationHours,
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
+import {
+  type AppSettings,
+  parseSettings,
+  plannedExtras,
+  settingsToRows,
+} from "./settings";
 import {
   displayCode,
   duplicateLabel,
@@ -453,6 +460,32 @@ export async function restoreDbPreservingSession(image: DbImage): Promise<void> 
   }
 }
 
+// ---- Workstation settings (#92) ---------------------------------------------
+
+/**
+ * Read the configurable defaults. Missing keys fall back, so this works against
+ * every database written before the settings dialogue existed — which is all of
+ * them.
+ */
+export async function getAppSettings(): Promise<AppSettings> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ key: string; value: string }>>(
+    `SELECT key, value FROM app_settings`,
+  );
+  return parseSettings(rows);
+}
+
+export async function saveAppSettings(settings: AppSettings): Promise<void> {
+  const db = await getDb();
+  for (const row of settingsToRows(settings)) {
+    await db.execute(
+      `INSERT INTO app_settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [row.key, row.value],
+    );
+  }
+}
+
 // ---- Projects ---------------------------------------------------------------
 
 export async function listProjects(activeOnly = false): Promise<Project[]> {
@@ -736,10 +769,11 @@ export async function ensureAutoSectioningPlan(sampleId: number): Promise<void> 
   );
   const row = rows[0];
   if (!row || row.sectioning_plan) return;
-  // Every newly embedded block gets at least four slides with two extras
-  // (issue #4); with no preselected stains that is simply four extras.
+  // Every newly embedded block gets at least the configured total with the
+  // configured minimum extras (issue #4, counts configurable since #92); with no
+  // preselected stains that is simply that many extras.
   const preselected = parsePreselectedStains(row.preselected_stains);
-  const plan = buildAutoSectioningPlan(preselected);
+  const plan = buildAutoSectioningPlan(preselected, await getAppSettings());
   await db.execute(`UPDATE samples SET sectioning_plan = ? WHERE id = ?`, [JSON.stringify(plan), sampleId]);
 }
 
@@ -997,7 +1031,11 @@ export async function listAllSlides(): Promise<Slide[]> {
   const db = await getDb();
   return db.select<Slide[]>(
     `SELECT sl.*, s.sample_code AS parent_code,
-            p.code AS project_code
+            p.code AS project_code,
+            -- The cut group's stage: a slide whose group is still in
+            -- needs_sectioning has not been cut, whatever stage_cut_at says on
+            -- rows written by builds that stamped it at creation (#95).
+            sr.current_stage AS section_stage
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
@@ -1416,6 +1454,21 @@ export async function updateBatchMembers(
     sampleIds,
   );
   if (samples.length !== sampleIds.length) throw new Error("One or more samples no longer exist.");
+
+  // Who is joining and who is leaving — read BEFORE the membership is rewritten,
+  // and before validation, because the rules differ. A sample already IN the run
+  // is past pre-processing by definition once the run starts, so the "still
+  // waiting to be processed" check below can only be applied to newcomers.
+  const previousIds = (
+    await db.select<Array<{ sample_id: number }>>(
+      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
+      [batchId],
+    )
+  ).map((r) => r.sample_id);
+  const next = new Set(sampleIds);
+  const joined = sampleIds.filter((id) => !previousIds.includes(id));
+  const left = previousIds.filter((id) => !next.has(id));
+
   const incompatible = samples.filter((s) => s.processing_type !== batch.processing_type);
   if (incompatible.length > 0) {
     throw new Error(`Not ${batch.processing_type} protocol: ${incompatible.map((s) => s.sample_code).join(", ")}`);
@@ -1430,6 +1483,19 @@ export async function updateBatchMembers(
   if (notReady.length > 0) {
     throw new Error(`Complete preprocessing first: ${notReady.map((s) => s.sample_code).join(", ")}`);
   }
+  // #91 — and it must still be WAITING for the processor. Every check above is a
+  // "has this already happened" timestamp, and all of them stay true for the
+  // rest of the block's life, so a block that has been processed, embedded and
+  // sectioned passes them all. Without this, the Embedded Inventory was eligible
+  // to be loaded back into the machine.
+  const alreadyPast = samples.filter(
+    (s) => joined.includes(s.id) && !PREPROCESSING_STAGES.has(s.current_stage),
+  );
+  if (alreadyPast.length > 0) {
+    throw new Error(
+      `Already past pre-processing: ${alreadyPast.map((s) => s.sample_code).join(", ")}`,
+    );
+  }
   const conflict = await db.select<Array<{ sample_code: string }>>(
     `SELECT s.sample_code
        FROM processing_batch_members pbm
@@ -1442,17 +1508,6 @@ export async function updateBatchMembers(
   if (conflict.length > 0) {
     throw new Error(`Already committed to another batch: ${conflict.map((r) => r.sample_code).join(", ")}`);
   }
-
-  // Who is joining and who is leaving — read BEFORE the membership is rewritten.
-  const previousIds = (
-    await db.select<Array<{ sample_id: number }>>(
-      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
-      [batchId],
-    )
-  ).map((r) => r.sample_id);
-  const next = new Set(sampleIds);
-  const joined = sampleIds.filter((id) => !previousIds.includes(id));
-  const left = previousIds.filter((id) => !next.has(id));
 
   await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
   for (const id of sampleIds) {
@@ -1995,11 +2050,17 @@ export async function createSectionRequests(
         // Preselected stain: the slide is saved to that agent, ready for a
         // one-click Start Assays (issues #1, #3).
         await db.execute(
+          // No stage_cut_at. The slide is PLANNED here, not cut — this runs when
+          // the group is sent to Needs Sectioning, which is a queue, not a
+          // microtome. Stamping it here made every waiting slide read as Cut in
+          // the log, and made undoing a sectioning look broken (#95). The stamp
+          // happens in updateSectionStage, when the group actually leaves the
+          // queue.
           `INSERT INTO slides
             (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
-             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage, stage_cut_at)
-           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned', ?)`,
-          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name, timestamp],
+             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
+           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name],
         );
       } else {
         // Extras are a deliberate, saved disposition chosen at cut time — no
@@ -2007,10 +2068,11 @@ export async function createSectionRequests(
         // of the Extras inventory until the section leaves Needs Sectioning
         // (issue #12), via listExtraSlides' stage filter.
         await db.execute(
+          // Planned, not cut — see the stain branch above (#95).
           `INSERT INTO slides
-            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage, stage_cut_at)
-           VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
-          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), timestamp],
+            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
+           VALUES (?, ?, ?, 'extra', 1, 'extra')`,
+          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal)],
         );
       }
       nextOrdinal += 1;
@@ -2092,10 +2154,15 @@ function removeFromRequests(
 /**
  * The auto-generated sectioning plan for an embedded sample with preselected
  * stains (issue #4): one preassigned cut group per stain, plus enough extras to
- * reach ≥4 slides with ≥2 extras — extras = max(2, 4 − stainCount).
+ * reach the configured total, never fewer than the configured minimum extras.
+ *
+ * The counts used to be the literals 2 and 4 (#92). `settings` is a parameter
+ * rather than a read inside, so this stays pure and the dialog can preview the
+ * same arithmetic the write will use.
  */
 export function buildAutoSectioningPlan(
   preselected: Array<{ assay_type: string; assay_name: string }>,
+  settings: AppSettings,
 ): Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }> {
   const stains = preselected.map((a) => ({
     duplicates: 1,
@@ -2103,7 +2170,7 @@ export function buildAutoSectioningPlan(
     assay_type: a.assay_type,
     assay_name: a.assay_name,
   }));
-  const extras = Math.max(2, 4 - preselected.length);
+  const extras = plannedExtras(settings, preselected.length);
   return [...stains, { duplicates: extras, stains: "" }];
 }
 
@@ -2219,9 +2286,17 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
 
   const db = await getDb();
   const rows = await db.select<
-    Array<{ duplicates: number; sample_id: number; sample_code: string; existing_count: number }>
+    Array<{
+      duplicates: number;
+      sample_id: number;
+      sample_code: string;
+      existing_count: number;
+      current_stage: string;
+      stage_sectioned_at: string | null;
+    }>
   >(
-    `SELECT sr.duplicates, sr.sample_id, s.sample_code, COUNT(sl.id) AS existing_count
+    `SELECT sr.duplicates, sr.sample_id, s.sample_code, COUNT(sl.id) AS existing_count,
+            sr.current_stage, sr.stage_sectioned_at
        FROM section_requests sr
        JOIN samples s ON s.id = sr.sample_id
        LEFT JOIN slides sl ON sl.section_request_id = sr.id AND sl.current_stage != 'removed'
@@ -2261,7 +2336,12 @@ async function ensureSlidesForSectionRequest(id: number): Promise<void> {
   // New slides continue the sample's letter sequence (A, B, …), never reusing a
   // letter a deleted slide already consumed (#73).
   let nextLetter = await nextSlideLetter(db, row.sample_id);
-  const cutAt = nowTimestamp();
+  // These rows are being back-filled for a group that already exists, so "now"
+  // is never the cut time. If the group has left Needs Sectioning it was cut at
+  // some point and its own stage_sectioned_at is the closest honest record; if
+  // it is still queued, it has not been cut and the stamp stays NULL (#95).
+  const cutAt =
+    row.current_stage === "needs_sectioning" ? null : row.stage_sectioned_at ?? nowTimestamp();
   for (let ordinal = 1; ordinal <= row.duplicates; ordinal += 1) {
     await db.execute(
       `INSERT INTO slides
@@ -3327,6 +3407,22 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
   const column = SECTION_STAGE_COLUMNS[stageKey];
   if (!column) throw new Error(`Unknown section stage: ${stageKey}`);
   const timestamp = nowTimestamp();
+
+  // #95 — ONE rule for when a slide is cut: the moment its group leaves Needs
+  // Sectioning, whichever stage it lands in.
+  //
+  // Two branches below used to stamp this individually (assignment_required and
+  // stain_requested), which meant a group dragged from Needs Sectioning straight
+  // to Staining-and-beyond or to Ready for Imaging was never recorded as cut at
+  // all. Stating it as "past the queue" rather than enumerating destinations
+  // means a future stage cannot be added and silently miss it.
+  if ((SECTION_STAGE_ORDER[stageKey] ?? 0) > SECTION_STAGE_ORDER.needs_sectioning) {
+    await db.execute(
+      `UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`,
+      [timestamp, id],
+    );
+  }
+
   if (stageKey === "assignment_required") {
     await db.execute(
       `UPDATE section_requests
@@ -3336,11 +3432,10 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
         WHERE id = ?`,
       [timestamp, timestamp, id],
     );
+    // stage_cut_at is stamped by the one rule above, not here.
     await db.execute(
-      `UPDATE slides
-          SET current_stage = 'cut', stage_cut_at = COALESCE(stage_cut_at, ?)
-        WHERE section_request_id = ?`,
-      [timestamp, id],
+      `UPDATE slides SET current_stage = 'cut' WHERE section_request_id = ?`,
+      [id],
     );
     return;
   }
@@ -3354,12 +3449,8 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
     if ((rows[0]?.unassigned ?? 0) > 0) {
       throw new Error("Click Save All to confirm every slide assignment before starting assay work.");
     }
-    // Coming straight from Needs Sectioning (no assignment stop, #34/#38): record
-    // the physical cut on every slide now.
-    await db.execute(
-      `UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`,
-      [timestamp, id],
-    );
+    // (The physical cut for the no-assignment-stop path, #34/#38, is stamped by
+    // the single rule at the top of this function.)
     const assayRows = await db.select<Array<{ total: number }>>(
       `SELECT COUNT(*) AS total FROM slides
         WHERE section_request_id = ? AND purpose = 'stain'
@@ -3448,6 +3539,13 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
   );
   const setClause = ["current_stage = ?", ...clear.map((c) => `${c} = NULL`)].join(", ");
   await db.execute(`UPDATE section_requests SET ${setClause} WHERE id = ?`, [stageKey, id]);
+
+  // Back in the queue means not cut (#95). The forward move stamps stage_cut_at
+  // on every slide, so the backward one has to take it off, or a group dragged
+  // out and back keeps a cut date for a cut that was retracted.
+  if (stageKey === "needs_sectioning") {
+    await db.execute(`UPDATE slides SET stage_cut_at = NULL WHERE section_request_id = ?`, [id]);
+  }
 }
 
 export async function setSectionTimestamp(

@@ -10,7 +10,7 @@ import {
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
-import { displayCode, slideLetterOf, todayIso } from "./utils";
+import { displayCode, slideCutAt, slideLetterOf, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
 
@@ -84,7 +84,9 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Assay Type", (row) => row.assay_type.toUpperCase()],
   ["Target Assay", (row) => row.assay_name || row.stain_name],
   ["Current Stage", (row) => row.current_stage],
-  ["Cut", (row) => row.stage_cut_at ?? ""],
+  // The same rule the Logs timeline uses — a slide whose group is still queued
+  // for sectioning has not been cut, so the column is blank (#95).
+  ["Cut", (row) => slideCutAt(row)],
   ["Stain Requested", (row) => row.stage_stain_requested_at ?? ""],
   ["Stained", (row) => row.stage_stained_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
@@ -143,9 +145,7 @@ export async function exportSamplesCsv(): Promise<string | null> {
 
 export type LogExportRow = { sample: Sample; slides: Slide[] };
 
-// Slides cut before local stamping only have the UTC created_at; use it as a
-// fallback so the Cut column is never blank (mirrors the Logs slide timeline).
-const slideCutAt = (sl: Slide): string => sl.stage_cut_at ?? sl.created_at ?? "";
+// (Cut is derived, not read straight off the row — see utils.slideCutAt, #95.)
 
 const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Sample Stage", "Exhausted", "Date Added",

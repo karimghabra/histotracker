@@ -7,7 +7,7 @@ import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog, useSlideRemovals } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { cn, compareSlideCodes, displayCode, sampleCodeVariants } from "../lib/utils";
+import { cn, compareSlideCodes, displayCode, sampleCodeVariants, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
@@ -83,14 +83,20 @@ function analyzedProgress(slides: Slide[]): { done: number; total: number } {
 // A slide's own lifecycle, built from its per-slide timestamps (these are always
 // accurate — unlike the aggregate stack, a slide keeps its own stamps through
 // rack scatter/merge). Condensed to the milestones that matter.
+// Cut is NOT in this list: whether a slide has been cut is a rule, not a column
+// (#95) — see slideCutAt. The rest are plain stamps.
 const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide; fallback?: keyof Slide }> = [
-  // stage_cut_at is stamped in local time at cut; created_at (UTC) is a fallback
-  // for older slides so their Cut step still shows.
-  { label: "Cut", column: "stage_cut_at", fallback: "created_at" },
   { label: "Stained", column: "stage_stained_at" },
   { label: "Coverslipped", column: "stage_coverslipped_at" },
   { label: "Imaged", column: "stage_pictures_taken_at" },
 ];
+
+/** The slide timeline, with the derived Cut step in front when it happened. */
+function slideEvents(slide: Slide): Array<{ label: string; at: string }> {
+  const cut = slideCutAt(slide);
+  const rest = recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE);
+  return cut ? [{ label: "Cut", at: cut }, ...rest] : rest;
+}
 
 function fmtTime(at: string): string {
   return at.length >= 16 ? at.slice(5, 16) : at; // "2026-07-25 07:28" -> "07-25 07:28"
@@ -823,7 +829,7 @@ function FragmentRow({
         <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
           {liveSlideCount}
           {removedCount > 0 && (
-            <span className="ml-1 text-[10px] font-medium text-red-600">−{removedCount}</span>
+            <span className="text-removed ml-1 text-[10px] font-medium">−{removedCount}</span>
           )}
         </td>
         <td className="px-2 py-1.5 text-ink-faint" title={sample.date_added}>
@@ -932,7 +938,7 @@ function FragmentRow({
                   const removed = isRemoved(slide);
                   const removal = removed ? removals.get(slide.id) : undefined;
                   return (
-                    <div key={slide.id} className={cn(match && "bg-amber-100/50", removed && "bg-red-50/60")}>
+                    <div key={slide.id} className={cn(match && "row-match", removed && "row-removed")}>
                       <div className="flex w-full items-center gap-2 px-2 py-1.5 text-[11px] hover:bg-brand/5">
                         <input
                           type="checkbox"
@@ -979,12 +985,12 @@ function FragmentRow({
                       {slideOpen && (
                         <div className="space-y-2 px-3 pb-2 pl-7">
                           {removed && (
-                            <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5">
-                              <p className="text-[10px] font-semibold uppercase tracking-wide text-red-700">
+                            <div className="note-removed rounded-md border px-2 py-1.5">
+                              <p className="text-removed text-[10px] font-semibold uppercase tracking-wide">
                                 Removed{removal?.at ? ` · ${fmtTime(removal.at)}` : ""}
                                 {removal?.user_name ? ` · ${removal.user_name}` : ""}
                               </p>
-                              <p className="mt-0.5 text-[11px] text-red-900">
+                              <p className="mt-0.5 text-[11px] text-ink">
                                 {/* A removal recorded before the reason was kept,
                                     or by a build that stored it differently, still
                                     shows as removed — just without wording. */}
@@ -992,7 +998,7 @@ function FragmentRow({
                               </p>
                             </div>
                           )}
-                          <Timeline events={recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE)} />
+                          <Timeline events={slideEvents(slide)} />
                           <NotesEditor
                             value={slide.notes ?? ""}
                             placeholder="Notes about this slide…"

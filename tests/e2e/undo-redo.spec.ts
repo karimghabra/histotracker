@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { openManage } from "../helpers/app";
 
 // Exercises the rewritten image-based undo/redo through the real UI: a mutation,
 // an undo that must fully revert the database, and a redo that must fully
@@ -6,7 +7,7 @@ import { test, expect } from "@playwright/test";
 async function signInAndSeedUser(page: import("@playwright/test").Page) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(

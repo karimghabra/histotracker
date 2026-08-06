@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // The 0.7.1 wave: #85 (sticky Ready-for-Imaging filter) and the #79 follow-up
@@ -9,7 +10,7 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -76,7 +77,7 @@ async function cutAndSection(page: Page, code: string, stainIndex = 1) {
     .selectOption({ index: stainIndex });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 }

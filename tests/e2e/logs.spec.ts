@@ -1,10 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 async function seedSampleWithSlides(page: Page) {
   await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
@@ -96,9 +97,11 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await sampleNotes.blur();
   await expect(sampleNotes).toHaveValue("Block looks good");
 
-  // Expand the slide → its own (separate) timeline, starting at Cut.
+  // Expand the slide → its own (separate) panel. No Cut step yet: this group is
+  // still sitting in Needs Sectioning, and a queued slide has not been cut
+  // (#95). It used to claim a Cut stamped when the group was merely created.
   await slideRow.click();
-  await expect(page.getByText(/Cut/).first()).toBeVisible();
+  await expect(page.getByText("Cut", { exact: true })).toHaveCount(0);
 
   // Slide notes persist too.
   const slideNotes = page.getByPlaceholder("Notes about this slide…");

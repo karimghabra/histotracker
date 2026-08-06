@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudOff, DatabaseBackup, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Palette, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
+import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
@@ -21,9 +21,12 @@ import { ReadOnlyProvider } from "./lib/readOnly";
 import { useIdleLogout } from "./hooks/useIdleLogout";
 import { mergePendingRequests, prunePendingRequests } from "./lib/pendingRequests";
 import { compareSampleCodes } from "./lib/utils";
+import { PREPROCESSING_STAGES } from "./lib/stages";
+import { DEFAULT_SETTINGS } from "./lib/settings";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { RequestsInbox } from "./components/RequestsInbox";
 import { Button, Field, Modal } from "./components/ui";
-import { useActiveUser, useAllSamples, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
+import { useActiveUser, useAllSamples, useAppSettings, useAssayCatalog, useExtraSlides, useOpenSamples, useOpenSections, useOpenSlideStacks, useProcessingBatches, useProjects, useStainRequests, useStainRequestMutations, useUserMutations, useUsers } from "./hooks/useData";
 import { useActions } from "./hooks/useActions";
 import { useSync } from "./hooks/useSync";
 import { useBackupScheduler } from "./hooks/useBackupScheduler";
@@ -44,6 +47,7 @@ export default function App() {
   const { data: extraSlides = [] } = useExtraSlides();
   const { data: users = [] } = useUsers();
   const { data: activeUser = null } = useActiveUser();
+  const { data: settings = DEFAULT_SETTINGS } = useAppSettings();
   const { data: assayCatalog = [] } = useAssayCatalog();
   const { select: selectUser } = useUserMutations();
   const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
@@ -85,6 +89,7 @@ export default function App() {
   const [showNewSample, setShowNewSample] = useState(false);
   const [showUsers, setShowUsers] = useState(false);
   const [showBackups, setShowBackups] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [showRequestStain, setShowRequestStain] = useState(false);
   const [requestStainCode, setRequestStainCode] = useState<string | undefined>(undefined);
@@ -149,10 +154,16 @@ export default function App() {
   // at a shared bench machine isn't silently attributed the previous one's work.
   // Remember who it was, purely to address the sign-back-in prompt by name.
   const [idleSignedOut, setIdleSignedOut] = useState<string | null>(null);
-  useIdleLogout(Boolean(activeUser) && !isViewer, () => {
-    setIdleSignedOut(activeUser?.name ?? "");
-    selectUser.mutate(null);
-  });
+  // The window is configurable (#92); the hook's own 30-minute default is now
+  // only the value the settings row starts at.
+  useIdleLogout(
+    Boolean(activeUser) && !isViewer,
+    () => {
+      setIdleSignedOut(activeUser?.name ?? "");
+      selectUser.mutate(null);
+    },
+    settings.idleLogoutMinutes * 60_000,
+  );
 
   // Restore the last-used project, falling back to the first active one (#84).
   // Without persistence, every restart silently reset the sidebar to whichever
@@ -294,6 +305,11 @@ export default function App() {
         s.processing_type === selectedBatch.processing_type &&
         !committed.has(s.id) &&
         !selectedBatch.member_ids.includes(s.id) &&
+        // Still WAITING to be processed (#91). The timestamp checks below say
+        // "preprocessing is finished", which stays true forever — an embedded or
+        // sectioned block satisfies every one of them, so the Add list offered
+        // the whole Embedded Inventory back to the processor.
+        PREPROCESSING_STAGES.has(s.current_stage) &&
         (s.needs_decalcification !== 1 || Boolean(s.decalc_completed_at)) &&
         Boolean(s.fixative_placed_at) &&
         Boolean(s.fixative_removed_at) &&
@@ -528,6 +544,8 @@ export default function App() {
         onAddProject={() => setShowNewProject(true)}
         view={view}
         onSelectView={setView}
+        onOpenSettings={() => setShowSettings(true)}
+        manifestVisible={settings.manifestVisible}
       />
 
       <main className="flex min-w-0 flex-1 flex-col bg-surface">
@@ -586,12 +604,9 @@ export default function App() {
                     <LogOut size={15} />
                   </Button>
                 )}
-                <Button variant="subtle" className="px-2" title="Manage users, projects & stains" onClick={() => setShowUsers(true)}>
-                  <Users size={15} /> Manage
-                </Button>
-                <Button variant="subtle" className="px-2" title="Database backups & revert" onClick={() => setShowBackups(true)}>
-                  <DatabaseBackup size={15} /> Backups
-                </Button>
+                {/* Manage, Backups and the theme picker moved into Settings
+                    (#94) — set-up controls were crowding out the ones used
+                    every few minutes. */}
                 <Button variant="subtle" className="relative px-2" title="Incoming stain requests" onClick={() => setShowRequests(true)}>
                   <Inbox size={15} /> Requests
                   {openRequestCount > 0 && (
@@ -602,42 +617,6 @@ export default function App() {
                 </Button>
               </>
             )}
-            <label className="flex items-center gap-1 rounded-lg border border-line bg-panel px-2 py-1 text-xs text-ink-soft">
-              <Palette size={14} />
-              <select
-                aria-label="Visual theme"
-                value={theme}
-                onChange={(event) => setTheme(event.target.value)}
-                className="theme-select bg-transparent text-xs text-ink outline-none"
-              >
-                <option value="system">◐ System</option>
-                <option value="light">☀ Clinical Light</option>
-                <option value="dark">☾ Night Shift</option>
-                <option value="contrast">☾ High Contrast</option>
-                <option value="ocean">☀ Ocean Glass</option>
-                <option value="forest">☀ Forest Bench</option>
-                <option value="lavender">☀ Lavender Haze</option>
-                <option value="rose">☀ Rose Quartz</option>
-                <option value="sunset">☀ Sunset Agar</option>
-                <option value="mint">☀ Mint Cleanroom</option>
-                <option value="matcha">☀ Matcha Tea</option>
-                <option value="solarized">☀ Solarized Slide</option>
-                <option value="arctic">☀ Arctic Bloom</option>
-                <option value="sakura">☀ Sakura Lab</option>
-                <option value="citrus">☀ Citrus Pop</option>
-                <option value="parchment">☀ Parchment</option>
-                <option value="candy">☀ Candy Microscope</option>
-                <option value="blueprint">☾ Blueprint</option>
-                <option value="mocha">☾ Mocha Microscope</option>
-                <option value="cobalt">☾ Cobalt Night</option>
-                <option value="aubergine">☾ Aubergine</option>
-                <option value="deepsea">☾ Deep Sea</option>
-                <option value="evergreen">☾ Evergreen Night</option>
-                <option value="neon">☾ Neon Culture</option>
-                <option value="graphite">☾ Graphite</option>
-                <option value="terminal">☾ Retro Terminal</option>
-              </select>
-            </label>
             {!isViewer && (
               <div className="flex items-center gap-1">
                 <Button
@@ -717,7 +696,10 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {view === "manifest" ? (
+          {/* Hiding the Manifest hides the VIEW, not just its button — the
+              choice was persisted, so a workstation left on the Manifest would
+              otherwise reopen there with no way back to it (#92). */}
+          {view === "manifest" && settings.manifestVisible ? (
             <div className="min-w-0 flex-1 overflow-hidden">
               <ManifestView />
             </div>
@@ -821,6 +803,24 @@ export default function App() {
             void qc.invalidateQueries();
             flash("Reverted to backup");
           }}
+        />
+      )}
+      {showSettings && (
+        <SettingsDialog
+          theme={theme}
+          onThemeChange={setTheme}
+          // Close Settings when opening one of the dialogs it hands off to:
+          // two stacked modals over the same backdrop is unreadable, and
+          // Escape would only dismiss the top one.
+          onOpenManage={() => {
+            setShowSettings(false);
+            setShowUsers(true);
+          }}
+          onOpenBackups={() => {
+            setShowSettings(false);
+            setShowBackups(true);
+          }}
+          onClose={() => setShowSettings(false)}
         />
       )}
       {showNewSample && selectedProject && (

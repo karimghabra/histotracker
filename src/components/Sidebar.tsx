@@ -1,4 +1,4 @@
-import { History, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Table2 } from "lucide-react";
+import { History, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Settings, Table2 } from "lucide-react";
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -14,6 +14,8 @@ export function Sidebar({
   onAddProject,
   view,
   onSelectView,
+  onOpenSettings,
+  manifestVisible = true,
 }: {
   projects: Project[];
   selectedProjectId: number | null;
@@ -21,6 +23,10 @@ export function Sidebar({
   onAddProject: () => void;
   view: AppView;
   onSelectView: (view: AppView) => void;
+  /** Open the settings dialogue (#92). */
+  onOpenSettings: () => void;
+  /** Hidden by the Manifest visibility setting (#92). */
+  manifestVisible?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => window.localStorage.getItem("histometer-sidebar-collapsed") === "true",
@@ -39,11 +45,13 @@ export function Sidebar({
         {!collapsed && <span className="text-lg font-semibold tracking-tight">Histometer</span>}
       </div>
 
+      {/* Board and Logs only. Manifest moved to the foot of the panel, above the
+          settings cog (#93) — it is a record you consult, not a place you work,
+          and it sat between the two views that ARE worked in. */}
       <nav className={cn("flex gap-1 pb-1", collapsed ? "flex-col px-1.5" : "px-3")}>
         {([
           { key: "board", label: "Board", icon: LayoutGrid },
           { key: "logs", label: "Logs", icon: Table2 },
-          { key: "manifest", label: "Manifest", icon: History },
         ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -170,7 +178,37 @@ export function Sidebar({
         })}
       </div>
 
-      <div className={cn("shrink-0 border-t border-line/60 py-2 text-ink-faint", collapsed ? "px-1 text-center" : "px-5")}>
+      {/* Bottom stack, in the order the issues asked for: Manifest (#93), then
+          the settings cog (#92), then the version. */}
+      <div className={cn("shrink-0 border-t border-line/60 pt-2", collapsed ? "px-1.5" : "px-3")}>
+        {manifestVisible && (
+          <button
+            onClick={() => onSelectView("manifest")}
+            title={collapsed ? "Manifest" : undefined}
+            className={cn(
+              "mb-1 flex w-full items-center gap-2 rounded-lg py-2 text-sm font-medium transition",
+              collapsed ? "justify-center px-1" : "px-3",
+              view === "manifest" ? "bg-brand/15 text-ink" : "text-ink-soft hover:bg-brand/8",
+            )}
+          >
+            <History size={16} className="shrink-0" />
+            {!collapsed && "Manifest"}
+          </button>
+        )}
+        <button
+          onClick={onOpenSettings}
+          title={collapsed ? "Settings" : undefined}
+          className={cn(
+            "flex w-full items-center gap-2 rounded-lg py-2 text-sm font-medium text-ink-soft transition hover:bg-brand/8",
+            collapsed ? "justify-center px-1" : "px-3",
+          )}
+        >
+          <Settings size={16} className="shrink-0" />
+          {!collapsed && "Settings"}
+        </button>
+      </div>
+
+      <div className={cn("shrink-0 py-2 text-ink-faint", collapsed ? "px-1 text-center" : "px-5")}>
         <span className="text-[10px] font-medium tabular-nums" title="Histometer version">
           {collapsed ? APP_VERSION : `Histometer v${APP_VERSION}`}
         </span>

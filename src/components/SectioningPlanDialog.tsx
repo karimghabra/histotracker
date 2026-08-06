@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Copy, Plus, Scissors, X } from "lucide-react";
 import { Button, Modal } from "./ui";
 import { parsePreselectedStains, pendingStainNames } from "../lib/db";
+import { useAppSettings } from "../hooks/useData";
+import { DEFAULT_SETTINGS, plannedExtras, type AppSettings } from "../lib/settings";
 import type { Sample } from "../lib/types";
 import { cn, displayCode } from "../lib/utils";
 
@@ -36,11 +38,11 @@ function planToRows(raw: string): SlideRow[] {
 }
 
 /** The rows a block should start with: outstanding requested stains first
- *  (#41), else its saved plan, else four extras (#4). */
-function effectiveRows(sample: Sample): SlideRow[] {
+ *  (#41), else its saved plan, else the configured number of extras (#4, #92). */
+function effectiveRows(sample: Sample, settings: AppSettings): SlideRow[] {
   const pending = parsePreselectedStains(sample.pending_stains);
   if (pending.length) {
-    const extras = Math.max(2, 4 - pending.length);
+    const extras = plannedExtras(settings, pending.length);
     let key = 0;
     return [
       ...pending.map((a) => ({ key: key++, value: `${a.assay_type}::${a.assay_name}` })),
@@ -48,7 +50,9 @@ function effectiveRows(sample: Sample): SlideRow[] {
     ];
   }
   const existing = planToRows(sample.sectioning_plan);
-  return existing.length ? existing : [0, 1, 2, 3].map((key) => ({ key, value: "extra" }));
+  return existing.length
+    ? existing
+    : Array.from({ length: settings.defaultTotalSlides }, (_, key) => ({ key, value: "extra" }));
 }
 
 /** Aggregate per-slide rows back into homogeneous cut groups. */
@@ -91,7 +95,10 @@ export function SectioningPlanDialog({
   const active = Math.min(index, blocks.length - 1);
   const current = blocks[active] ?? sample;
   // One editable plan per block, each seeded from that block's effective plan.
-  const [plans, setPlans] = useState<SlideRow[][]>(() => blocks.map(effectiveRows));
+  const { data: settings = DEFAULT_SETTINGS } = useAppSettings();
+  const [plans, setPlans] = useState<SlideRow[][]>(() =>
+    blocks.map((b) => effectiveRows(b, settings)),
+  );
   const [busy, setBusy] = useState(false);
   const nextKey = useRef(1000);
   const rows = plans[active] ?? [];

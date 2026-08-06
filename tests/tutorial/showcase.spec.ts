@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openBackups, openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // Walks the whole Histometer pipeline and captures screenshots for the tutorial
@@ -42,7 +43,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
   await shot(page, "01-board-empty");
 
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" })).toHaveCount(1);
@@ -152,7 +153,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await shot(page, "19-export-menu");
   await page.keyboard.press("Escape");
 
-  await page.getByRole("button", { name: "Backups" }).click();
+  await openBackups(page);
   await expect(page.getByRole("heading", { name: "Database backups" })).toBeVisible();
   await page.getByRole("button", { name: "Back up now" }).click();
   await expect(page.getByText("Manual").first()).toBeVisible({ timeout: 10000 });

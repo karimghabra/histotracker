@@ -53,7 +53,7 @@ import type { DbImage } from "../lib/db";
 import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../lib/types";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
-import { nowTimestamp } from "../lib/utils";
+import { composeDescription, nowTimestamp } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 /**
@@ -340,10 +340,11 @@ export function useActions() {
       return commit(count === 1 ? "Create sample" : `Create ${count} samples`, async () => {
         const ids: number[] = [];
         for (let i = 0; i < count; i += 1) {
-          const own = descriptions?.[i]?.trim();
-          ids.push(
-            await addSample(own ? { ...input, sample_description: own } : input, projectCode),
-          );
+          // The shared field is a PREFIX, not a fallback (#86) — see
+          // composeDescription. Same helper the dialog previews with, so what
+          // the technician reads in the row list is what gets stored.
+          const resolved = composeDescription(input.sample_description, descriptions?.[i] ?? "");
+          ids.push(await addSample({ ...input, sample_description: resolved }, projectCode));
         }
         return ids;
       });

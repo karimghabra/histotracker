@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, Select, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog } from "../hooks/useData";
+import { useAppSettings, useAssayCatalog } from "../hooks/useData";
+import { DEFAULT_SETTINGS, plannedExtras } from "../lib/settings";
 import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
-import { cn, displayCode, normalizePastedLines } from "../lib/utils";
+import { cn, composeDescription, displayCode, normalizePastedLines } from "../lib/utils";
 import type { Project, ProcessingType } from "../lib/types";
 
 /**
@@ -35,6 +36,7 @@ export function NewSampleDialog({
 }) {
   const { createSamples } = useActions();
   const { data: catalog = [] } = useAssayCatalog();
+  const { data: settings = DEFAULT_SETTINGS } = useAppSettings();
   const [saving, setSaving] = useState(false);
   const [previewCode, setPreviewCode] = useState("…");
   const [description, setDescription] = useState("");
@@ -88,9 +90,13 @@ export function NewSampleDialog({
    * fill in a batch they entered last month. The fallback itself was always
    * correct; what was missing was anything requiring the chain to end somewhere.
    */
+  //
+  // #86 — and the shared field is a PREFIX, not a fallback. It used to be
+  // discarded outright as soon as a row had anything in it, so filling in both
+  // (the natural thing to do) made the shared description "do nothing".
   const shared = description.trim();
   const resolvedDescription = (index: number) =>
-    (descriptions[index] ?? "").trim() || shared;
+    composeDescription(shared, descriptions[index] ?? "");
   const missingCodes =
     quantity > 1
       ? Array.from({ length: quantity }, (_, i) => i)
@@ -99,6 +105,8 @@ export function NewSampleDialog({
       : shared
         ? []
         : [displayCode(previewCode)];
+
+  const autoExtras = plannedExtras(settings, picked.size);
 
   const preselectedStains = catalog
     .filter((a) => picked.has(`${a.assay_type}::${a.name}`))
@@ -166,7 +174,7 @@ export function NewSampleDialog({
           autoFocus
           placeholder={
             quantity > 1
-              ? "Used for any sample below you leave blank"
+              ? "e.g. 2 week Stretch PLA — added to every sample below"
               : "e.g. 2 week Stretch PLA"
           }
         />
@@ -177,8 +185,9 @@ export function NewSampleDialog({
               always visible — it used to sit behind a checkbox, below a paste
               box, which made the shortcut look like the main event (#86). */}
           <p className="mb-1.5 text-xs text-ink-soft">
-            Every sample needs a description. Fill a row, or leave it blank to use
-            the shared description above.
+            {shared
+              ? "Each row is added after the shared description. Leave a row blank to use the shared description on its own."
+              : "Every sample needs a description. Fill a row, or type a shared description above to cover them all."}
           </p>
           <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
             {Array.from({ length: quantity }, (_, i) => {
@@ -192,10 +201,22 @@ export function NewSampleDialog({
                   )}>
                     {displayCode(code)}
                   </span>
+                  {/* Show the shared half inline so the composed result is
+                      visible while typing — it is what will be stored, and a
+                      field whose effect you cannot see is the one that reads as
+                      doing nothing (#86). */}
+                  {shared && (
+                    <span
+                      className="max-w-40 shrink-0 truncate text-[11px] text-ink-faint"
+                      title={shared}
+                    >
+                      {shared} |
+                    </span>
+                  )}
                   <TextInput
                     aria-label={`Description for ${displayCode(code)}`}
                     value={descriptions[i] ?? ""}
-                    placeholder={description || "Required"}
+                    placeholder={shared ? "What tells this one apart" : "Required"}
                     onChange={(e) =>
                       setDescriptions((prev) => {
                         const next = [...prev];
@@ -285,9 +306,12 @@ export function NewSampleDialog({
             })}
           </div>
         )}
+        {/* The same arithmetic the plan actually uses — this hint used to
+            hard-code its own copy of "max(2, 4 − stains)" and could drift from
+            it silently (#92). */}
         <p className="mt-1 text-[11px] text-ink-faint">
-          Each ticked agent is preassigned a slide; the block auto-plans {Math.max(2, 4 - picked.size)} extra
-          {Math.max(2, 4 - picked.size) === 1 ? "" : "s"} at embedding.
+          Each ticked agent is preassigned a slide; the block auto-plans {autoExtras} extra
+          {autoExtras === 1 ? "" : "s"} at embedding.
         </p>
       </Field>
       <Field label="Sectioning / Cut Notes">

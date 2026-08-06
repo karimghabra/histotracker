@@ -1,6 +1,55 @@
 # Changelog
 
-## 0.7.4 - unreleased
+## 0.8.0 - unreleased
+
+Follow-up on 0.7.4 at the bench, plus the settings dialogue. **No schema
+change** — the new settings live in `app_settings`, a table that has existed
+since 0.5, so a 0.7.x build opens a 0.8.0 database and simply ignores the extra
+rows.
+
+**Settings (#92, #93, #94).** A cog at the foot of the left panel, above the
+version number.
+
+- **Cutting defaults are configurable.** Slides per block and minimum extras
+  were the literals `4` and `2`, written out by hand in three files that could
+  drift apart. They are now one setting each, and the slides-per-block default
+  drops from 4 to **3**. Existing sectioning plans are untouched.
+- **The idle sign-out window is configurable**, instead of a fixed 30 minutes.
+- **The Manifest can be hidden**, button and view together — hiding it does not
+  stop anything being recorded.
+- **The top bar is less crowded.** Manage, Backups and the theme picker moved
+  into Settings; they are set-up controls that were competing for space with the
+  ones used every few minutes.
+- **Manifest moved to the foot of the left panel**, above the cog. It is a
+  record you consult, not a place you work, and it sat between the two views
+  that are.
+
+**Fixes to 0.7.4's own work:**
+
+- **Removed slides are readable in dark themes (#83).** The struck-off row and
+  its reason panel were painted with fixed near-white Tailwind reds under
+  theme-aware text, so in the eleven dark themes they were pale grey on bright
+  pink. They now blend the theme's own panel colour, which works for every
+  present and future theme rather than a list of overrides.
+- **A shared description is now a prefix, not a fallback (#86).** It was
+  discarded outright the moment a per-sample row had anything in it, so filling
+  in both — the natural thing to do — made it "do nothing". A sample now reads
+  `shared | specific`, and the row list shows the shared half inline as you type.
+- **The processor's Add list only offers blocks still waiting to be processed
+  (#91).** Eligibility was purely "has this timestamp been set", and every one of
+  those stays true for the rest of a block's life — so the whole Embedded
+  Inventory was eligible to be loaded back into the machine. Refused at the data
+  layer as well as hidden in the list.
+- **A slide is recorded as cut when it is cut (#95).** The stamp was written when
+  the cut group was *created* and queued, so every slide waiting in Needs
+  Sectioning already read as Cut in the log — and undoing a sectioning could not
+  clear a stamp that predated it, which is what made undo/redo look broken. It is
+  now stamped when the group leaves the queue, whichever stage it lands in
+  (previously two specific destinations stamped it and the rest did not), and
+  cleared if the group is dragged back. Rows written by older builds are read
+  through the same rule, so a queued group stops claiming a cut it never had.
+
+## 0.7.4 - 2026-08-05
 
 **Nothing is ever deleted (#83).** Histometer is a record, so a slide that was
 cut and then lost now reads as *cut, then removed* rather than as though it never

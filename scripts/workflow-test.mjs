@@ -269,6 +269,16 @@ function makeApi(db) {
     const running = batch.status === "processing";
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
+
+    // Joiners and leavers, read before validation: the "still waiting" rule
+    // below applies only to newcomers, since an existing member of a running
+    // batch is past pre-processing by definition.
+    const previousIds = all(
+      `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
+    const next = new Set(sampleIds);
+    const joined = sampleIds.filter((id) => !previousIds.includes(id));
+    const left = previousIds.filter((id) => !next.has(id));
+
     if (samples.some((s) => s.processing_type !== batch.processing_type)) throw new Error("PROTOCOL_MISMATCH");
     // The reporter's own note: only fully preprocessed samples reach the
     // processor. This was already enforced and must stay so when adding to a
@@ -277,6 +287,15 @@ function makeApi(db) {
       (s.needs_decalcification === 1 && !s.decalc_completed_at) ||
       !s.fixative_placed_at || !s.fixative_removed_at || !s.ethanol_placed_at);
     if (notReady.length) throw new Error("NOT_PREPROCESSED");
+    // ...and it must still be WAITING for the processor (#91). Every check above
+    // is a "has this happened yet" timestamp, and all of them stay true for the
+    // rest of the block's life — so an embedded or sectioned block passed them
+    // all and the Embedded Inventory was eligible to be loaded back in.
+    const PREPROCESSING = new Set(
+      ["received", "in_fixative", "fixative_removed", "decalcified", "in_ethanol"]);
+    if (samples.some((s) => joined.includes(s.id) && !PREPROCESSING.has(s.current_stage))) {
+      throw new Error("ALREADY_PAST_PREPROCESSING");
+    }
     const conflict = all(
       `SELECT s.sample_code FROM processing_batch_members pbm
          JOIN processing_batches pb ON pb.id = pbm.batch_id
@@ -284,12 +303,6 @@ function makeApi(db) {
         WHERE pbm.sample_id IN (${placeholders}) AND pb.id != ? AND pb.status IN ('planned', 'processing')`,
       [...sampleIds, batchId]);
     if (conflict.length) throw new Error("ALREADY_BATCHED");
-
-    const previousIds = all(
-      `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
-    const next = new Set(sampleIds);
-    const joined = sampleIds.filter((id) => !previousIds.includes(id));
-    const left = previousIds.filter((id) => !next.has(id));
 
     run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
     for (const id of sampleIds) run(`INSERT INTO processing_batch_members (batch_id, sample_id) VALUES (?, ?)`, [batchId, id]);
@@ -702,7 +715,8 @@ function makeApi(db) {
     const unsaved = get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ? AND assignment_saved = 0`, [sectionId]);
     if (unsaved.c > 0) throw new Error("Click Save All to confirm every slide assignment before starting assay work.");
     const ts = now();
-    // Coming straight from Needs Sectioning (no assignment stop, #34/#38).
+    // The group is LEAVING Needs Sectioning, which is the one moment a slide is
+    // recorded as cut (#95) — not when the group was created and queued.
     run(`UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`, [ts, sectionId]);
     run(`UPDATE slides SET current_stage = CASE WHEN purpose = 'stain' THEN 'stain_requested' ELSE purpose END,
            stage_stain_requested_at = CASE WHEN purpose = 'stain' THEN COALESCE(stage_stain_requested_at, ?) ELSE stage_stain_requested_at END
@@ -1333,6 +1347,69 @@ issue(91, "a half-preprocessed sample cannot be added to a running run", () => {
      "and the run's membership is untouched by the refusal");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [half.id]).s, "in_fixative",
      "the refused sample stays where it was");
+});
+
+// #91, follow-up after 0.7.4 was tested: "the list from which add samples should
+// pull should be those samples which have been completely preprocessed, but NOT
+// those that are in the embedded inventory".
+//
+// The eligibility rules were entirely "has this timestamp been set" — fixative
+// in, fixative out, ethanol in. Every one of those is STILL TRUE of a block that
+// has since been processed, embedded and sectioned, so the whole Embedded
+// Inventory qualified and could be loaded back into the machine.
+issue(91, "a block that is already embedded cannot be added to a run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "in the run"); api.completePreprocessing(a.id);
+  const done = api.addSample(p, "EE", "already embedded");
+  api.completePreprocessing(done.id);
+  api.markEmbedded(done.id);
+  // Precondition: it satisfies every preprocessing timestamp, which is exactly
+  // why the timestamp-only rule let it through.
+  const ts = api.get(
+    `SELECT fixative_placed_at AS f, fixative_removed_at AS fr, ethanol_placed_at AS e,
+            current_stage AS s FROM samples WHERE id = ?`, [done.id]);
+  assert(ts.f && ts.fr && ts.e, "the embedded block does have completed preprocessing stamps");
+  eq(ts.s, "embedded", "and it is sitting in the Embedded Inventory");
+
+  const batchId = api.startProcessingBatch({
+    sampleIds: [a.id], processingType: "Short", startedAt: "2026-08-01 08:00" });
+  let threw = null;
+  try { api.updateBatchMembers(batchId, [a.id, done.id]); } catch (err) { threw = err.message; }
+  eq(threw, "ALREADY_PAST_PREPROCESSING", "an embedded block is refused");
+  eq(api.all(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batchId]).length, 1,
+     "and the run's membership is untouched by the refusal");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [done.id]).s, "embedded",
+     "the refused block stays in the Embedded Inventory");
+});
+
+// #95 — "slides are marked as cut as soon as they are placed within the needs
+// sectioning stage. they should only receive this timeline event when they are
+// sectioned!"
+//
+// This is also the whole of the original report ("sectioned, undone, redone —
+// the slide shows as cut"): undo/redo swaps whole DB images and was never
+// broken, but the cut stamp was written when the group was CREATED, so it
+// predated the thing being undone and no amount of rewinding could clear it.
+issue(95, "a slide is stamped cut when its group leaves Needs Sectioning, not before", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "cut timing");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+
+  // Queued for sectioning: planned, not cut.
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s,
+     "needs_sectioning", "the group starts in the queue");
+  eq(api.all(`SELECT stage_cut_at AS c FROM slides WHERE section_request_id = ?`, [section])
+       .filter((r) => r.c != null).length, 0,
+     "no slide carries a cut time while the group is still queued");
+
+  // Actually sectioned.
+  api.startAssayWork(section);
+  const cut = api.all(`SELECT stage_cut_at AS c FROM slides WHERE section_request_id = ?`, [section]);
+  eq(cut.filter((r) => r.c != null).length, cut.length,
+     "every slide is stamped once the group leaves the queue");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample

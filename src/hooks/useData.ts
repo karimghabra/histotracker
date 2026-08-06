@@ -23,6 +23,8 @@ import {
   listStainRequests,
   listUsers,
   getActiveUser,
+  getAppSettings,
+  saveAppSettings,
   setActiveUser,
   setStainRequestStatus,
   setUserActive,
@@ -37,6 +39,7 @@ import {
   updateSampleStage,
 } from "../lib/db";
 import type { NewSampleInput, StainRequestStatus } from "../lib/types";
+import { DEFAULT_SETTINGS, type AppSettings } from "../lib/settings";
 
 const KEYS = {
   projects: ["projects"] as const,
@@ -45,6 +48,7 @@ const KEYS = {
   processingBatches: ["processing-batches"] as const,
   users: ["users"] as const,
   activeUser: ["active-user"] as const,
+  settings: ["app-settings"] as const,
 };
 
 export function useUsers(activeOnly = false) {
@@ -56,6 +60,36 @@ export function useUsers(activeOnly = false) {
 
 export function useActiveUser() {
   return useQuery({ queryKey: KEYS.activeUser, queryFn: getActiveUser });
+}
+
+/**
+ * Workstation defaults (#92). `initialData` rather than an undefined-handling
+ * dance at every call site: every consumer needs a usable number on the very
+ * first render (the idle timer, the plan dialog), and the defaults ARE the
+ * answer until the row is read.
+ *
+ * `initialDataUpdatedAt: 0` is load-bearing. Without it, react-query stamps the
+ * seed as fetched *now*, and the client-wide `staleTime: 5000` then suppresses
+ * the mount fetch entirely — so for the first five seconds after launch the app
+ * used the built-in defaults rather than the lab's configured ones, silently.
+ * Dating the seed to the epoch marks it stale on arrival, so the real row is
+ * always read.
+ */
+export function useAppSettings() {
+  return useQuery({
+    queryKey: KEYS.settings,
+    queryFn: getAppSettings,
+    initialData: DEFAULT_SETTINGS,
+    initialDataUpdatedAt: 0,
+  });
+}
+
+export function useSettingsMutations() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: AppSettings) => saveAppSettings(settings),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.settings }),
+  });
 }
 
 export function useUserMutations() {

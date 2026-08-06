@@ -25,6 +25,34 @@
     inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 18%, transparent);
 }
 
+/* Row tints for the Logs slide list (#83).
+ *
+ * These were Tailwind's `bg-red-50` / `bg-amber-100`, which are FIXED near-white
+ * paints. The text on top of them is theme-aware (`text-ink`, `text-ink-faint`),
+ * so in the eleven dark themes a removed slide became pale-grey text on a bright
+ * pink slab — the reported "way too bright, unreadable in dark mode". Blending
+ * the theme's OWN panel colour with the accent keeps the signal ("struck off",
+ * "matches your filter") while inheriting whatever contrast the theme has: on a
+ * dark panel the mix is a dark maroon, on a light one a pale pink, and light ink
+ * stays readable on both. One rule covers every present and future theme, which
+ * a per-theme override list would not. */
+.row-removed {
+  background-color: color-mix(in srgb, var(--color-panel) 88%, #e11d48 12%);
+}
+.row-match {
+  background-color: color-mix(in srgb, var(--color-panel) 84%, #f59e0b 16%);
+}
+.note-removed {
+  background-color: color-mix(in srgb, var(--color-panel) 82%, #e11d48 18%);
+  border-color: color-mix(in srgb, var(--color-line) 45%, #e11d48 55%);
+  color: var(--color-ink);
+}
+/* Mixed against the theme's ink, not a fixed red: dark ink + rose reads on light
+   paper, light ink + rose reads on dark. */
+.text-removed {
+  color: color-mix(in srgb, var(--color-ink) 45%, #f43f5e 55%);
+}
+
 :root[data-theme="dark"] {
   --color-surface: #111923;
   --color-panel: #1a2531;

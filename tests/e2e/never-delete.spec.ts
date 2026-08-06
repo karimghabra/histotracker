@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -18,7 +19,7 @@ async function signInAndProject(page: Page) {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -103,7 +104,7 @@ test("#83: removing a cut group keeps its slides in the log", async ({ page }) =
   expect(before.length).toBeGreaterThan(0);
 
   // Open the cut group card and remove the whole group.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.locator("button.text-red-600, button:has(svg.lucide-trash-2)").last().click();
 
   const dialog = page.getByRole("dialog", { name: /Remove this cut group/ });
@@ -116,7 +117,7 @@ test("#83: removing a cut group keeps its slides in the log", async ({ page }) =
   await confirmBtn.click();
 
   // Gone from the board...
-  await expect(page.getByText("4 slides")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByText("3 slides")).toHaveCount(0, { timeout: 15000 });
 
   // ...but every slide is still in the log, flagged, with the reason.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
@@ -151,7 +152,7 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
 
   // Assign an agent to one slide during cutting, then Mark Sectioned — that is
   // what auto-splits the group's stain slides into an agent rack.
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   const drawerClose = page.locator("button:has(svg.lucide-x)").first();
   if (await drawerClose.isVisible().catch(() => false)) {

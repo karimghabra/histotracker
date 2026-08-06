@@ -1,4 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // #72 — a viewer should SEE cutting plans and existing tags, and nothing more.
@@ -77,7 +78,7 @@ async function seedWorkstation(ws: Page) {
   await expect(ws.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await ws.getByRole("button", { name: "Manage" }).click();
+  await openManage(ws);
   await ws.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await ws.getByRole("button", { name: "Add", exact: true }).click();
   await ws.keyboard.press("Escape");
@@ -204,7 +205,7 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
     .selectOption({ index: 1 });
   await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
-  await ws.getByText("4 slides").first().click();
+  await ws.getByText("3 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await expect(column(ws, "Staining / IHC").getByText("Alcian Blue").first()).toBeVisible({

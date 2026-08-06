@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { openManage } from "../helpers/app";
 
 // A real drive-through of the write path: add a lab user, sign in, create a
 // project. Exercises INSERTs, lastInsertId, and React Query refetch through the
@@ -12,7 +13,7 @@ test("add user, sign in, create a project", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible();
 
   // --- Add a lab user ---
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(

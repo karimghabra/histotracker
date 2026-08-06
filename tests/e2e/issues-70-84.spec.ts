@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openManage, setTheme } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // Drives the real app in Chromium for the 0.6.x issue wave (#75, #78, #81, #82,
@@ -11,7 +12,7 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
-  await page.getByRole("button", { name: "Manage" }).click();
+  await openManage(page);
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(
@@ -85,7 +86,7 @@ async function cutAndSectionIntoStaining(page: Page, code: string, stainIndex = 
     .selectOption({ index: stainIndex });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("4 slides").first().click();
+  await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 }
@@ -177,7 +178,7 @@ test("#80: the stain protocol no longer has a drying step", async ({ page }) => 
 
 test("#78: the matcha theme is selectable and applies", async ({ page }) => {
   await signInAndProject(page);
-  await page.getByLabel("Visual theme").selectOption("matcha");
+  await setTheme(page, "matcha");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "matcha");
   // The theme block actually resolves (not an unstyled fallback).
   const brand = await page.evaluate(() =>

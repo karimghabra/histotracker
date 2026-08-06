@@ -173,3 +173,52 @@ export function normalizePastedLines(text: string): string[] {
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
+
+/**
+ * The description a batch sample ends up with, from the batch-wide field and
+ * that sample's own row (#86).
+ *
+ * The shared field used to be a pure FALLBACK — used only when a row was blank,
+ * and thrown away entirely the moment the row had anything in it. So filling in
+ * both, which is the natural thing to do, silently discarded the half that was
+ * true of every sample: "shared description currently does nothing".
+ *
+ * It composes instead. The shared part is the thing all the samples have in
+ * common ("2 week PLA") and the row is what tells them apart ("left femur"),
+ * so the sample reads "2 week PLA | left femur". Either half alone stands on its
+ * own; both blank is the one case the caller must refuse, which is #88's rule
+ * and is why this returns "" rather than inventing a placeholder.
+ */
+/**
+ * When a slide was physically cut — "" if it has not been cut yet (#95).
+ *
+ * Slides used to be stamped `stage_cut_at` at INSERT, which is the moment the
+ * cut group is *created* and dropped into Needs Sectioning. So a slide read as
+ * Cut in the log while the block was still sitting in the queue waiting for
+ * somebody to go to the microtome; and undoing a sectioning did not clear it,
+ * because the stamp predated the thing being undone. That is the whole of #95:
+ * the undo/redo machinery was fine, the timestamp was written too early.
+ *
+ * The stamp now happens when the group leaves Needs Sectioning. This rule covers
+ * the two kinds of row that predate that:
+ *   - a group STILL in Needs Sectioning that carries an old creation-time stamp
+ *     reports no cut, because it demonstrably has not been cut; and
+ *   - a genuinely old slide with no stamp at all (builds before the column was
+ *     written) still reports its `created_at`, so its Cut step does not vanish
+ *     from a log that has shown it for a year.
+ */
+export function slideCutAt(slide: {
+  stage_cut_at?: string | null;
+  created_at?: string | null;
+  section_stage?: string | null;
+}): string {
+  if (slide.section_stage === "needs_sectioning") return "";
+  return slide.stage_cut_at || slide.created_at || "";
+}
+
+export function composeDescription(shared: string, own: string): string {
+  const s = (shared ?? "").trim();
+  const o = (own ?? "").trim();
+  if (s && o) return `${s} | ${o}`;
+  return o || s;
+}

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   compareSampleCodes,
+  composeDescription,
   compareSlideCodes,
   displayCode,
   duplicateLabel,
   formatSampleCode,
   parseSampleCode,
   sampleCodeVariants,
+  slideCutAt,
 } from "./utils";
 
 describe("sample code formatting (#87)", () => {
@@ -117,5 +119,53 @@ describe("compareSlideCodes (#75)", () => {
 
   it("is stable for codes with no suffix", () => {
     expect(compareSlideCodes("EE-0001", "EE-0001")).toBe(0);
+  });
+});
+
+describe("composeDescription (#86)", () => {
+  it("joins the shared description and the per-sample one", () => {
+    // The reported defect: filling in both threw the shared half away, so a
+    // shared description "did nothing".
+    expect(composeDescription("2 week PLA", "left femur")).toBe("2 week PLA | left femur");
+  });
+
+  it("uses whichever half is present on its own", () => {
+    expect(composeDescription("2 week PLA", "")).toBe("2 week PLA");
+    expect(composeDescription("", "left femur")).toBe("left femur");
+  });
+
+  it("trims, and reports nothing when both halves are blank (#88's rule)", () => {
+    expect(composeDescription("  2 week PLA  ", "  left femur ")).toBe("2 week PLA | left femur");
+    expect(composeDescription("   ", "")).toBe("");
+  });
+});
+
+describe("slideCutAt (#95)", () => {
+  const base = { stage_cut_at: null, created_at: "2026-07-20 09:00" };
+
+  it("reports no cut while the group is still queued for sectioning", () => {
+    expect(slideCutAt({ ...base, section_stage: "needs_sectioning" })).toBe("");
+  });
+
+  it("ignores a creation-time stamp written by an older build", () => {
+    // Builds up to 0.7.4 stamped stage_cut_at at INSERT, so rows already in the
+    // live database claim a cut that has not happened.
+    expect(
+      slideCutAt({
+        stage_cut_at: "2026-07-20 09:00",
+        created_at: "2026-07-20 09:00",
+        section_stage: "needs_sectioning",
+      }),
+    ).toBe("");
+  });
+
+  it("reports the stamp once the group has left the queue", () => {
+    expect(
+      slideCutAt({ stage_cut_at: "2026-07-24 11:00", created_at: "x", section_stage: "stain_requested" }),
+    ).toBe("2026-07-24 11:00");
+  });
+
+  it("still falls back to created_at for slides that never had a stamp", () => {
+    expect(slideCutAt({ ...base, section_stage: "stained" })).toBe("2026-07-20 09:00");
   });
 });

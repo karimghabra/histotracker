@@ -179,6 +179,9 @@ export interface Slide {
   project_name?: string;
   sample_description?: string;
   is_priority?: number;
+  /** Parent cut group's stage, joined in by listAllSlides — a slide in a group
+   *  still in `needs_sectioning` has not been cut yet (#95). */
+  section_stage?: string;
 }
 
 export interface SlideStack {
