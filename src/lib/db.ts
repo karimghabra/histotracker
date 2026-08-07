@@ -734,6 +734,7 @@ export async function listOpenSamples(): Promise<Sample[]> {
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0
+        AND s.current_stage != 'removed' -- a removed block leaves the board (#96)
         AND s.archived_at IS NULL
       ORDER BY s.is_priority DESC, s.prioritized_at DESC, s.date_added ASC, s.id ASC`,
   );
@@ -955,6 +956,13 @@ export interface SlideRemoval {
   user_name: string;
 }
 
+export interface SampleRemoval {
+  sample_id: number;
+  reason: string;
+  at: string;
+  user_name: string;
+}
+
 /**
  * Why each removed slide was removed, keyed by slide id (#83).
  *
@@ -988,6 +996,36 @@ export async function listSlideRemovals(): Promise<SlideRemoval[]> {
     } catch {
       continue;
     }
+  }
+  return out;
+}
+
+/** Why each removed BLOCK was removed, keyed by sample id (#96). Same shape and
+ *  same tolerance as `listSlideRemovals` — see its note. */
+export async function listSampleRemovals(): Promise<SampleRemoval[]> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ sample_id: number; details: string; created_at: string; user_name: string | null }>>(
+    `SELECT e.sample_id, e.details, e.created_at, u.name AS user_name
+       FROM sample_timeline_events e
+       LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.event_type = 'sample_removed'
+      ORDER BY e.created_at DESC, e.id DESC`,
+  );
+  const out: SampleRemoval[] = [];
+  for (const row of rows) {
+    let reason = "";
+    try {
+      const parsed = JSON.parse(row.details ?? "") as { reason?: string };
+      reason = parsed?.reason?.trim() ?? "";
+    } catch {
+      reason = (row.details ?? "").trim();
+    }
+    out.push({
+      sample_id: row.sample_id,
+      reason: reason || "No reason recorded.",
+      at: row.created_at,
+      user_name: row.user_name ?? "",
+    });
   }
   return out;
 }
@@ -3568,6 +3606,54 @@ export async function setSectionTimestamp(
  * Each slide goes through `removeSlide` so it gets its own timeline entry and
  * its letter stays burned; the group then follows.
  */
+/**
+ * Remove a whole block from the working board, with a reason (#96).
+ *
+ * The drawer's button used to be Archive, which is a reversible *hide* — the
+ * right tool for "this project is finished", the wrong one for "this block
+ * should never have been logged". Archiving now belongs to the Logs, where you
+ * can see what you are hiding and unhide it; the board gets the destructive-
+ * sounding action people actually reach for, made non-destructive.
+ *
+ * "Delete" here means what it means everywhere else in this app: the row stays,
+ * flagged, with the reason attached. It reuses `removeSectionRequest` for each
+ * live cut group, which reuses `removeSlide` for each slide — so a removed block
+ * detaches its slides from their racks, keeps their letters burned, and records
+ * one timeline event per slide, all without a new code path. The only new part
+ * is the block's own stage and its own event.
+ */
+export async function removeSample(id: number, reason: string): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ sample_code: string }>>(
+    `SELECT sample_code FROM samples WHERE id = ?`,
+    [id],
+  );
+  const sample = rows[0];
+  if (!sample) return;
+  const groups = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
+    [id],
+  );
+  for (const group of groups) await removeSectionRequest(group.id, reason);
+  await db.execute(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [id]);
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'sample_removed', ?, ?, ?)`,
+    [
+      id,
+      `Removed block ${displayCode(sample.sample_code)}`,
+      JSON.stringify({ sample_id: id, sample_code: sample.sample_code, reason: reason.trim() }),
+      nowTimestamp(),
+    ],
+  );
+}
+
+export async function removeSamples(ids: number[], reason: string): Promise<void> {
+  for (const id of ids) await removeSample(id, reason);
+}
+
 export async function removeSectionRequest(id: number, reason: string): Promise<void> {
   const db = await getDb();
   const members = await db.select<Array<{ id: number }>>(

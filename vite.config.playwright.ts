@@ -123,5 +123,15 @@ export default defineConfig({
   server: {
     port: 5599,
     strictPort: true,
+    watch: {
+      // Never watch the Rust build tree. It holds locked .exe files that
+      // chokidar cannot open, and `cargo check` rewrites them constantly — so a
+      // cargo build running alongside the e2e suite killed the dev server with
+      // `EBUSY: resource busy or locked, watch …/build_script_build.exe`, and
+      // every remaining test failed with ERR_CONNECTION_REFUSED. Nothing under
+      // these paths is part of the frontend bundle, so there is nothing to gain
+      // by watching them.
+      ignored: ["**/src-tauri/target/**", "**/target/**", "**/test-results/**"],
+    },
   },
 });

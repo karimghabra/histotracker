@@ -1,6 +1,25 @@
 # Changelog
 
-## 0.8.0 - unreleased
+## 0.8.1 - unreleased
+
+**Delete on the board, Archive in the Logs (#96).** These were two different
+intentions sharing one button, and the board had the wrong one.
+
+- **The sample drawer's Archive is now Delete.** It asks for a reason and
+  refuses without one, then takes the block, its cut groups and every slide it
+  held off the board — exactly the treatment a removed slide or cut group
+  already gets. **Nothing is deleted:** every row survives, the block keeps its
+  place in the Logs flagged **Removed**, and expanding it shows who removed it,
+  when, and why. Slide letters stay burned, so a later cut continues the
+  sequence rather than reusing them.
+- **Archiving is done from the Logs**, where it already lived — you can see what
+  you are hiding, and tick "Show archived" to bring it back whole. Archiving is
+  the reversible hide for a block you still expect to want; deleting records one
+  that should not be on the board at all.
+
+No schema change.
+
+## 0.8.0 - 2026-08-06
 
 Follow-up on 0.7.4 at the bench, plus the settings dialogue. **No schema
 change** — the new settings live in `app_settings`, a table that has existed

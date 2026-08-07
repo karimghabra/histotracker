@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
-import type { SlideRemoval } from "../lib/db";
+import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
-import { useAllSamples, useAllSlides, useAssayCatalog, useSlideRemovals } from "../hooks/useData";
+import { useAllSamples, useAllSlides, useAssayCatalog, useSampleRemovals, useSlideRemovals } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { cn, compareSlideCodes, displayCode, sampleCodeVariants, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
@@ -241,6 +241,13 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
   const removals = useMemo(
     () => new Map(removalList.map((entry) => [entry.slide_id, entry])),
     [removalList],
+  );
+  // Blocks removed from the board keep their row here, flagged, with the
+  // reason — the same treatment their slides get (#96).
+  const { data: sampleRemovalList = [] } = useSampleRemovals();
+  const sampleRemovals = useMemo(
+    () => new Map(sampleRemovalList.map((entry) => [entry.sample_id, entry])),
+    [sampleRemovalList],
   );
 
   const [project, setProject] = useState("all");
@@ -599,11 +606,17 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
                   sample={row.sample}
                   agents={row.agents}
                   slides={row.slides}
-                  phaseLabel={PHASE_LABEL[row.phase]}
+                  // A removed block has no live slides, so the derived phase
+                  // falls back to its stage column — which removal overwrote.
+                  // Say what it is instead of reporting a phase it is not (#96).
+                  phaseLabel={
+                    row.sample.current_stage === "removed" ? "Removed" : PHASE_LABEL[row.phase]
+                  }
                   progress={row.progress}
                   extras={row.extras}
                   removedCount={row.removedCount}
                   removals={removals}
+                  removal={sampleRemovals.get(row.sample.id)}
                   hasNotes={row.hasNotes}
                   lastActivity={row.lastActivity}
                   open={isOpen}
@@ -710,6 +723,7 @@ function FragmentRow({
   extras,
   removedCount,
   removals,
+  removal,
   hasNotes,
   lastActivity,
   open,
@@ -730,6 +744,8 @@ function FragmentRow({
   removedCount: number;
   /** Reason per removed slide id (#83). */
   removals: Map<number, SlideRemoval>;
+  /** Set when this BLOCK itself was removed from the board (#96). */
+  removal?: SampleRemoval;
   hasNotes: boolean;
   lastActivity: string;
   open: boolean;
@@ -808,6 +824,17 @@ function FragmentRow({
                 Archived
               </span>
             )}
+            {/* Removed ≠ archived. Archived is a reversible hide; this block was
+                taken off the board on purpose, and the row exists to say so and
+                to carry the reason (#96). Expand it to read why. */}
+            {sample.current_stage === "removed" && (
+              <span
+                className="whitespace-nowrap rounded-full bg-red-600 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-white"
+                title="Removed from the board — expand for the reason"
+              >
+                Removed
+              </span>
+            )}
             {progress.total > 0 && (
               <span className="flex items-center gap-1" title={`${progress.done}/${progress.total} analyzed`}>
                 <span className="h-1.5 w-10 overflow-hidden rounded-full bg-line">
@@ -840,6 +867,17 @@ function FragmentRow({
       {open && (
         <tr>
           <td colSpan={colCount} className="bg-surface px-4 py-3">
+            {sample.current_stage === "removed" && (
+              <div className="note-removed mb-3 rounded-md border px-2 py-1.5">
+                <p className="text-removed text-[10px] font-semibold uppercase tracking-wide">
+                  Block removed{removal?.at ? ` · ${fmtTime(removal.at)}` : ""}
+                  {removal?.user_name ? ` · ${removal.user_name}` : ""}
+                </p>
+                <p className="mt-0.5 text-[11px] text-ink">
+                  {removal?.reason ?? "No reason recorded."}
+                </p>
+              </div>
+            )}
             <div className="mb-3 flex flex-wrap items-center gap-2">
               {onRequestStain && !readOnly && (
                 <button

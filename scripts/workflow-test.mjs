@@ -572,6 +572,23 @@ function makeApi(db) {
     }
     run(`UPDATE section_requests SET current_stage = 'removed' WHERE id = ?`, [sectionId]);
   }
+  // Port of removeSample() — db.ts (#96). The board's Delete: every live cut
+  // group goes through removeSectionRequest (and so every slide through
+  // removeSlide), then the block itself is flagged and the reason recorded.
+  function removeSample(sampleId, reason = 'test removal') {
+    const sample = get(`SELECT sample_code AS code FROM samples WHERE id = ?`, [sampleId]);
+    if (!sample) return;
+    for (const row of all(
+      `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
+      [sampleId])) {
+      removeSectionRequest(row.id, reason);
+    }
+    run(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [sampleId]);
+    run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
+         VALUES (?, 'sample_removed', ?, ?, ?)`,
+        [sampleId, `Removed block ${sample.code}`,
+         JSON.stringify({ sample_id: sampleId, sample_code: sample.code, reason }), now()]);
+  }
   // Port of ensureSlidesForSectionRequest() — db.ts. ONLY initialises a section
   // with no slides; it used to top up from a live COUNT, which both resurrected
   // deleted slides and collided on UNIQUE(section_request_id, slide_ordinal).
@@ -900,7 +917,7 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     tickSectionStainedCheckbox,
-    removeSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest,
+    removeSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
@@ -1410,6 +1427,50 @@ issue(95, "a slide is stamped cut when its group leaves Needs Sectioning, not be
   const cut = api.all(`SELECT stage_cut_at AS c FROM slides WHERE section_request_id = ?`, [section]);
   eq(cut.filter((r) => r.c != null).length, cut.length,
      "every slide is stamped once the group leaves the queue");
+});
+
+// #96 — "archive button in the main dashboard/workflow should be delete;
+// archiving should only [be] performed from the logs".
+//
+// Delete still means what it means everywhere else here: the block, its cut
+// groups and every slide keep their rows and stay in the log, flagged, with the
+// reason. What changes is that the block leaves the board.
+issue(96, "deleting a block from the board removes it without erasing anything", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "entered in error");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  const slideIds = api.all(
+    `SELECT id FROM slides WHERE section_request_id = ?`, [section]).map((r) => r.id);
+  eq(slideIds.length, 2, "the block really has slides to lose");
+
+  api.removeSample(id, "logged against the wrong animal");
+
+  // --- gone from the board -------------------------------------------------
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "removed",
+     "the block is flagged removed, which is what keeps it off the board");
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s, "removed",
+     "its cut group goes with it — otherwise the group lingers in Needs Sectioning");
+  eq(api.all(`SELECT id FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`,
+             [section]).length, 0,
+     "and so does every slide the group held");
+
+  // --- kept in the record --------------------------------------------------
+  assert(api.get(`SELECT id FROM samples WHERE id = ?`, [id]) != null, "the sample row survives");
+  for (const slideId of slideIds) {
+    assert(api.get(`SELECT id FROM slides WHERE id = ?`, [slideId]) != null,
+      `slide ${slideId} still exists — nothing is ever deleted`);
+  }
+  const event = api.get(
+    `SELECT details AS d FROM sample_timeline_events
+      WHERE sample_id = ? AND event_type = 'sample_removed'`, [id]);
+  assert(event != null, "the block's removal is on its timeline");
+  eq(JSON.parse(event.d).reason, "logged against the wrong animal",
+     "with the reason the user was made to type");
+
+  // The letters stay burned: a removed block is not a fresh one.
+  eq(api.nextSlideLetter(id), 3, "slide letters are not reissued after a removal");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
@@ -2568,11 +2629,20 @@ invariant("no code path deletes a sample, cut group or slide", () => {
     assert(!new RegExp(`export async function ${gone}\\b`).test(db),
       `${gone} must stay deleted — archive or retire instead (#83)`);
   }
+  // #96 moved the two intentions apart: the BOARD deletes (non-destructively,
+  // with a reason), the LOGS archive. The rule being protected is unchanged —
+  // whatever the board's red button is called, it must not erase anything, and
+  // it must ask why.
   const drawer = readFileSync(join(HERE, "..", "src", "components", "SampleDetailsDrawer.tsx"), "utf8");
-  assert(!/removeSamples?\(/.test(drawer),
-    "the sample drawer must not offer Delete — Archive is the non-destructive equivalent");
-  assert(/setArchivedSamples\(/.test(drawer),
-    "...and it must offer Archive in its place, or a mis-entered block is stuck on the board");
+  assert(/removeSamples\(/.test(drawer),
+    "the sample drawer's Delete must go through removeSamples — the soft, reasoned path (#96)");
+  assert(/RemovalReasonDialog/.test(drawer),
+    "...and it must ask for a reason, or a block vanishes from the board unexplained (#83)");
+  assert(!/setArchivedSamples\(/.test(drawer),
+    "archiving belongs to the Logs, where you can see and undo it (#96)");
+  const logsSrc = readFileSync(join(HERE, "..", "src", "components", "LogsView.tsx"), "utf8");
+  assert(/setArchived\(/.test(logsSrc),
+    "...so the Logs must still offer archive/restore, or nothing can be archived at all");
 });
 
 // #83 — the Logs view is the one place removed slides MUST still appear, and the

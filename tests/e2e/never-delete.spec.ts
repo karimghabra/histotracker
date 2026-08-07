@@ -184,13 +184,14 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
   await expect(page.getByText("Removed", { exact: true }).first()).toBeVisible({ timeout: 15000 });
 });
 
-// #83 — the sample drawer's Delete cascaded through cut groups into slides: the
-// single most destructive action in the app. It is now Archive, which hides the
-// block and keeps everything.
-test("#83: the sample drawer archives instead of deleting", async ({ page }) => {
+// #83/#96 — the sample drawer's Delete used to cascade through cut groups into
+// slides: the single most destructive action in the app. #83 replaced it with
+// Archive; #96 moved archiving to the Logs and gave the board back a Delete —
+// but the never-delete kind, which demands a reason and keeps every row.
+test("#96: the sample drawer deletes without erasing, and no longer archives", async ({ page }) => {
   page.on("dialog", (dialog) => void dialog.accept());
   await signInAndProject(page);
-  await addSample(page, "archive not delete");
+  await addSample(page, "delete not archive");
   await embed(page, "EE-1", "Batch 1");
   await cut(page, "EE-1");
 
@@ -198,16 +199,57 @@ test("#83: the sample drawer archives instead of deleting", async ({ page }) => 
   expect(before.length).toBeGreaterThan(0);
 
   await page.getByText("EE-1", { exact: true }).first().click();
-  // There must be NO delete affordance left in the drawer.
-  await expect(page.getByRole("button", { name: /^Delete/ })).toHaveCount(0);
+  // Archiving is the Logs' job now — the drawer must not offer it.
+  await expect(page.getByRole("button", { name: /^Archive EE/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Delete EE-1" }).click();
+
+  // A reason is REQUIRED, exactly as for slides and cut groups.
+  const dialog = page.getByRole("dialog", { name: "Remove this block" });
+  await expect(dialog).toBeVisible();
+  const confirmBtn = dialog.getByRole("button", { name: "Remove block" });
+  await expect(confirmBtn).toBeDisabled();
+  await dialog.getByLabel("Reason for removal").fill("logged against the wrong animal");
+  await confirmBtn.click();
+
+  // Off the board...
+  await expect(page.getByText("EE-1", { exact: true })).toHaveCount(0, { timeout: 15000 });
+
+  // ...but present in the Logs by DEFAULT (not behind "Show archived"), flagged,
+  // with every slide it ever had and the reason it went.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  const row = page.getByRole("cell", { name: "EE-1", exact: true });
+  await expect(row).toBeVisible();
+  await expect(page.getByText("Removed", { exact: true }).first()).toBeVisible();
+  await row.click();
+  await expect(page.getByText("logged against the wrong animal")).toBeVisible();
+  const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
+  expect(after.sort()).toEqual(before.sort());
+});
+
+// #96 — the other half: archiving still works, and it lives in the Logs.
+test("#96: archiving is done from the Logs and still restores whole", async ({ page }) => {
+  page.on("dialog", (dialog) => void dialog.accept());
+  await signInAndProject(page);
+  await addSample(page, "archive from logs");
+  await embed(page, "EE-1", "Batch 1");
+  await cut(page, "EE-1");
+
+  const before = await slideCodesInLogs(page, "EE-1");
+  expect(before.length).toBeGreaterThan(0);
+
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-1" }).click();
 
-  // Off the board, hidden from the log by default...
-  await expect(page.getByText("EE-1", { exact: true })).toHaveCount(0, { timeout: 15000 });
-  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0);
+  // Hidden from the log's default view, and off the board.
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0, {
+    timeout: 15000,
+  });
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+  await expect(page.getByText("EE-1", { exact: true })).toHaveCount(0);
 
-  // ...and completely intact behind "Show archived", slides and all.
+  // Intact behind "Show archived", slides and all.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByLabel("Show archived").check();
   await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();

@@ -6,6 +6,7 @@ import {
   autoAdvanceProcessingRuns,
   listAllSamples,
   listAllSlides,
+  listSampleRemovals,
   listSlideRemovals,
   listAuditEvents,
   listOpenSamples,
@@ -238,6 +239,10 @@ export function useAllSlides() {
 /** Reasons for every removed slide, for the Logs "Removed" flag (#83). */
 export function useSlideRemovals() {
   return useQuery({ queryKey: ["slide-removals"], queryFn: listSlideRemovals });
+}
+
+export function useSampleRemovals() {
+  return useQuery({ queryKey: ["sample-removals"], queryFn: listSampleRemovals });
 }
 
 /** The change manifest (#77). Refetched on mutations like everything else. */

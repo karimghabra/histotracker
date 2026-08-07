@@ -375,6 +375,35 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #96 — Delete on the board, Archive in the Logs — status as of 0.8.1
+
+- **#96 · ✅ shipped.** *Root cause:* not a defect so much as a mis-assignment.
+  0.7.4 replaced the drawer's cascading Delete with **Archive** (#83), which
+  removed the destruction but also handed the board the wrong verb: archiving is
+  a reversible *hide* for a block you expect to want back, and the board's red
+  button is reached for when a block should not be there at all. The two
+  intentions want different affordances and different places.
+  *Fix:* the drawer's button is **Delete**, routed through the existing
+  `RemovalReasonDialog` into a new `removeSample`, which is built out of the
+  parts already in place — `removeSectionRequest` per live cut group, which is
+  `removeSlide` per slide — so a removed block detaches its slides from racks,
+  keeps their letters burned, and records a timeline event each, with no new
+  code path. The only genuinely new parts are the block's own
+  `current_stage = 'removed'` and its own `sample_removed` event. Archiving is
+  gone from the drawer and stays in the Logs, where it already was.
+  *Note:* the `current_stage != 'removed'` clause added to `listOpenSamples` is
+  defence in depth, not the mechanism — `'removed'` maps to no board queue in
+  `stages.ts`, so the card is dropped regardless. `revert-verify.mjs 96-logged`
+  documents this, having been retargeted once for exactly that reason.
+  *Test:* harness gate `issue(96, …)` for the cascade and the burned letters;
+  two e2e tests (board deletes with a required reason and keeps everything in
+  the log; Logs still archives and restores whole), both revert-verified. The
+  never-delete invariant was rewritten rather than relaxed: it now requires the
+  drawer to go through `removeSamples` **and** to ask for a reason, and requires
+  archiving to be absent from the drawer and present in the Logs.
+
+---
+
 ## Sixth wave (#92–#95) + 0.7.4 follow-ups — status as of 0.8.0
 
 Three of these five are **second reports on issues already marked fixed**. In

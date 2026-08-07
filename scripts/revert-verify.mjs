@@ -119,6 +119,49 @@ const CASES = {
     ],
   },
 
+  // #96 — put Archive back on the board drawer in place of Delete.
+  "96-delete": {
+    grep: "#96: the sample drawer deletes without erasing, and no longer archives",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /          onClick=\{\(\) => setShowRemoval\(true\)\}/,
+        replace: "          onClick={() => void 0}",
+      },
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /          title=\{deleteLabel\}\r?\n          aria-label=\{deleteLabel\}/,
+        replace:
+          "          title={`Archive ${displayCode(sample.sample_code)}`}\n" +
+          "          aria-label={`Archive ${displayCode(sample.sample_code)}`}",
+      },
+    ],
+  },
+
+  // #96, the other half — a removed block has to SAY it was removed, and why.
+  // Strip the row's flag and its reason panel.
+  //
+  // (Note for anyone extending this: reverting the `current_stage != 'removed'`
+  // clause in listOpenSamples does NOT fail anything, because 'removed' maps to
+  // no board queue in stages.ts and the card is dropped anyway. The clause is
+  // deliberate defence in depth, not the load-bearing part — the same reasoning
+  // as the slide-level filters in #83.)
+  "96-logged": {
+    grep: "#96: the sample drawer deletes without erasing, and no longer archives",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /            \{sample\.current_stage === "removed" && \(\r?\n              <span\r?\n                className="whitespace-nowrap rounded-full bg-red-600[\s\S]*?\r?\n            \)\}\r?\n/,
+        replace: "",
+      },
+      {
+        file: "src/components/LogsView.tsx",
+        find: /            \{sample\.current_stage === "removed" && \(\r?\n              <div className="note-removed[\s\S]*?\r?\n            \)\}\r?\n/,
+        replace: "",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

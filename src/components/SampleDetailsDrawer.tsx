@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Archive, CheckCircle2, Pencil, Scissors, X } from "lucide-react";
+import { Archive, CheckCircle2, Pencil, Scissors, Trash2, X } from "lucide-react";
 import type { Sample } from "../lib/types";
 import { BLOCK_TIMELINE_STAGES, STAGE_ORDER } from "../lib/stages";
 import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useActions } from "../hooks/useActions";
 import { pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
@@ -26,7 +27,7 @@ export function SampleDetailsDrawer({
 }) {
   const {
     moveSamples,
-    setArchivedSamples,
+    removeSamples,
     saveSectioningPlan,
     sendPlansToCutting,
     setExhausted,
@@ -43,6 +44,7 @@ export function SampleDetailsDrawer({
   const { data: catalog = [] } = useAssayCatalog();
   const { data: projects = [] } = useProjects(true);
   const [showSectioning, setShowSectioning] = useState(false);
+  const [showRemoval, setShowRemoval] = useState(false);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [requestAgent, setRequestAgent] = useState("");
@@ -70,7 +72,14 @@ export function SampleDetailsDrawer({
   );
   const isEmbedded = sample.current_stage === "embedded";
   const selectedGroup = selectedSamples.length > 0 ? selectedSamples : [sample];
-  const archiveTargets = selectedGroup.map((selected) => selected.id);
+  // What Delete acts on: the multi-selection if there is one, else this block
+  // (#96 — was archiveTargets, same set).
+  const removeTargets = selectedGroup.map((selected) => selected.id);
+  const removeWhat =
+    removeTargets.length > 1
+      ? `${removeTargets.length} selected samples`
+      : displayCode(sample.sample_code);
+  const deleteLabel = `Delete ${removeWhat}`;
   const selectedEmbedded = selectedGroup.filter((selected) => selected.current_stage === "embedded");
   const needsEmbedding = sample.current_stage === "needs_embedding";
 
@@ -449,41 +458,39 @@ export function SampleDetailsDrawer({
             <CheckCircle2 size={15} /> Start / Plan Run{processingSamples.length > 1 ? ` (${processingSamples.length})` : ""}
           </Button>
         ) : null}
-        {/* Archive, not Delete (#83). Deleting a sample cascaded through its cut
-            groups and every slide they held — the single most destructive action
-            in the app, sitting next to Start Run. Archiving does what the button
-            was actually being used for: the block leaves the board and the log's
-            default view, keeps every record, renumbers nothing, and comes back
-            whole from the Logs "Show archived" toggle. */}
+        {/* Delete, not Archive (#96). These are two different intentions and the
+            board only needs one of them. Archiving is a reversible hide for a
+            block you still expect to want back — it belongs in the Logs, where
+            you can see what you are hiding and unhide it, and that is where it
+            now lives. What the board needs is the button people reach for when a
+            block should not be there at all.
+            It is still not a delete in the destructive sense (#83): the block,
+            its cut groups and every slide keep their rows and stay in the Logs,
+            flagged, with the reason typed into the dialog. */}
         <Button
           variant="danger"
-          title={
-            archiveTargets.length > 1
-              ? `Archive ${archiveTargets.length} selected samples`
-              : `Archive ${displayCode(sample.sample_code)}`
-          }
-          aria-label={
-            archiveTargets.length > 1
-              ? `Archive ${archiveTargets.length} samples`
-              : `Archive ${displayCode(sample.sample_code)}`
-          }
-          onClick={() => {
-            if (
-              confirm(
-                `Archive ${archiveTargets.length === 1 ? displayCode(sample.sample_code) : `${archiveTargets.length} selected samples`}?\n\n` +
-                  `Nothing is deleted. The block leaves the board and is hidden from ` +
-                  `the Logs until you tick "Show archived", where you can restore it.`,
-              )
-            ) {
-              void setArchivedSamples(archiveTargets, true);
-              onClose();
-            }
-          }}
+          title={deleteLabel}
+          aria-label={deleteLabel}
+          onClick={() => setShowRemoval(true)}
         >
-          <Archive size={15} />
+          <Trash2 size={15} />
         </Button>
         </div>
       </div>
+      )}
+
+      {showRemoval && (
+        <RemovalReasonDialog
+          title="Remove this block"
+          what={removeWhat}
+          confirmLabel={removeTargets.length > 1 ? `Remove ${removeTargets.length} blocks` : "Remove block"}
+          onConfirm={(reason) => {
+            void removeSamples(removeTargets, reason);
+            setShowRemoval(false);
+            onClose();
+          }}
+          onClose={() => setShowRemoval(false)}
+        />
       )}
 
       {showSectioning && (

@@ -7,6 +7,7 @@ import {
   createSectionRequests,
   completeSectionImaging as completeSectionImagingDb,
   removeSectionRequest,
+  removeSamples as removeSamplesDb,
   removeSlide,
   closeSlideStack,
   closeSlideStackIfEmpty,
@@ -84,6 +85,7 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["all-samples"] });
     qc.invalidateQueries({ queryKey: ["all-slides"] });
     qc.invalidateQueries({ queryKey: ["slide-removals"] });
+    qc.invalidateQueries({ queryKey: ["sample-removals"] });
     qc.invalidateQueries({ queryKey: ["audit-events"] });
     // Undo/redo swap the whole DB image; the session-preserving restore re-adds
     // the current users + signed-in user, so refetch those too (#1).
@@ -648,6 +650,18 @@ export function useActions() {
     [commit],
   );
 
+  // #96 — the board's own removal. Distinct from archiving: archiving hides a
+  // block you still expect to want, this records one that should not be on the
+  // board at all, with the reason. Nothing is deleted either way.
+  const removeSamples = useCallback(
+    (sampleIds: number[], reason: string) =>
+      commit(
+        sampleIds.length === 1 ? "Remove sample" : `Remove ${sampleIds.length} samples`,
+        () => removeSamplesDb(sampleIds, reason),
+      ),
+    [commit],
+  );
+
   const togglePriority = useCallback(
     async (sampleId: number) => {
       const before = await getSample(sampleId);
@@ -729,6 +743,7 @@ export function useActions() {
     setExhaustedSamples,
     setArchived,
     setArchivedSamples,
+    removeSamples,
     togglePriority,
     undo,
     redo,
