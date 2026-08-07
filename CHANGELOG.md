@@ -1,6 +1,31 @@
 # Changelog
 
-## 0.8.1 - unreleased
+## 0.9.0 - unreleased
+
+The right-hand panel, mostly. No schema change.
+
+- **The Stains / IHC list is live (#100, #101).** It used to be the comma-joined
+  string typed at intake, frozen for ever — adding a stain there, or a viewer
+  properly requesting one, changed nothing on screen, so the panel disagreed with
+  the board. It now lists what actually exists: **one line per slide** carrying
+  an agent, with its slide code and the state that slide is in (awaiting cut,
+  in staining, imaged, analyzed), plus **one line per agent asked for** that no
+  cut has produced yet. "Request a Stain" is now **"Add a Stain"**.
+- **"Send for Cutting" only appears where you can send (#98).** Everywhere before
+  the Embedded Inventory the button — and the dialog — say **"Cutting Plan"**,
+  because that is all they can do there. The dialog's send button is *hidden*
+  rather than greyed out; the plan is still saveable, so you can draft it early
+  and it will be waiting.
+- **The project switcher is gone (#99).** Moving a block between projects
+  re-numbered it and rewrote every slide label — a lot of machinery hanging off a
+  dropdown one mis-click from the preprocessing checklist, for something that
+  should be got right at intake. The block's project is still shown in the drawer
+  header. This reverses #60; the capability is removed, not just hidden.
+- **The Logs show Short vs Long processing (#97)** as a sortable column, and in
+  the Logs export. It decides an 18-hour or 52-hour protocol, so it belongs in
+  the record of what was done to a block.
+
+## 0.8.1 - 2026-08-07
 
 **Delete on the board, Archive in the Logs (#96).** These were two different
 intentions sharing one button, and the board had the wrong one.

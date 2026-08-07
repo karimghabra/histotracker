@@ -148,7 +148,7 @@ export type LogExportRow = { sample: Sample; slides: Slide[] };
 // (Cut is derived, not read straight off the row — see utils.slideCutAt, #95.)
 
 const LOGS_HEADERS = [
-  "Project", "Sample ID", "Description", "Sample Stage", "Exhausted", "Date Added",
+  "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
   "Slide Notes", "Sample Notes",
@@ -163,6 +163,8 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       sample.project_code ?? "",
       displayCode(sample.sample_code),
       sample.sample_description ?? "",
+      // Short vs Long — an 18h or 52h protocol (#97).
+      sample.processing_type ?? "",
       sample.current_stage ?? "",
       sample.block_exhausted ? "Yes" : "No",
       (sample.date_added ?? "").slice(0, 10),

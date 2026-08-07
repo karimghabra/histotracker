@@ -162,6 +162,70 @@ const CASES = {
     ],
   },
 
+  // #97 — drop the Processing column from the Logs table.
+  "97-processing": {
+    grep: "#97: the Logs show Short vs Long processing",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /        <td className="px-2 py-1\.5 text-ink-soft">\{sample\.processing_type \|\| "—"\}<\/td>\r?\n/,
+        replace: "",
+      },
+      {
+        file: "src/components/LogsView.tsx",
+        find: /    \{ key: "processing", label: "Processing" \},\r?\n/,
+        replace: "",
+      },
+    ],
+  },
+
+  // #98 — call it "Send for Cutting" everywhere again, and show the send button
+  // whatever stage the block is at.
+  "98-cutting": {
+    grep: "#98: it is a Cutting Plan until the block reaches Embedded Inventory",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /\{isEmbedded \? "Send for Cutting" : "Cutting Plan"\}/,
+        replace: "Send for Cutting",
+      },
+      {
+        file: "src/components/SectioningPlanDialog.tsx",
+        find: /        \{canSend && \(\r?\n/,
+        replace: "        {true && (\n",
+      },
+    ],
+  },
+
+  // #99 — put the project switcher back.
+  "99-project": {
+    grep: "#99: the drawer has no project switcher",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /        \{\/\* No project switcher \(#99\)\./,
+        replace:
+          '        <select aria-label="Sample project" value={sample.project_id} onChange={() => undefined}>\n' +
+          "          <option value={sample.project_id}>{sample.project_name}</option>\n" +
+          "        </select>\n" +
+          "        {/* No project switcher (#99).",
+      },
+    ],
+  },
+
+  // #100/#101 — go back to the frozen intake string.
+  "100-stains": {
+    grep: "#100/#101: the Stains list is live, one line each, with slide state",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /        <StainList sampleSlides=\{sampleSlides\} pending=\{pendingAgents\} legacy=\{sample\.stains\} \/>/,
+        replace:
+          "        {sample.stains && <Section title=\"Stains / IHC\">{sample.stains}</Section>}",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

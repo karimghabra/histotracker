@@ -141,7 +141,12 @@ export function SectioningPlanDialog({
 
   return (
     <Modal
-      title={isBatch ? `Send for Cutting · ${blocks.length} blocks` : `Send for Cutting · ${displayCode(current.sample_code)}`}
+      // Named for what it does HERE (#98): before Embedded Inventory this is a
+      // plan you are drafting, not a cut you are sending.
+      title={
+        (canSend ? "Send for Cutting" : "Cutting Plan") +
+        (isBatch ? ` · ${blocks.length} blocks` : ` · ${displayCode(current.sample_code)}`)
+      }
       onClose={onClose}
     >
       {isBatch && (
@@ -243,7 +248,8 @@ export function SectioningPlanDialog({
       )}
       {!canSend && (
         <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-          Cutting unlocks once every block reaches Embedded Inventory.
+          This is a plan, not a cut. Sending for cutting unlocks once every block
+          reaches Embedded Inventory — save the plan and it will be waiting.
         </p>
       )}
 
@@ -262,15 +268,16 @@ export function SectioningPlanDialog({
             </Button>
           )
         )}
-        <Button
-          variant="primary"
-          onClick={send}
-          disabled={busy || rows.length === 0 || !canSend}
-          title={!canSend ? "Embed the block(s) before sending to sectioning." : undefined}
-        >
-          <Scissors size={14} /> Send for Cutting
-          {isBatch ? ` · ${blocks.length} blocks` : ""}
-        </Button>
+        {/* HIDDEN, not disabled, until every block is embedded (#98). A greyed
+            "Send for Cutting" sitting there in pre-processing invited the
+            click and then explained itself; the plan is the only thing this
+            dialog can do until the block is out of the wax. */}
+        {canSend && (
+          <Button variant="primary" onClick={send} disabled={busy || rows.length === 0}>
+            <Scissors size={14} /> Send for Cutting
+            {isBatch ? ` · ${blocks.length} blocks` : ""}
+          </Button>
+        )}
       </div>
     </Modal>
   );

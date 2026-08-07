@@ -207,7 +207,7 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Choose an agent" }) });
   await agentSelect.selectOption({ index: 1 });
-  await page.getByRole("button", { name: "Request", exact: true }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
 
   // The drawer confirms the block now carries a preselected stain.
   await expect(page.getByText(/preselected/i).first()).toBeVisible();

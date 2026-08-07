@@ -8,6 +8,7 @@ import {
   listAllSlides,
   listSampleRemovals,
   listSlideRemovals,
+  listSlidesForSample,
   listAuditEvents,
   listOpenSamples,
   listOpenProcessingBatches,
@@ -170,6 +171,15 @@ export function useSampleTimelineEvents(sampleId: number | null) {
   return useQuery({
     queryKey: ["sample-timeline", sampleId],
     queryFn: () => listSampleTimelineEvents(sampleId as number),
+    enabled: sampleId !== null,
+  });
+}
+
+/** Every live slide on one block, for the drawer's Stains / IHC list (#101). */
+export function useSampleSlides(sampleId: number | null) {
+  return useQuery({
+    queryKey: ["sample-slides", sampleId],
+    queryFn: () => listSlidesForSample(sampleId as number),
     enabled: sampleId !== null,
   });
 }

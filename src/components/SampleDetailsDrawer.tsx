@@ -1,14 +1,19 @@
 import { useState } from "react";
 import { Archive, CheckCircle2, Pencil, Scissors, Trash2, X } from "lucide-react";
-import type { Sample } from "../lib/types";
-import { BLOCK_TIMELINE_STAGES, STAGE_ORDER } from "../lib/stages";
+import type { Sample, Slide } from "../lib/types";
+import {
+  BLOCK_TIMELINE_STAGES,
+  SECTION_STAGE_LABELS,
+  STAGE_LABELS,
+  STAGE_ORDER,
+} from "../lib/stages";
 import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useActions } from "../hooks/useActions";
-import { pendingStainNames } from "../lib/db";
-import { useAssayCatalog, useProjects, useSampleTimelineEvents } from "../hooks/useData";
+import { parsePreselectedStains, pendingStainNames } from "../lib/db";
+import { useAssayCatalog, useSampleSlides, useSampleTimelineEvents } from "../hooks/useData";
 import { cn, displayCode } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
@@ -34,7 +39,6 @@ export function SampleDetailsDrawer({
     setExhaustedSamples,
     editTimestamp,
     requestStain,
-    changeProject,
     editSampleDescription,
   } = useActions();
   // Viewers mirror the workstation read-only; the write controls below are
@@ -42,7 +46,7 @@ export function SampleDetailsDrawer({
   const readOnly = useReadOnly();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
   const { data: catalog = [] } = useAssayCatalog();
-  const { data: projects = [] } = useProjects(true);
+  const { data: sampleSlides = [] } = useSampleSlides(sample.id);
   const [showSectioning, setShowSectioning] = useState(false);
   const [showRemoval, setShowRemoval] = useState(false);
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
@@ -70,6 +74,9 @@ export function SampleDetailsDrawer({
   const preprocessingSamples = selectedSamples.filter(
     (selected) => (STAGE_ORDER[selected.current_stage] ?? 99) < STAGE_ORDER.processing_started,
   );
+  // Agents asked for that no cut has produced yet (#100) — intake choices and
+  // properly-submitted requests both land here.
+  const pendingAgents = parsePreselectedStains(sample.pending_stains);
   const isEmbedded = sample.current_stage === "embedded";
   const selectedGroup = selectedSamples.length > 0 ? selectedSamples : [sample];
   // What Delete acts on: the multi-selection if there is one, else this block
@@ -134,33 +141,11 @@ export function SampleDetailsDrawer({
           </>
         )}
 
-        <div className="mb-3">
-          <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">Project</h3>
-          <select
-            aria-label="Sample project"
-            value={sample.project_id}
-            // Disabled rather than hidden: a viewer still needs to SEE which
-            // project the block belongs to. Left enabled, the select visibly
-            // moved to the new project while nothing was written (#72).
-            disabled={readOnly}
-            onChange={(event) => {
-              const target = Number(event.target.value);
-              if (target && target !== sample.project_id) void changeProject(sample.id, target);
-            }}
-            className="w-full rounded-lg border border-line bg-white px-2 py-1.5 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-surface disabled:text-ink-soft"
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name} ({project.code})
-              </option>
-            ))}
-          </select>
-          {!readOnly && (
-            <p className="mt-1 text-[11px] text-ink-faint">
-              Moving a sample re-numbers it under the new project (its slide labels update too).
-            </p>
-          )}
-        </div>
+        {/* No project switcher (#99). Moving a block between projects re-numbered
+            it and rewrote every slide label — a lot of machinery hanging off a
+            dropdown sitting one mis-click away from the checklist, for something
+            that should be got right at intake. The block's project is still
+            shown, as a read, in the drawer header. */}
 
         {/* Descriptions are typed in a hurry at intake and often need correcting
             later (#79). The first cut of this shipped as a 12px faint pencil beside
@@ -235,7 +220,14 @@ export function SampleDetailsDrawer({
             Requires decalcification
           </p>
         )}
-        {sample.stains && <Section title="Stains / IHC">{sample.stains}</Section>}
+        {/* Stains / IHC — a LIVE list, one line per entry (#100, #101).
+            It used to be `sample.stains`: the comma-joined string typed at
+            intake, frozen for ever. Adding a stain here, or a viewer properly
+            requesting one, changed nothing on screen, so the panel disagreed
+            with the board. It now lists what actually exists — every slide
+            carrying an agent, with the state that slide is in — plus every agent
+            asked for that has not been cut yet. */}
+        <StainList sampleSlides={sampleSlides} pending={pendingAgents} legacy={sample.stains} />
         {sample.cut_notes && <Section title="Cut Notes">{sample.cut_notes}</Section>}
         {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
         {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}
@@ -264,8 +256,12 @@ export function SampleDetailsDrawer({
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
             Cutting
           </h3>
+          {/* "Send for Cutting" only where you can actually send (#98): in the
+              Embedded Inventory. Everywhere earlier the same dialog is a plan
+              you are drafting for later, and calling it a send made technicians
+              click it expecting a cut. */}
           <Button variant="subtle" className="w-full justify-center" onClick={() => setShowSectioning(true)}>
-            <Scissors size={13} /> Send for Cutting
+            <Scissors size={13} /> {isEmbedded ? "Send for Cutting" : "Cutting Plan"}
           </Button>
           {sample.pending_stains && (
             <p className="mt-1 text-[11px] text-brand">
@@ -276,7 +272,7 @@ export function SampleDetailsDrawer({
 
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
-            Request a Stain
+            Add a Stain
           </h3>
           <div className="flex items-center gap-2">
             <select
@@ -315,7 +311,7 @@ export function SampleDetailsDrawer({
                 }
               }}
             >
-              Request
+              Add
             </Button>
           </div>
           {requestFlash && (
@@ -516,6 +512,96 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {title}
       </h3>
       <p className="whitespace-pre-wrap text-sm text-ink">{children}</p>
+    </div>
+  );
+}
+
+/**
+ * What state a slide is actually in, for the Stains / IHC list (#101).
+ *
+ * `section_stage` wins over the slide's own stage when the group is still queued
+ * for sectioning: the slide is planned, not cut (#95), and reporting "assigned"
+ * or a staining stage there would claim work nobody has done.
+ */
+function slideStatus(slide: Slide): string {
+  if (slide.section_stage === "needs_sectioning") return "Awaiting cut";
+  if (slide.current_stage === "assigned") return "Cut — awaiting staining";
+  return (
+    SECTION_STAGE_LABELS[slide.current_stage] ??
+    STAGE_LABELS[slide.current_stage] ??
+    slide.current_stage
+  );
+}
+
+/** Requested / in progress / done — the three buckets the panel is asked for. */
+function statusTone(label: string): string {
+  if (label === "Awaiting cut" || label === "Requested") return "text-amber-600";
+  if (label === "Analyzed" || label === "Pictures Taken") return "text-ink-faint";
+  return "text-brand";
+}
+
+function StainList({
+  sampleSlides,
+  pending,
+  legacy,
+}: {
+  sampleSlides: Slide[];
+  pending: Array<{ assay_type: string; assay_name: string }>;
+  /** The frozen intake string, shown only when there is nothing live to show. */
+  legacy: string;
+}) {
+  const withAgent = sampleSlides.filter((slide) => (slide.assay_name || slide.stain_name).trim());
+  // Slide.assay_type is a narrow union, a pending request's is a plain string,
+  // and the two lists merge into one — widen once, here.
+  type Row = { key: string; code: string; agent: string; type: string; status: string };
+  const rows: Row[] = withAgent.map((slide) => ({
+    key: `slide-${slide.id}`,
+    code: displayCode(slide.slide_code),
+    agent: slide.assay_name || slide.stain_name,
+    type: slide.assay_type,
+    status: slideStatus(slide),
+  }));
+  // Asked for, no slide yet. `pending_stains` is exactly the outstanding
+  // multiset — agents chosen at intake or requested since, minus those a cut has
+  // already produced — so this is the "properly requested" half of #100.
+  for (const [index, agent] of pending.entries()) {
+    rows.push({
+      key: `pending-${index}-${agent.assay_name}`,
+      code: "",
+      agent: agent.assay_name,
+      type: agent.assay_type,
+      status: "Requested",
+    });
+  }
+
+  if (rows.length === 0) {
+    // Nothing cut and nothing outstanding. A block created before this list
+    // existed may still carry its intake string; show that rather than nothing.
+    if (!legacy) return null;
+    return <Section title="Stains / IHC">{legacy}</Section>;
+  }
+
+  return (
+    <div className="mb-3">
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+        Stains / IHC
+      </h3>
+      <ul className="space-y-0.5">
+        {rows.map((row) => (
+          <li key={row.key} className="flex items-baseline gap-1.5 text-xs">
+            {row.code && (
+              <span className="shrink-0 font-medium tabular-nums text-ink-soft">{row.code}</span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-ink">
+              {row.agent}
+              {row.type && (
+                <span className="ml-1 text-[10px] uppercase text-ink-faint">{row.type}</span>
+              )}
+            </span>
+            <span className={cn("shrink-0 text-[10px]", statusTone(row.status))}>{row.status}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

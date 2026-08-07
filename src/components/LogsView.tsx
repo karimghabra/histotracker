@@ -135,7 +135,7 @@ function Timeline({ events }: { events: Array<{ label: string; at: string }> }) 
   );
 }
 
-type SortKey = "sample" | "description" | "project" | "stage" | "stains" | "slides" | "added" | "updated";
+type SortKey = "sample" | "description" | "project" | "processing" | "stage" | "stains" | "slides" | "added" | "updated";
 
 function slideStage(stage: string): string {
   if (stage === "extra") return "Extra (inventory)";
@@ -379,6 +379,9 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
         case "project":
           cmp = (sa.project_code || "").localeCompare(sb.project_code || "");
           break;
+        case "processing":
+          cmp = (sa.processing_type || "").localeCompare(sb.processing_type || "");
+          break;
         case "stage":
           // Pipeline order (Pre-processing → Analyzed), not alphabetical.
           cmp = PHASE_RANK[a.phase] - PHASE_RANK[b.phase];
@@ -439,6 +442,9 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
     { key: "sample", label: "Sample ID" },
     { key: "description", label: "Description" },
     { key: "project", label: "Project" },
+    // Short vs Long decides an 18h or 52h protocol, so it belongs in the log
+    // of what was actually done to a block (#97).
+    { key: "processing", label: "Processing" },
     { key: "stage", label: "Stage" },
     { key: "stains", label: "Stains / IHC" },
     { key: "slides", label: "Slides", align: "right" },
@@ -805,6 +811,7 @@ function FragmentRow({
         </td>
         <td className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft">{sample.sample_description || "—"}</td>
         <td className="px-2 py-1.5 text-ink-soft">{sample.project_code ?? ""}</td>
+        <td className="px-2 py-1.5 text-ink-soft">{sample.processing_type || "—"}</td>
         <td className="px-2 py-1.5">
           <div className="flex items-center gap-2">
             <span className="whitespace-nowrap text-ink-soft">{phaseLabel}</span>

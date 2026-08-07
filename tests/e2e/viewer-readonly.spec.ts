@@ -106,8 +106,10 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
   await expect(vw.getByText("Description").first()).toBeVisible();
 
   // …but every write control is absent, so nothing can hang on a rejected write.
-  await expect(vw.getByRole("button", { name: /Send for Cutting/ })).toHaveCount(0);
-  await expect(vw.getByRole("button", { name: "Request", exact: true })).toHaveCount(0);
+  // Either name — the cutting control is "Cutting Plan" before the Embedded
+  // Inventory and "Send for Cutting" in it (#98); neither may appear here.
+  await expect(vw.getByRole("button", { name: /Cutting Plan|Send for Cutting/ })).toHaveCount(0);
+  await expect(vw.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
   await expect(vw.getByLabel("Edit description")).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Mark Exhausted/ })).toHaveCount(0);
   await expect(vw.getByText(/Read-only viewer/).first()).toBeVisible();
@@ -115,7 +117,7 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
   // The same panel on the workstation DOES offer them — proving the assertions
   // above are about viewer mode, not about a selector that never matches.
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await expect(ws.getByRole("button", { name: /Send for Cutting/ })).toBeVisible();
+  await expect(ws.getByRole("button", { name: /Cutting Plan|Send for Cutting/ })).toBeVisible();
   await expect(ws.getByLabel("Edit description")).toBeVisible();
 
   await wsCtx.close();

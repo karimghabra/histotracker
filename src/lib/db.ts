@@ -675,52 +675,9 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
   return res.lastInsertId ?? 0;
 }
 
-/**
- * Move a sample to a different project (#60). The sample is re-identified under
- * the target project — a fresh project_sample_number and a re-minted
- * `<NEWCODE>-NNNN` sample_code — and its slides' codes are updated to match the
- * new parent prefix so nothing shows a stale project code. Returns the codes for
- * a confirmation message.
- */
-export async function changeSampleProject(
-  sampleId: number,
-  newProjectId: number,
-): Promise<{ oldCode: string; newCode: string }> {
-  const db = await getDb();
-  const sampleRows = await db.select<Array<{ sample_code: string; project_id: number }>>(
-    `SELECT sample_code, project_id FROM samples WHERE id = ?`,
-    [sampleId],
-  );
-  const sample = sampleRows[0];
-  if (!sample) throw new Error("Sample not found.");
-  const oldCode = sample.sample_code;
-  if (sample.project_id === newProjectId) return { oldCode, newCode: oldCode };
-
-  const projRows = await db.select<Array<{ code: string }>>(
-    `SELECT code FROM projects WHERE id = ?`,
-    [newProjectId],
-  );
-  const newProjectCode = projRows[0]?.code;
-  if (!newProjectCode) throw new Error("Target project not found.");
-
-  const number = await nextSampleNumber(newProjectId);
-  const newCode = formatSampleCode(newProjectCode, number);
-  await db.execute(
-    `UPDATE samples SET project_id = ?, project_sample_number = ?, sample_code = ? WHERE id = ?`,
-    [newProjectId, number, newCode, sampleId],
-  );
-  // Re-prefix this sample's slide codes (EE-0001-A → XX-0003-A) so physical
-  // labels and the board/logs stay consistent with the new parent code.
-  await db.execute(
-    `UPDATE slides SET slide_code = ? || SUBSTR(slide_code, ?)
-       WHERE section_request_id IN (SELECT id FROM section_requests WHERE sample_id = ?)
-         AND slide_code LIKE ?`,
-    [newCode, oldCode.length + 1, sampleId, `${oldCode}-%`],
-  );
-  // Keep any outstanding stain requests addressable by the new codes too.
-  await db.execute(`UPDATE stain_requests SET sample_code = ? WHERE sample_code = ?`, [newCode, oldCode]);
-  return { oldCode, newCode };
-}
+// changeSampleProject() is GONE (#99). Moving a block between projects re-numbered
+// it and rewrote every slide label; the dropdown that drove it is removed and the
+// capability with it, so a block's identity is fixed at intake. Reverses #60.
 
 export async function listOpenSamples(): Promise<Sample[]> {
   const db = await getDb();
@@ -1084,6 +1041,26 @@ export async function listAllSlides(): Promise<Slide[]> {
       -- and the auto-synced Slide Status sheet, which had no such correction.
       -- Order by the cut group first, then position within it.
       ORDER BY p.code, s.project_sample_number, sl.section_request_id, sl.slide_ordinal`,
+  );
+}
+
+/**
+ * Every live slide belonging to one block, newest cut group last (#101).
+ *
+ * `section_stage` rides along for the same reason `listAllSlides` carries it: a
+ * slide whose group is still queued for sectioning has not been cut, whatever
+ * its own stage says (#95), and the drawer has to say "awaiting cut" rather than
+ * claim it is in staining.
+ */
+export async function listSlidesForSample(sampleId: number): Promise<Slide[]> {
+  const db = await getDb();
+  return db.select<Slide[]>(
+    `SELECT sl.*, sr.current_stage AS section_stage
+       FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.current_stage != 'removed'
+      ORDER BY sl.section_request_id, sl.slide_ordinal`,
+    [sampleId],
   );
 }
 

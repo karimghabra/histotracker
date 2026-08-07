@@ -70,7 +70,7 @@ async function embed(page: Page, code: string) {
 async function requestStain(page: Page, label: string) {
   const select = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose an agent" }) });
   await select.selectOption({ label });
-  await page.getByRole("button", { name: "Request", exact: true }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.waitForTimeout(300);
 }
 

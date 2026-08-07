@@ -44,7 +44,6 @@ import {
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
   updateSampleDetails,
-  changeSampleProject as changeSampleProjectDb,
   updateSampleStage,
   updateSectioningPlan,
   updateSectionStage,
@@ -76,6 +75,7 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["open-slide-stacks"] });
     qc.invalidateQueries({ queryKey: ["processing-batches"] });
     qc.invalidateQueries({ queryKey: ["section-slides"] });
+    qc.invalidateQueries({ queryKey: ["sample-slides"] });
     qc.invalidateQueries({ queryKey: ["stack-slides"] });
     qc.invalidateQueries({ queryKey: ["imaging-slides"] });
     qc.invalidateQueries({ queryKey: ["protocol-checklist"] });
@@ -260,17 +260,6 @@ export function useActions() {
       const before = await getSample(sampleId);
       if (!before) return;
       await commit(`Edit ${before.sample_code}`, () => updateSampleDetails(sampleId, input));
-    },
-    [commit],
-  );
-
-  const changeProject = useCallback(
-    async (sampleId: number, newProjectId: number) => {
-      const before = await getSample(sampleId);
-      if (!before) return;
-      await commit(`Move ${before.sample_code} to another project`, () =>
-        changeSampleProjectDb(sampleId, newProjectId),
-      );
     },
     [commit],
   );
@@ -712,7 +701,6 @@ export function useActions() {
     editBatchStart,
     editTimestamp,
     saveDetails,
-    changeProject,
     editSampleNotes,
     editSampleDescription,
     editSlideNotes,
