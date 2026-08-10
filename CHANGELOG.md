@@ -1,6 +1,41 @@
 # Changelog
 
-## 0.9.0 - unreleased
+## 0.10.0 - unreleased
+
+Board and log housekeeping. No schema change.
+
+- **Renaming a project renames what it named (#106).** A block's code is
+  `<PROJECT>-NNNN` and a slide's `<PROJECT>-NNNN-X`, stored as text — so changing
+  the acronym in Manage left every existing block and slide answering to the old
+  one, and the log showed two prefixes for one project with nothing to say they
+  were the same. The rename now carries through to samples, slides and
+  outstanding stain requests. It is a **prefix swap, not a re-mint**: numbers and
+  letters are untouched, so nothing is renumbered and no code already written on
+  a physical slide changes meaning.
+- **"Added" sorts by time, not by day (#107).** It sorted on `date_added`, which
+  holds a date and no clock, so everything logged on the same day tied and the
+  order looked arbitrary. It now sorts on the intake timestamp, breaking
+  remaining ties by creation order, and the cell's tooltip shows the time it
+  used. "Updated" gained the same tie-break.
+- **Filters survive switching between the Board and the Logs (#104)**, and are
+  dropped when you sign out — both views unmount when you leave them, so every
+  filter was previously rebuilt wide open. Deliberately not stored in the
+  database: a filter is one person's view of the bench, not a fact about the lab,
+  and the next person at a shared machine should not inherit a board that
+  silently hides most of it.
+- **"Show removed" in the Logs (#105)**, beside "Show archived" and with the same
+  default: removed blocks and slides are hidden until you ask for them. They are
+  still in the record — one click away, flagged, with the reason.
+- **Needs Embedding can be filtered and sorted (#103)**, like the other busy
+  columns. Its date key is when the block came out of the processor.
+- **Ready for Imaging tiles are readable (#102).** The block's description now
+  sits beside its ID, and the agents waiting to be imaged sit below it, instead
+  of a slide-by-slide breakdown that buried them.
+- **Signing out by hand offers the way back in (#108).** The prompt fired only
+  for the idle and launch sign-outs and claimed inactivity in both — untrue for
+  the launch case even before this. It now says which of the three happened.
+
+## 0.9.0 - 2026-08-07
 
 The right-hand panel, mostly. No schema change.
 

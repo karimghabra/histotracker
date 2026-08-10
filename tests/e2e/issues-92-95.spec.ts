@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage, openSettings, setTheme } from "../helpers/app";
+import { openManage, openSettings, setTheme, showRemoved } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -123,6 +123,7 @@ test("#83: a removed slide's row is readable in a dark theme", async ({ page }) 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const flag = page.getByText("Removed", { exact: true }).first();
   await expect(flag).toBeVisible();
@@ -213,6 +214,7 @@ test("#95: a queued slide has no Cut step until the group is sectioned", async (
 
   async function slideTimelineHasCut(): Promise<boolean> {
     await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+    await showRemoved(page);
     await page.getByRole("cell", { name: "EE-1", exact: true }).click();
     await page.getByRole("button", { name: /EE-1-A/ }).click();
     const has = (await page.getByText("Cut", { exact: true }).count()) > 0;

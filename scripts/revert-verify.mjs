@@ -226,6 +226,98 @@ const CASES = {
     ],
   },
 
+  // #102 — strip the description and the agents back off the imaging tile.
+  "102-tiles": {
+    grep: "#102: imaging tiles carry the description and the agents",
+    edits: [
+      {
+        file: "src/components/StackCard.tsx",
+        find: /        \{stack\.parent_description && \(\r?\n[\s\S]*?\r?\n        \)\}\r?\n/,
+        replace: "",
+      },
+      {
+        file: "src/components/StackCard.tsx",
+        find: /        \{agents \|\|\r?\n/,
+        replace: "        {\n",
+      },
+    ],
+  },
+
+  // #103 — remove the Needs Embedding filter entirely.
+  "103-needs-embedding": {
+    grep: "#103: Needs Embedding can be filtered by project and sorted",
+    edits: [
+      {
+        file: "src/components/Board.tsx",
+        find: /                  \} else if \(isNeedsEmbedding\) \{\r?\n                    items = displayedNeedsEmbeddingItems;\r?\n/,
+        replace: "                  } else if (false) {\n",
+      },
+    ],
+  },
+
+  // #104 — go back to plain useState for a board filter, so it dies with the
+  // unmount.
+  "104-persist": {
+    grep: "#104: filters survive a view switch and reset on sign-out",
+    edits: [
+      {
+        file: "src/components/Board.tsx",
+        find: /  const \[needsEmbeddingFilter, setNeedsEmbeddingFilter\] = useViewPref<number \| "all">\("board\.needsEmbeddingFilter", "all"\);/,
+        replace:
+          '  const [needsEmbeddingFilter, setNeedsEmbeddingFilter] = useState<number | "all">("all");',
+      },
+    ],
+  },
+
+  // #105 — always list removed blocks, so the toggle changes nothing.
+  "105-show-removed": {
+    grep: "#105: Show removed reveals a deleted block in the Logs",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /      if \(!showRemoved && sample\.current_stage === "removed"\) return false;\r?\n/,
+        replace: "",
+      },
+    ],
+  },
+
+  // #106 — rename the project row only, as before.
+  "106-rename": {
+    grep: "#106: renaming a project renames its samples and slides",
+    edits: [
+      {
+        file: "src/lib/db.ts",
+        find: /  if \(!oldCode \|\| oldCode === newCode\) return;\r?\n/,
+        replace: "  if (true) return;\n",
+      },
+    ],
+  },
+
+  // #107 — sort Added on the day-granular column again.
+  "107-added-sort": {
+    grep: "#107: Added sorts by time, not just by day",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /          cmp =\r?\n            \(sa\.stage_received_at \|\| sa\.date_added \|\| ""\)\.localeCompare\(\r?\n              sb\.stage_received_at \|\| sb\.date_added \|\| "",\r?\n            \) \|\| \(sa\.project_sample_number \?\? 0\) - \(sb\.project_sample_number \?\? 0\);/,
+        replace:
+          '          cmp = (sa.date_added || "").localeCompare(sb.date_added || "");',
+      },
+    ],
+  },
+
+  // #108 — manual sign-out goes back to dropping the session silently.
+  "108-signout": {
+    grep: "#108: signing out by hand offers the sign-in dialogue",
+    edits: [
+      {
+        file: "src/App.tsx",
+        find: /                    onClick=\{\(\) => signOut\(activeUser\.name, "manual"\)\}/,
+        replace: "                    onClick={() => selectUser.mutate(null)}",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

@@ -375,6 +375,54 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #102–#108 — board and log housekeeping — status as of 0.10.0
+
+- **#106 — a project rename did not reach its samples or slides · ✅ fixed.**
+  *Root cause:* `sample_code` and `slide_code` are stored TEXT with the project
+  acronym baked in, and `updateProject` touched only the projects row.
+  *Fix:* a prefix swap up to the first hyphen across `samples`, `slides` and
+  `stain_requests` — not a re-mint, so numbers, letters and zero-padded legacy
+  codes (#87) all survive untouched. *Landmine found by the test:* the fix
+  worked in the database and the Logs still showed the old acronym, because
+  `useProjectMutations` invalidated only `projects` + `open-samples`. A project
+  edit is no longer confined to the projects row, so it now invalidates
+  everything a rename can touch. A half-applied rename is worse than none.
+  *Test:* harness gate `issue(106, …)` (including that another project is left
+  alone and the suffix is byte-identical) plus an e2e rename driven through the
+  Manage dialog; both revert-verified.
+- **#107 — "Added" sorted by day · ✅ fixed.** *Root cause:* `date_added` is
+  `todayIso()` — a date with no clock — so every block logged the same day tied.
+  *Fix:* sort on `stage_received_at`, falling back to the day for rows written
+  before it existed. *Second cause, found by the test:* the stamp is only to the
+  minute, so a batch entered in one sitting still tied and fell back to whatever
+  order the query returned. Both `added` and `updated` now break ties on
+  `project_sample_number` (creation order), which makes the ordering total.
+- **#104 — filters reset on every view switch · ✅ fixed.** Board and Logs each
+  unmount when you leave them, so their `useState` filters were rebuilt at
+  "all". `lib/viewPrefs.ts` + `hooks/useViewPref.ts` persist them for the
+  signed-in session; `clearViewPrefs()` runs synchronously inside `signOut`, and
+  both views are keyed on the user id so live state resets with the stored copy.
+  *Landmine:* the first `readViewPref` also required the stored value to share a
+  `typeof` with the fallback — cheap-looking insurance that silently broke every
+  union, since a column filter is `number | "all"` and a remembered project id
+  never matched its `"all"` fallback. `isValid` is now the only validation.
+- **#105 · ✅ shipped** — "Show removed" beside "Show archived", same default.
+  Hides removed blocks *and* removed slides; the removed-count beside the slide
+  total still reports them either way, because hiding a row must not hide the
+  fact that something was removed.
+- **#103 · ✅ shipped** — Needs Embedding filter + sort, including the #85
+  stale-filter guard. Its date key is `stage_picked_up_at`: `stage_embedded_at`
+  is NULL for everything in that queue by definition, and `stage_received_at` is
+  weeks stale by the time a block arrives there.
+- **#102 · ✅ shipped** — imaging tiles show `parent_description` beside the ID
+  and `agent_names` below it. Both were already on the stack row; nothing new
+  was queried.
+- **#108 · ✅ shipped** — the sign-in prompt now fires for a manual sign-out too,
+  and carries the reason. It previously claimed inactivity in all cases, which
+  was already untrue for the launch sign-out.
+
+---
+
 ## #96 — Delete on the board, Archive in the Logs — status as of 0.8.1
 
 - **#96 · ✅ shipped.** *Root cause:* not a defect so much as a mis-assignment.

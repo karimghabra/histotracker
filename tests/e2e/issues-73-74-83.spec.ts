@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, showRemoved } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // #73 / #83 (removing slides without recycling their letters) and #74 (archiving
@@ -76,6 +76,7 @@ async function cut(page: Page, code: string) {
 
 async function slideCodesInLogs(page: Page, code: string): Promise<string[]> {
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: code, exact: true }).click();
   const codes = await page.locator(`text=/^${code}-[A-Z]+$/`).allTextContents();
   await page.getByRole("cell", { name: code, exact: true }).click(); // collapse
@@ -131,6 +132,7 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
 
   // ...but still in the Logs, flagged, with the reason (#83: nothing is deleted).
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const removedRow = page.locator("div").filter({ hasText: /^EE-1-C/ }).last();
   await expect(removedRow.getByText("Removed", { exact: true })).toBeVisible();
@@ -160,6 +162,7 @@ test("#74: a sample can be archived, hidden, and restored", async ({ page }) => 
   await expect(page.getByText("EE-2")).toBeVisible();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-2", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-2" }).click();
 
@@ -174,6 +177,7 @@ test("#74: a sample can be archived, hidden, and restored", async ({ page }) => 
 
   // Retrievable: show archived, then restore it.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByLabel("Show archived").check();
   const archivedRow = page.getByRole("cell", { name: "EE-2", exact: true });
   await expect(archivedRow).toBeVisible();

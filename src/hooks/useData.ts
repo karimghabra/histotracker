@@ -262,9 +262,28 @@ export function useAuditEvents() {
 
 export function useProjectMutations() {
   const qc = useQueryClient();
+  // A project edit is no longer confined to the projects row: renaming its
+  // acronym rewrites every sample_code, slide_code and stain request named
+  // after it (#106). Invalidating only projects + open-samples left the Logs,
+  // the section and stack cards and the request inbox showing the OLD acronym
+  // until something else happened to refetch them — the rename would have
+  // looked half-applied, which is worse than not applying at all.
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: KEYS.projects });
-    qc.invalidateQueries({ queryKey: KEYS.openSamples });
+    for (const key of [
+      KEYS.projects,
+      KEYS.openSamples,
+      KEYS.openSections,
+      ["open-slide-stacks"],
+      ["all-samples"],
+      ["all-slides"],
+      ["extra-slides"],
+      ["stain-requests"],
+      ["section-slides"],
+      ["stack-slides"],
+      ["sample-slides"],
+    ]) {
+      qc.invalidateQueries({ queryKey: key as readonly unknown[] });
+    }
   };
 
   const create = useMutation({

@@ -25,6 +25,19 @@ export async function openManage(page: Page): Promise<void> {
     .click();
 }
 
+/**
+ * Reveal removed blocks and slides in the Logs.
+ *
+ * They are hidden by default from 0.10.0 (#105), the same as archived ones, so
+ * any spec that asserts a removal is still in the record has to ask for it —
+ * which is also the honest thing for those specs to be checking.
+ */
+export async function showRemoved(page: Page): Promise<void> {
+  const toggle = page.getByLabel("Show removed");
+  await expect(toggle).toBeVisible();
+  if (!(await toggle.isChecked())) await toggle.check();
+}
+
 /** Pick a theme. The picker moved from the header into Settings (#94). */
 export async function setTheme(page: Page, value: string): Promise<void> {
   await openSettings(page);

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, showRemoved } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -86,6 +86,7 @@ async function cut(page: Page, code: string) {
 /** Slide codes shown in the Logs drill-down for a sample (removed ones included). */
 async function slideCodesInLogs(page: Page, code: string): Promise<string[]> {
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: code, exact: true }).click();
   const codes = await page.locator(`text=/^${code}-[A-Z]+$/`).allTextContents();
   await page.getByRole("cell", { name: code, exact: true }).click();
@@ -121,6 +122,7 @@ test("#83: removing a cut group keeps its slides in the log", async ({ page }) =
 
   // ...but every slide is still in the log, flagged, with the reason.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
   expect(after.sort()).toEqual(before.sort());
@@ -180,6 +182,7 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
 
   // Still in the log, flagged, with its reason.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await expect(page.getByText("Removed", { exact: true }).first()).toBeVisible({ timeout: 15000 });
 });
@@ -217,6 +220,7 @@ test("#96: the sample drawer deletes without erasing, and no longer archives", a
   // ...but present in the Logs by DEFAULT (not behind "Show archived"), flagged,
   // with every slide it ever had and the reason it went.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   const row = page.getByRole("cell", { name: "EE-1", exact: true });
   await expect(row).toBeVisible();
   await expect(page.getByText("Removed", { exact: true }).first()).toBeVisible();
@@ -238,6 +242,7 @@ test("#96: archiving is done from the Logs and still restores whole", async ({ p
   expect(before.length).toBeGreaterThan(0);
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-1" }).click();
 
@@ -250,6 +255,7 @@ test("#96: archiving is done from the Logs and still restores whole", async ({ p
 
   // Intact behind "Show archived", slides and all.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByLabel("Show archived").check();
   await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();

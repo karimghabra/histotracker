@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { showRemoved } from "../helpers/app";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +52,7 @@ test("an existing pre-0023 database opens in the new build with no data loss", a
   // The pre-existing project and its samples are all there.
   await expect(page.locator("aside").getByText("Enthesis Engineering")).toBeVisible();
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   for (const code of ["EE-1", "EE-2", "EE-3"]) {
     await expect(page.getByRole("cell", { name: code, exact: true })).toBeVisible();
   }
@@ -90,6 +92,7 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
 
   // #74 — archive a pre-existing sample, then bring it back.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-3", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-3" }).click();
   await expect(page.getByRole("cell", { name: "EE-3", exact: true })).toHaveCount(0, {
@@ -125,6 +128,7 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
   expect(after).toContain("EE-1-E");

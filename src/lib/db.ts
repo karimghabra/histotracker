@@ -577,20 +577,70 @@ export async function setProjectActive(projectId: number, isActive: boolean): Pr
   await db.execute(`UPDATE projects SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, projectId]);
 }
 
+/**
+ * Update a project, carrying a CODE change through to everything named after it
+ * (#106).
+ *
+ * A sample's code is `<PROJECT>-NNNN` and a slide's is `<PROJECT>-NNNN-X`, both
+ * stored as text rather than derived at read time. Renaming the project used to
+ * touch only the projects row, so every existing block and slide kept the old
+ * acronym for ever — the log then showed two prefixes for one project and no
+ * way to tell they were the same. A rename either means something or it does
+ * not; if it does, it has to reach the things it named.
+ *
+ * The rewrite is a prefix swap up to the first hyphen, not a re-mint: numbers,
+ * letters and ordering are untouched, so nothing is renumbered and no code that
+ * has been written on a physical slide changes its meaning. That is also why
+ * zero-padded legacy codes (#87) survive it — `SUBSTR` keeps whatever followed
+ * the old prefix exactly as it was.
+ */
 export async function updateProject(
   projectId: number,
   input: { code: string; name: string; team_lead: string; lead_user_id: number },
 ): Promise<void> {
   const db = await getDb();
+  const newCode = input.code.trim().toUpperCase();
+  const rows = await db.select<Array<{ code: string }>>(
+    `SELECT code FROM projects WHERE id = ?`,
+    [projectId],
+  );
+  const oldCode = rows[0]?.code ?? "";
+
   await db.execute(
     `UPDATE projects SET code = ?, name = ?, team_lead = ?, lead_user_id = ? WHERE id = ?`,
-    [
-      input.code.trim().toUpperCase(),
-      input.name.trim(),
-      input.team_lead.trim(),
-      input.lead_user_id,
-      projectId,
-    ],
+    [newCode, input.name.trim(), input.team_lead.trim(), input.lead_user_id, projectId],
+  );
+
+  if (!oldCode || oldCode === newCode) return;
+  const like = `${oldCode}-%`;
+  const keep = oldCode.length + 1; // 1-indexed: first char AFTER the old prefix
+
+  // Slides first: their WHERE clause reaches them through their sample's
+  // project, and the samples' own codes are about to stop matching the old
+  // prefix. Order matters only for readability here — the predicate is on
+  // project_id, not on the code — but keeping it means the two statements can
+  // never be reordered into a bug.
+  await db.execute(
+    `UPDATE slides SET slide_code = ? || SUBSTR(slide_code, ?)
+      WHERE slide_code LIKE ?
+        AND section_request_id IN (
+          SELECT sr.id FROM section_requests sr
+            JOIN samples s ON s.id = sr.sample_id
+           WHERE s.project_id = ?
+        )`,
+    [newCode, keep, like, projectId],
+  );
+  await db.execute(
+    `UPDATE samples SET sample_code = ? || SUBSTR(sample_code, ?)
+      WHERE project_id = ? AND sample_code LIKE ?`,
+    [newCode, keep, projectId, like],
+  );
+  // Outstanding stain requests address blocks by code, so they would otherwise
+  // point at a block that no longer answers to that name.
+  await db.execute(
+    `UPDATE stain_requests SET sample_code = ? || SUBSTR(sample_code, ?)
+      WHERE sample_code LIKE ?`,
+    [newCode, keep, like],
   );
 }
 

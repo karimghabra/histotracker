@@ -22,6 +22,7 @@ import { useIdleLogout } from "./hooks/useIdleLogout";
 import { mergePendingRequests, prunePendingRequests } from "./lib/pendingRequests";
 import { compareSampleCodes } from "./lib/utils";
 import { PREPROCESSING_STAGES } from "./lib/stages";
+import { clearViewPrefs } from "./lib/viewPrefs";
 import { DEFAULT_SETTINGS } from "./lib/settings";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { RequestsInbox } from "./components/RequestsInbox";
@@ -35,6 +36,31 @@ import { hydrateUndoHistory } from "./lib/undoPersist";
 import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
 import { getSyncConfig, type SyncConfigPublic } from "./lib/syncConfig";
 import { exportSamplesCsv, exportWorkbookXlsx } from "./lib/export";
+
+/**
+ * Why a session ended (#108). The prompt used to fire only for the idle and
+ * launch cases and claimed inactivity in both, so signing out by hand — the
+ * commonest way a session ends on a shared bench machine — dropped the user
+ * with no way back in short of hunting for the header select.
+ */
+type SignOutReason = "idle" | "launch" | "manual";
+
+const SIGN_OUT_TITLE: Record<SignOutReason, string> = {
+  idle: "Signed out for inactivity",
+  launch: "Sign in to continue",
+  manual: "Signed out",
+};
+
+function signOutMessage(name: string, reason: SignOutReason, idleMinutes: number): string {
+  const who = name || "The session";
+  if (reason === "idle") {
+    return `${who} was signed out after ${idleMinutes} minutes without activity.`;
+  }
+  if (reason === "launch") {
+    return `${who} was still signed in from a previous session, so Histometer signed out.`;
+  }
+  return `${who} signed out.`;
+}
 
 export default function App() {
   const qc = useQueryClient();
@@ -145,22 +171,34 @@ export default function App() {
     if (!syncConfig?.configured) return;
     launchSignOutDone.current = true;
     if (activeUser) {
-      setIdleSignedOut(activeUser.name);
-      selectUser.mutate(null);
+      signOut(activeUser.name, "launch");
     }
   }, [syncConfig?.configured, isViewer, activeUser, selectUser]);
 
   // #76 — drop the session after a spell of no interaction, so the next person
   // at a shared bench machine isn't silently attributed the previous one's work.
   // Remember who it was, purely to address the sign-back-in prompt by name.
-  const [idleSignedOut, setIdleSignedOut] = useState<string | null>(null);
+  // Who was signed out and WHY (#108). It used to be just a name, and the modal
+  // hard-coded "after 30 minutes without activity" — already untrue for the
+  // launch sign-out, and about to be untrue for the manual one.
+  const [signedOut, setSignedOut] = useState<{ name: string; reason: SignOutReason } | null>(
+    null,
+  );
+  const signOut = (name: string, reason: SignOutReason) => {
+    setSignedOut({ name, reason });
+    // Remembered filters belong to the person who set them (#104). Cleared
+    // HERE, synchronously, rather than in an effect: the views below are keyed
+    // on the signed-in user, so they remount in the very same render and would
+    // otherwise read the departing user's filters back out on the way past.
+    clearViewPrefs();
+    selectUser.mutate(null);
+  };
   // The window is configurable (#92); the hook's own 30-minute default is now
   // only the value the settings row starts at.
   useIdleLogout(
     Boolean(activeUser) && !isViewer,
     () => {
-      setIdleSignedOut(activeUser?.name ?? "");
-      selectUser.mutate(null);
+      signOut(activeUser?.name ?? "", "idle");
     },
     settings.idleLogoutMinutes * 60_000,
   );
@@ -590,7 +628,11 @@ export default function App() {
                   <select
                     aria-label="Signed-in user"
                     value={activeUser?.id ?? ""}
-                    onChange={(event) => selectUser.mutate(event.target.value ? Number(event.target.value) : null)}
+                    onChange={(event) => {
+                      const next = event.target.value ? Number(event.target.value) : null;
+                      if (next === null) signOut(activeUser?.name ?? "", "manual");
+                      else selectUser.mutate(next);
+                    }}
                     className="max-w-36 bg-transparent text-xs text-inherit outline-none"
                   >
                     <option value="">Not signed in</option>
@@ -600,7 +642,12 @@ export default function App() {
                   </select>
                 </label>
                 {activeUser && (
-                  <Button variant="ghost" className="px-2" title="Sign out" onClick={() => selectUser.mutate(null)}>
+                  <Button
+                    variant="ghost"
+                    className="px-2"
+                    title="Sign out"
+                    onClick={() => signOut(activeUser.name, "manual")}
+                  >
                     <LogOut size={15} />
                   </Button>
                 )}
@@ -706,6 +753,7 @@ export default function App() {
           ) : view === "logs" ? (
             <div className="min-w-0 flex-1 overflow-hidden p-3">
               <LogsView
+                key={`logs-${activeUser?.id ?? "none"}`}
                 onRequestStain={(code) => {
                   setRequestStainCode(code);
                   setShowRequestStain(true);
@@ -716,6 +764,7 @@ export default function App() {
           <>
           <div className="min-w-0 flex-1 overflow-hidden p-3">
             <Board
+              key={`board-${activeUser?.id ?? "none"}`}
               samples={samples}
               sections={sections}
               stacks={stacks}
@@ -885,12 +934,14 @@ export default function App() {
       )}
       {/* #76 — say plainly that the session lapsed, and offer the way back in.
           Dismissable: work can continue unsigned, it is just recorded that way. */}
-      {idleSignedOut !== null && (
-        <Modal title="Signed out for inactivity" onClose={() => setIdleSignedOut(null)} width="max-w-sm">
+      {signedOut !== null && (
+        <Modal
+          title={SIGN_OUT_TITLE[signedOut.reason]}
+          onClose={() => setSignedOut(null)}
+          width="max-w-sm"
+        >
           <p className="mb-3 text-xs text-ink-soft">
-            {idleSignedOut
-              ? `${idleSignedOut} was signed out after 30 minutes without activity.`
-              : "The session was signed out after 30 minutes without activity."}{" "}
+            {signOutMessage(signedOut.name, signedOut.reason, settings.idleLogoutMinutes)}{" "}
             Sign back in so your changes are attributed to you — until then they are recorded as unsigned.
           </p>
           <Field label="Sign in as">
@@ -900,7 +951,7 @@ export default function App() {
               onChange={(event) => {
                 if (!event.target.value) return;
                 selectUser.mutate(Number(event.target.value));
-                setIdleSignedOut(null);
+                setSignedOut(null);
               }}
               className="w-full rounded-lg border border-line bg-white px-2 py-2 text-sm text-ink outline-none focus:border-brand"
             >
@@ -911,7 +962,7 @@ export default function App() {
             </select>
           </Field>
           <div className="mt-3 flex justify-end">
-            <Button variant="ghost" onClick={() => setIdleSignedOut(null)}>
+            <Button variant="ghost" onClick={() => setSignedOut(null)}>
               Continue unsigned
             </Button>
           </div>

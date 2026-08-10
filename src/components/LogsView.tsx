@@ -4,6 +4,7 @@ import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
+import { useViewPref, useViewPrefSet } from "../hooks/useViewPref";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog, useSampleRemovals, useSlideRemovals } from "../hooks/useData";
 import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
@@ -250,20 +251,23 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
     [sampleRemovalList],
   );
 
-  const [project, setProject] = useState("all");
-  const [stain, setStain] = useState("all");
-  const [assayType, setAssayType] = useState<"all" | "stain" | "ihc">("all");
-  const [onlyMatching, setOnlyMatching] = useState(false);
-  const [phases, setPhases] = useState<Set<PhaseKey>>(new Set());
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("sample");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [project, setProject] = useViewPref("logs.project", "all");
+  const [stain, setStain] = useViewPref("logs.stain", "all");
+  const [assayType, setAssayType] = useViewPref<"all" | "stain" | "ihc">("logs.assayType", "all");
+  const [onlyMatching, setOnlyMatching] = useViewPref("logs.onlyMatching", false);
+  const [phases, setPhases] = useViewPrefSet<PhaseKey>("logs.phases");
+  const [fromDate, setFromDate] = useViewPref("logs.fromDate", "");
+  const [toDate, setToDate] = useViewPref("logs.toDate", "");
+  const [search, setSearch] = useViewPref("logs.search", "");
+  const [sortKey, setSortKey] = useViewPref<SortKey>("logs.sortKey", "sample");
+  const [sortDir, setSortDir] = useViewPref<"asc" | "desc">("logs.sortDir", "asc");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   // Archived samples are hidden by default and can be shown on demand (#74).
-  const [showArchived, setShowArchived] = useState(false);
+  const [showArchived, setShowArchived] = useViewPref("logs.showArchived", false);
+  // Removed blocks and slides are the record of something that went wrong, so
+  // they belong in the log — but not in the way of everyday reading (#105).
+  const [showRemoved, setShowRemoved] = useViewPref("logs.showRemoved", false);
   const phasesKey = [...phases].join(",");
   useEffect(() => setExportMsg(null), [project, stain, assayType, phasesKey, fromDate, toDate, search]);
 
@@ -330,6 +334,8 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       const { sample, slides: sampleSlides, agents, phase } = row;
       // Archived samples stay out of the way unless explicitly asked for (#74).
       if (!showArchived && sample.archived_at) return false;
+      // …and so do removed ones (#105, #96).
+      if (!showRemoved && sample.current_stage === "removed") return false;
       if (project !== "all" && sample.project_code !== project) return false;
       if (phases.size > 0 && !phases.has(phase)) return false;
       if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
@@ -359,7 +365,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       }
       return true;
     });
-  }, [rows, project, phases, assayType, stain, fromDate, toDate, search, showArchived]);
+  }, [rows, project, phases, assayType, stain, fromDate, toDate, search, showArchived, showRemoved]);
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
@@ -393,10 +399,26 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
           cmp = a.slides.length - b.slides.length;
           break;
         case "added":
-          cmp = (sa.date_added || "").localeCompare(sb.date_added || "");
+          // date_added is a DAY (todayIso), so sorting on it can only ever be
+          // day-accurate and every block logged on the same day tied (#107).
+          // stage_received_at is the real intake stamp; the day is the fallback
+          // for rows written before it existed.
+          //
+          // The stamp is to the MINUTE, so a run of blocks logged in one sitting
+          // still ties. project_sample_number breaks it by creation order, which
+          // is what "added" means when the clock cannot tell them apart — without
+          // it the order falls to whatever the query happened to return.
+          cmp =
+            (sa.stage_received_at || sa.date_added || "").localeCompare(
+              sb.stage_received_at || sb.date_added || "",
+            ) || (sa.project_sample_number ?? 0) - (sb.project_sample_number ?? 0);
           break;
         case "updated":
-          cmp = a.lastActivity.localeCompare(b.lastActivity);
+          // Same tie-break, same reason (#107): two blocks touched in the same
+          // minute must still land in a stable, meaningful order.
+          cmp =
+            a.lastActivity.localeCompare(b.lastActivity) ||
+            (sa.project_sample_number ?? 0) - (sb.project_sample_number ?? 0);
           break;
       }
       return cmp * dir;
@@ -519,6 +541,17 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
           />
           Show archived
         </label>
+        {/* Same shape as Show archived, and the same default: the log stays
+            readable, and what went wrong is one click away (#105). */}
+        <label className="flex cursor-pointer items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-soft">
+          <input
+            type="checkbox"
+            checked={showRemoved}
+            onChange={(e) => setShowRemoved(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+          />
+          Show removed
+        </label>
         <label className="flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-xs text-ink-faint">
           Added
           <input
@@ -623,6 +656,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
                   removedCount={row.removedCount}
                   removals={removals}
                   removal={sampleRemovals.get(row.sample.id)}
+                  showRemoved={showRemoved}
                   hasNotes={row.hasNotes}
                   lastActivity={row.lastActivity}
                   open={isOpen}
@@ -730,6 +764,7 @@ function FragmentRow({
   removedCount,
   removals,
   removal,
+  showRemoved,
   hasNotes,
   lastActivity,
   open,
@@ -752,6 +787,8 @@ function FragmentRow({
   removals: Map<number, SlideRemoval>;
   /** Set when this BLOCK itself was removed from the board (#96). */
   removal?: SampleRemoval;
+  /** Whether removed slides are listed in the drill-down (#105). */
+  showRemoved: boolean;
   hasNotes: boolean;
   lastActivity: string;
   open: boolean;
@@ -775,10 +812,14 @@ function FragmentRow({
     });
   }
   // With a stain filter active, optionally show only the slides that match it.
+  // Removed slides are listed only on request (#105). The COUNT beside the
+  // slide total still reports them either way — hiding a row must not hide the
+  // fact that something was removed, only the detail of it.
+  const listedSlides = showRemoved ? slides : slides.filter((s) => !isRemoved(s));
   const visibleSlides =
     stainFilter && onlyMatching
-      ? slides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
-      : slides;
+      ? listedSlides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
+      : listedSlides;
   const liveSlideCount = slides.length - removedCount;
   const slideTitle = [
     extras > 0 ? `${progress.total} assay · ${extras} extra` : `${liveSlideCount} slides`,
@@ -866,10 +907,18 @@ function FragmentRow({
             <span className="text-removed ml-1 text-[10px] font-medium">−{removedCount}</span>
           )}
         </td>
-        <td className="px-2 py-1.5 text-ink-faint" title={sample.date_added}>
+        {/* The cell shows the day; the tooltip carries the time the sort now
+            actually uses, so two blocks logged on the same day no longer look
+            arbitrarily ordered (#107). */}
+        <td
+          className="px-2 py-1.5 text-ink-faint"
+          title={sample.stage_received_at || sample.date_added}
+        >
           {(sample.date_added || "").slice(0, 10)}
         </td>
-        <td className="px-2 py-1.5 tabular-nums text-ink-faint">{lastActivity.slice(0, 10) || "—"}</td>
+        <td className="px-2 py-1.5 tabular-nums text-ink-faint" title={lastActivity || undefined}>
+          {lastActivity.slice(0, 10) || "—"}
+        </td>
       </tr>
       {open && (
         <tr>

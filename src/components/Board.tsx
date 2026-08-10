@@ -9,6 +9,7 @@ import {
 } from "@dnd-kit/core";
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { compareSampleCodes, compareSlideCodes } from "../lib/utils";
+import { useViewPref } from "../hooks/useViewPref";
 import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
@@ -34,6 +35,7 @@ type ExtraSlidesSort = "sample_id" | "name";
 // #89 — Pre-processing is where every sample enters, so it fills up fastest and
 // needs the same project filter and sort the downstream queues already have.
 type PreprocessingSort = "received_date" | "name" | "sample_id";
+type NeedsEmbeddingSort = "picked_up_date" | "name" | "sample_id";
 
 /** Shared empty list so an absent queue keeps a stable identity across renders. */
 const NO_STACKS: SlideStack[] = [];
@@ -86,6 +88,36 @@ function sortPreprocessing(samples: Sample[], key: PreprocessingSort): Sample[] 
         // so sortEmbedded's key would compare a column that is NULL for every
         // row here and leave the order to the tie-break.
         return (a.stage_received_at ?? "").localeCompare(b.stage_received_at ?? "");
+    }
+  });
+  return copy;
+}
+
+/**
+ * Needs Embedding ordering (#103). Its own date key is when the block came OUT
+ * of the processor: stage_embedded_at is NULL for everything in this queue by
+ * definition, and stage_received_at is weeks stale by the time a block gets
+ * here, so neither of the existing sorts says anything useful about it.
+ */
+function sortNeedsEmbedding(samples: Sample[], key: NeedsEmbeddingSort): Sample[] {
+  const copy = [...samples];
+  copy.sort((a, b) => {
+    if (a.is_priority !== b.is_priority) return b.is_priority - a.is_priority;
+    switch (key) {
+      case "name":
+        return (a.sample_description || a.sample_code).localeCompare(
+          b.sample_description || b.sample_code,
+        );
+      case "sample_id":
+        return (
+          (a.project_code ?? "").localeCompare(b.project_code ?? "") ||
+          (a.project_sample_number ?? 0) - (b.project_sample_number ?? 0)
+        );
+      case "picked_up_date":
+      default:
+        return (a.stage_picked_up_at ?? a.stage_needs_embedding_at ?? "").localeCompare(
+          b.stage_picked_up_at ?? b.stage_needs_embedding_at ?? "",
+        );
     }
   });
   return copy;
@@ -189,16 +221,18 @@ export function Board({
   const blockAnchor = useRef<number | null>(null);
   const sectionGroupAnchor = useRef<number | null>(null);
   const stackAnchor = useRef<number | null>(null);
-  const [embeddedFilter, setEmbeddedFilter] = useState<number | "all">("all");
-  const [embeddedSort, setEmbeddedSort] = useState<EmbeddedSort>("embedded_date");
+  const [embeddedFilter, setEmbeddedFilter] = useViewPref<number | "all">("board.embeddedFilter", "all");
+  const [embeddedSort, setEmbeddedSort] = useViewPref<EmbeddedSort>("board.embeddedSort", "embedded_date");
   // Pre-processing gets the same two controls (#89).
-  const [preprocessingFilter, setPreprocessingFilter] = useState<number | "all">("all");
-  const [preprocessingSort, setPreprocessingSort] = useState<PreprocessingSort>("received_date");
-  const [extraSlidesFilter, setExtraSlidesFilter] = useState<string>("all");
-  const [extraSlidesSort, setExtraSlidesSort] = useState<ExtraSlidesSort>("sample_id");
+  const [preprocessingFilter, setPreprocessingFilter] = useViewPref<number | "all">("board.preprocessingFilter", "all");
+  const [preprocessingSort, setPreprocessingSort] = useViewPref<PreprocessingSort>("board.preprocessingSort", "received_date");
+  const [needsEmbeddingFilter, setNeedsEmbeddingFilter] = useViewPref<number | "all">("board.needsEmbeddingFilter", "all");
+  const [needsEmbeddingSort, setNeedsEmbeddingSort] = useViewPref<NeedsEmbeddingSort>("board.needsEmbeddingSort", "picked_up_date");
+  const [extraSlidesFilter, setExtraSlidesFilter] = useViewPref<string>("board.extraSlidesFilter", "all");
+  const [extraSlidesSort, setExtraSlidesSort] = useViewPref<ExtraSlidesSort>("board.extraSlidesSort", "sample_id");
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
-  const [imagingProjectFilter, setImagingProjectFilter] = useState<string>("all");
-  const [imagingStainFilter, setImagingStainFilter] = useState<string>("all");
+  const [imagingProjectFilter, setImagingProjectFilter] = useViewPref<string>("board.imagingProjectFilter", "all");
+  const [imagingStainFilter, setImagingStainFilter] = useViewPref<string>("board.imagingStainFilter", "all");
   const [topLaneHeight, setTopLaneHeight] = useState(
     () => Number(window.localStorage.getItem("histometer-board-top-height") ?? "50"),
   );
@@ -353,6 +387,35 @@ export function Board({
       setPreprocessingFilter("all");
     }
   }, [preprocessingFilter, projectsInPreprocessing]);
+
+  // ---- Needs Embedding filter + sort (#103) ----
+  const projectsInNeedsEmbedding = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const sample of blocksByQueue.needs_embedding ?? []) {
+      if (sample.project_code) seen.set(sample.project_id, sample.project_code);
+    }
+    return [...seen.entries()];
+  }, [blocksByQueue]);
+
+  const displayedNeedsEmbeddingItems = useMemo(() => {
+    let items = blocksByQueue.needs_embedding ?? [];
+    if (needsEmbeddingFilter !== "all") {
+      items = items.filter((sample) => sample.project_id === needsEmbeddingFilter);
+    }
+    return sortNeedsEmbedding(items, needsEmbeddingSort);
+  }, [blocksByQueue, needsEmbeddingFilter, needsEmbeddingSort]);
+
+  // The #85 trap again: a <select> whose selected option disappears keeps
+  // reporting the stale value and fires no change event, so the column filters
+  // itself down to nothing while other projects' blocks sit there unshown.
+  useEffect(() => {
+    if (
+      needsEmbeddingFilter !== "all" &&
+      !projectsInNeedsEmbedding.some(([id]) => id === needsEmbeddingFilter)
+    ) {
+      setNeedsEmbeddingFilter("all");
+    }
+  }, [needsEmbeddingFilter, projectsInNeedsEmbedding]);
 
   // ---- Ready for Imaging filters (#82) ----
   const agentsOf = (stack: SlideStack): string[] =>
@@ -880,10 +943,13 @@ export function Board({
                   const queueBatches = batchesByQueue[queueKey] ?? [];
                   const isEmbedded = queueKey === "embedded_inventory";
                   const isPreprocessing = queueKey === "preprocessing";
+                  const isNeedsEmbedding = queueKey === "needs_embedding";
                   if (isEmbedded) {
                     items = displayedEmbeddedItems;
                   } else if (isPreprocessing) {
                     items = displayedPreprocessingItems;
+                  } else if (isNeedsEmbedding) {
+                    items = displayedNeedsEmbeddingItems;
                   }
                   const selectedCount = items.filter((item) => selectedBlocks.has(item.id)).length;
                   return (
@@ -957,6 +1023,36 @@ export function Board({
                               }
                             >
                               <option value="received_date">Date received</option>
+                              <option value="name">Name</option>
+                              <option value="sample_id">Sample ID</option>
+                            </select>
+                          </div>
+                        ) : isNeedsEmbedding ? (
+                          <div className="flex gap-1">
+                            <select
+                              aria-label="Filter needs embedding by project"
+                              className={selectClass}
+                              value={String(needsEmbeddingFilter)}
+                              onChange={(event) =>
+                                setNeedsEmbeddingFilter(
+                                  event.target.value === "all" ? "all" : Number(event.target.value),
+                                )
+                              }
+                            >
+                              <option value="all">All Projects</option>
+                              {projectsInNeedsEmbedding.map(([id, code]) => (
+                                <option key={id} value={id}>{code}</option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label="Sort needs embedding"
+                              className={selectClass}
+                              value={needsEmbeddingSort}
+                              onChange={(event) =>
+                                setNeedsEmbeddingSort(event.target.value as NeedsEmbeddingSort)
+                              }
+                            >
+                              <option value="picked_up_date">Date picked up</option>
                               <option value="name">Name</option>
                               <option value="sample_id">Sample ID</option>
                             </select>

@@ -114,6 +114,27 @@ function makeApi(db) {
     return Number(r.lastInsertRowid);
   }
 
+  // Port of updateProject() — db.ts (#106). A project's acronym is baked into
+  // every sample_code and slide_code it named, so renaming it has to reach
+  // them. Prefix swap, not a re-mint: numbers and letters are untouched.
+  function renameProject(projectId, newCode) {
+    const oldCode = get(`SELECT code FROM projects WHERE id = ?`, [projectId]).code;
+    run(`UPDATE projects SET code = ? WHERE id = ?`, [newCode, projectId]);
+    if (!oldCode || oldCode === newCode) return;
+    const like = `${oldCode}-%`;
+    const keep = oldCode.length + 1;
+    run(`UPDATE slides SET slide_code = ? || SUBSTR(slide_code, ?)
+          WHERE slide_code LIKE ?
+            AND section_request_id IN (
+              SELECT sr.id FROM section_requests sr
+                JOIN samples s ON s.id = sr.sample_id
+               WHERE s.project_id = ?)`, [newCode, keep, like, projectId]);
+    run(`UPDATE samples SET sample_code = ? || SUBSTR(sample_code, ?)
+          WHERE project_id = ? AND sample_code LIKE ?`, [newCode, keep, projectId, like]);
+    run(`UPDATE stain_requests SET sample_code = ? || SUBSTR(sample_code, ?)
+          WHERE sample_code LIKE ?`, [newCode, keep, like]);
+  }
+
   function nextSampleNumber(projectId) {
     const row = get(
       `SELECT COALESCE(MAX(project_sample_number), 0) + 1 AS n FROM samples WHERE project_id = ?`,
@@ -912,7 +933,7 @@ function makeApi(db) {
 
   return {
     db, run, all, get,
-    seedProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
+    seedProject, renameProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
@@ -1471,6 +1492,48 @@ issue(96, "deleting a block from the board removes it without erasing anything",
 
   // The letters stay burned: a removed block is not a fresh one.
   eq(api.nextSlideLetter(id), 3, "slide letters are not reissued after a removal");
+});
+
+// #106 — "modifications to project acronym in management tab do not apply to
+// existing samples and slides".
+//
+// A sample's code is `<PROJECT>-NNNN` and a slide's `<PROJECT>-NNNN-X`, stored
+// as text. Renaming the project touched only the projects row, so the log then
+// showed two acronyms for one project with nothing to say they were the same.
+issue(106, "renaming a project carries through to its samples and slides", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject("EE", "Elastin Engineering");
+  const other = api.seedProject("ZZ", "Untouched Project");
+  const { id } = api.addSample(p, "EE", "renamed block");
+  const { id: bystander } = api.addSample(other, "ZZ", "not mine");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  const before = api.all(
+    `SELECT slide_code AS c FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`,
+    [section]).map((r) => r.c);
+  eq(before.length, 2, "the block has slides to rename");
+  api.run(`INSERT INTO stain_requests (uuid, sample_code, requested_assay, requester_name, status, created_at)
+           VALUES ('req-1', ?, 'H&E', 'Alex', 'requested', ?)`,
+          [api.get(`SELECT sample_code AS c FROM samples WHERE id = ?`, [id]).c, "2026-08-07 09:00"]);
+
+  api.renameProject(p, "EN");
+
+  eq(api.get(`SELECT sample_code AS c FROM samples WHERE id = ?`, [id]).c.startsWith("EN-"), true,
+     "the sample answers to the new acronym");
+  const after = api.all(
+    `SELECT slide_code AS c FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`,
+    [section]).map((r) => r.c);
+  eq(after.every((c) => c.startsWith("EN-")), true, "and so does every slide it produced");
+  // The SUFFIX is untouched: this is a prefix swap, not a re-mint, so nothing is
+  // renumbered and no letter is reissued.
+  eq(after.map((c) => c.slice(3)).join(","), before.map((c) => c.slice(3)).join(","),
+     "numbers and letters survive the rename exactly");
+  eq(api.get(`SELECT sample_code AS c FROM stain_requests LIMIT 1`).c.startsWith("EN-"), true,
+     "an outstanding stain request still addresses the block it was filed against");
+
+  // And nothing else moved.
+  eq(api.get(`SELECT sample_code AS c FROM samples WHERE id = ?`, [bystander]).c.startsWith("ZZ-"), true,
+     "another project's samples are left alone");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
