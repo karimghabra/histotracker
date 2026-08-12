@@ -59,6 +59,19 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
+      # The Tauri bundler downloads the WiX and NSIS toolchains from GitHub
+      # releases on every run and has no retry: a dropped connection kills the
+      # build after the Rust compile has already succeeded, with
+      # `failed to bundle project: io: Peer disconnected`. That happened twice
+      # in a row on 0.11.0 — once on WiX, once on NSIS — turning a green build
+      # into a coin flip. Caching the directory the bundler unpacks them into
+      # means a run only downloads them if the cache is cold.
+      - name: Cache Tauri bundler toolchains (WiX, NSIS)
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-${{ runner.os }}-v1
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
