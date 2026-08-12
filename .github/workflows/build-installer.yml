@@ -108,8 +108,19 @@ jobs:
             if (Test-Path $t.Dir) { Write-Host "cached already: $($t.Dir)"; continue }
             $zip = Join-Path $env:RUNNER_TEMP ([System.IO.Path]::GetFileName($t.Url))
             if (Get-WithRetry $t.Url $zip) {
+              # Unpack via a staging dir and FLATTEN a single top-level folder.
+              # The two archives disagree: wix314-binaries.zip has its exes at
+              # the root, nsis-3.11.zip wraps everything in one directory. The
+              # first version of this step extracted both verbatim, so WiX was
+              # satisfied and NSIS was not — the bundler downloaded NSIS anyway
+              # and the tag build for 0.11.0 died on exactly that.
+              $stage = Join-Path $env:RUNNER_TEMP ("stage-" + [System.IO.Path]::GetFileNameWithoutExtension($t.Url))
+              if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+              Expand-Archive -Path $zip -DestinationPath $stage -Force
+              $entries = Get-ChildItem $stage
+              $src = if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) { $entries[0].FullName } else { $stage }
               New-Item -ItemType Directory -Force -Path $t.Dir | Out-Null
-              Expand-Archive -Path $zip -DestinationPath $t.Dir -Force
+              Copy-Item -Path (Join-Path $src '*') -Destination $t.Dir -Recurse -Force
               Write-Host "unpacked to $($t.Dir)"
             } else {
               Write-Host "giving up on $($t.Url) — the bundler will try its own download"
