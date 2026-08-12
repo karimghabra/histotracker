@@ -436,22 +436,34 @@ function makeApi(db) {
       }
     }
     recordSlidesIssued(sampleId, nextOrdinal - 1);
-    // Cutting fulfils outstanding requests: trim one entry per preassigned slide.
+    // Cutting fulfils outstanding requests: trim one entry per preassigned
+    // slide. Keyed on the NAME (#112) — requiring assay_type too meant a
+    // typeless group could never fulfil anything, so the request outlived the
+    // slide that satisfied it and the block stayed flagged for ever.
     const cut = [];
     for (const g of groups) {
-      if (g.assay_type && g.assay_name) {
-        for (let i = 0; i < Math.max(1, g.duplicates); i++) cut.push({ assay_type: g.assay_type, assay_name: g.assay_name });
+      const name = (g.assay_name || g.stains || "").trim();
+      if (!name) continue;
+      for (let i = 0; i < Math.max(1, g.duplicates); i++) {
+        cut.push({ assay_type: g.assay_type ?? "", assay_name: name });
       }
     }
     if (cut.length) {
       const pre = get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
       const remaining = pre.preselected_stains ? JSON.parse(pre.preselected_stains) : [];
+      const sameAgent = (a, b) =>
+        a.assay_name.trim().toLowerCase() === b.assay_name.trim().toLowerCase() &&
+        (!a.assay_type || !b.assay_type || a.assay_type === b.assay_type);
       for (const r of cut) {
-        const idx = remaining.findIndex((a) => a.assay_type === r.assay_type && a.assay_name.toLowerCase() === r.assay_name.toLowerCase());
+        let idx = remaining.findIndex((a) => a.assay_type === r.assay_type && sameAgent(a, r));
+        if (idx < 0) idx = remaining.findIndex((a) => sameAgent(a, r));
         if (idx >= 0) remaining.splice(idx, 1);
       }
       run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [remaining.length ? JSON.stringify(remaining) : "", sampleId]);
     }
+    // Clear the live plan: re-opening Send for Cutting starts a wholly new one,
+    // and the cleared column is what makes the needs-cut flag drop (#112).
+    run(`UPDATE samples SET sectioning_plan = '' WHERE id = ?`, [sampleId]);
     return ids;
   }
 
@@ -1563,12 +1575,53 @@ issue(110, "the needs-cut flag tells a saved cutting plan from the auto-seeded o
            VALUES (?, 'sectioning_plan', 'Sectioning plan created', '{}', ?)`,
           [planned.id, "2026-08-12 09:00"]);
 
+  // The predicate listOpenSamples derives plan_saved from. BOTH halves matter:
+  // the event tells a deliberate plan from the auto-seeded one, and the column
+  // still holding a plan tells a plan that is WAITING from one already cut —
+  // createSectionRequests clears sectioning_plan when it sends (#112).
   const flagged = (id) => api.get(
-    `SELECT EXISTS (SELECT 1 FROM sample_timeline_events e
-                     WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan') AS f
+    `SELECT (s.sectioning_plan <> '' AND EXISTS (
+               SELECT 1 FROM sample_timeline_events e
+                WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan')) AS f
        FROM samples s WHERE s.id = ?`, [id]).f;
   eq(flagged(planned.id), 1, "the deliberately planned block is flagged");
   eq(flagged(seeded.id), 0, "the auto-seeded one is not — otherwise the whole column flags");
+
+  // #112 — and the flag CLEARS once the plan has been cut. Testing the event
+  // alone left a block flagged for ever after one saved plan, with its slides
+  // sitting in Needs Sectioning.
+  api.createSectionRequests(planned.id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  eq(api.get(`SELECT sectioning_plan AS pl FROM samples WHERE id = ?`, [planned.id]).pl, "",
+     "sending for cutting clears the live plan");
+  eq(flagged(planned.id), 0, "…so the block stops being flagged once it has been cut");
+});
+
+// #112 — an outstanding stain request must be cleared by the cut that fulfils
+// it, even when the plan names the agent WITHOUT a type.
+//
+// The trim used to require both assay_type and assay_name, and the matcher
+// demanded an exact type match, so a typeless group could never fulfil
+// anything: the request stayed outstanding for ever and the block kept a flag
+// no cut could clear, with the slide right there in Needs Sectioning.
+issue(112, "a cut clears the request it fulfils even with no assay type", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "typeless request", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "Safranin O" }],
+  });
+  api.markEmbedded(id);
+  eq(api.get(`SELECT preselected_stains AS ps FROM samples WHERE id = ?`, [id]).ps !== "", true,
+     "the block starts with an outstanding request");
+
+  // A plan that names the agent but carries no type — what an older saved plan
+  // and a hand-built group both look like.
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "Safranin O", assay_name: "Safranin O" },
+    { duplicates: 2, stains: "" },
+  ]);
+
+  eq(api.get(`SELECT preselected_stains AS ps FROM samples WHERE id = ?`, [id]).ps, "",
+     "the cut clears the request it fulfilled");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample

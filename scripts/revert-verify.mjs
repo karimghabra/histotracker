@@ -357,6 +357,69 @@ const CASES = {
     ],
   },
 
+  // #112 — key plan_saved off the timeline event alone again, which is never
+  // cleared, so one saved plan flags the block for ever.
+  "112-flag-clears": {
+    grep: "#112: the needs-cut flag clears once the block has been cut",
+    edits: [
+      {
+        file: "src/lib/db.ts",
+        find: /            \(\r?\n              s\.sectioning_plan <> '' AND EXISTS \(/,
+        replace: "            (\n              1 = 1 AND EXISTS (",
+      },
+    ],
+  },
+
+  // #112 — require an assay_type again, so a typeless group fulfils nothing.
+  //
+  // EXPECTED VACUOUS against the e2e test, and kept in order to say so: a
+  // request added through the drawer always carries a type, and so does the
+  // plan built from it, so the old guard was satisfied and that path always
+  // worked. The typeless plan is only reachable at the data layer, which is why
+  // the trim fix is covered by the harness gate issue(112, "a cut clears the
+  // request it fulfils even with no assay type") — revert-verified separately.
+  "112-trim": {
+    grep: "#112: a cut clears the request it fulfilled",
+    edits: [
+      {
+        file: "src/lib/db.ts",
+        find: /    const name = \(g\.assay_name \|\| g\.stains \|\| ""\)\.trim\(\);\r?\n    if \(!name\) continue;\r?\n/,
+        replace:
+          '    const name = g.assay_type && g.assay_name ? g.assay_name.trim() : "";\n    if (!name) continue;\n',
+      },
+      // …and the read-time repair would otherwise clean up after it.
+      {
+        file: "src/lib/db.ts",
+        find: /        await reconcileFulfilledRequests\(db\);\r?\n/,
+        replace: "",
+      },
+    ],
+  },
+
+  // #112 — take the withdraw control back out.
+  "112-withdraw": {
+    grep: "#112: an outstanding stain request can be withdrawn by hand",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /            \{row\.pending && onWithdraw && \(/,
+        replace: "            {false && onWithdraw && (",
+      },
+    ],
+  },
+
+  // #111 — drop the Needs Sectioning filter.
+  "111-needs-sectioning": {
+    grep: "#111: Needs Sectioning can be filtered by project and sorted",
+    edits: [
+      {
+        file: "src/components/Board.tsx",
+        find: /                          \) : isNeedsSectioning && needsSectioningGroups\.length > 0 \? \(/,
+        replace: "                          ) : false ? (",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

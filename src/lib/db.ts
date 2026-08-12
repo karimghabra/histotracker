@@ -91,6 +91,7 @@ export function getDb(): Promise<Database> {
       .then(async (db) => {
         await ensureRuntimeSchema(db);
         await reconcileStainRequests(db);
+        await reconcileFulfilledRequests(db);
         await splitContaminatedStainRacks(db);
         await backfillSlideLetterMarks(db);
         await retireDryingChecklistStep(db);
@@ -185,6 +186,65 @@ async function reconcileStainRequests(db: Database): Promise<void> {
   }
   await db.execute(
     `INSERT INTO schema_meta (key, value) VALUES ('stain_requests_reconciled', '1')
+       ON CONFLICT(key) DO UPDATE SET value = '1'`,
+  );
+}
+
+/**
+ * One-time DATA repair for #112 — outstanding requests a cut already fulfilled.
+ *
+ * Two bugs let these accumulate: the trim in `createSectionRequests` skipped any
+ * group whose `assay_type` was blank, and `removeFromRequests` demanded an exact
+ * type match. Both are fixed, but the rows they stranded are still in the live
+ * database, showing a block flagged for a stain whose slide is sitting in Needs
+ * Sectioning — exactly what #112 reports.
+ *
+ * MULTISET subtraction, not "drop every agent that has a slide": asking for the
+ * same agent twice is legitimate (#62/#66) and queues two slides, so only as
+ * many outstanding entries are removed as there are slides to account for them.
+ *
+ * It cannot be perfect, and it is worth being honest about why: "stale because
+ * the trim failed" and "deliberately re-requested after an earlier cut" are the
+ * same two rows in the same two tables. This resolves the ambiguity towards
+ * clearing, because a flag that cannot be cleared is worse than one that has to
+ * be set again — and #112 also adds a control for removing and re-adding
+ * requests by hand, so either mistake is recoverable in one click.
+ *
+ * Guarded by `schema_meta`, which rides WITH the database image: reverting an
+ * old backup re-repairs it, a repaired image is left alone.
+ */
+async function reconcileFulfilledRequests(db: Database): Promise<void> {
+  const done = await db.select<Array<{ value: string }>>(
+    `SELECT value FROM schema_meta WHERE key = 'fulfilled_requests_reconciled'`,
+  );
+  if (done[0]?.value === "1") return;
+
+  const samples = await db.select<Array<{ id: number; preselected_stains: string }>>(
+    `SELECT id, preselected_stains FROM samples WHERE preselected_stains <> ''`,
+  );
+  for (const s of samples) {
+    const outstanding = parsePreselectedStains(s.preselected_stains);
+    if (outstanding.length === 0) continue;
+    // One row per live agent-bearing slide, so a block cut twice for the same
+    // agent accounts for two outstanding entries.
+    const produced = await db.select<Array<{ assay_type: string; assay_name: string }>>(
+      `SELECT sl.assay_type, sl.assay_name FROM slides sl
+         JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sr.sample_id = ? AND sl.purpose = 'stain' AND sl.assay_name <> ''
+          AND sl.current_stage != 'removed'`,
+      [s.id],
+    );
+    if (produced.length === 0) continue;
+    const remaining = removeFromRequests(outstanding, produced);
+    if (remaining.length !== outstanding.length) {
+      await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [
+        remaining.length ? JSON.stringify(remaining) : "",
+        s.id,
+      ]);
+    }
+  }
+  await db.execute(
+    `INSERT INTO schema_meta (key, value) VALUES ('fulfilled_requests_reconciled', '1')
        ON CONFLICT(key) DO UPDATE SET value = '1'`,
   );
 }
@@ -738,14 +798,24 @@ export async function listOpenSamples(): Promise<Sample[]> {
   // and re-requesting an already-produced agent flags the block again (#41).
   const rows = await db.select<Array<Sample>>(
     `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
-            -- Did somebody actually SAVE a cutting plan for this block (#110)?
-            -- Not "does it have a plan": every block is auto-seeded one the
-            -- moment it reaches Embedded Inventory, so a non-empty
-            -- sectioning_plan is true of everything and would flag everything.
-            -- Only a deliberate save writes a sectioning_plan timeline event.
-            EXISTS (
-              SELECT 1 FROM sample_timeline_events e
-               WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan'
+            -- Is there a cutting plan waiting to be cut (#110, corrected #112)?
+            --
+            -- TWO conditions, and both are load-bearing:
+            --  · the event, because every block is auto-seeded a plan the
+            --    moment it reaches Embedded Inventory. Only a deliberate save
+            --    writes a sectioning_plan timeline event, so without this the
+            --    whole column would be flagged and the flag would mean nothing.
+            --  · the COLUMN still holding a plan, because createSectionRequests
+            --    clears sectioning_plan once the cut is sent. The first version
+            --    of this tested the event alone — and an event is never
+            --    cleared, so a block stayed flagged for ever after one saved
+            --    plan, cut or not. That is #112: "already has a stack with the
+            --    requested stain in the needs sectioning stage".
+            (
+              s.sectioning_plan <> '' AND EXISTS (
+                SELECT 1 FROM sample_timeline_events e
+                 WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan'
+              )
             ) AS plan_saved
        FROM samples s
        JOIN projects p ON p.id = s.project_id
@@ -2186,12 +2256,18 @@ export async function createSectionRequests(
   // so the "needs stain" flag clears exactly when a physical slide exists for it
   // (issues #41/#62/#66). Extras don't fulfil a request. See listOpenSamples,
   // where pending_stains == the (untrimmed) outstanding multiset.
+  // Keyed on the NAME, not on name+type (#112). Requiring `assay_type` too
+  // meant a group carrying an agent with a blank type could never fulfil
+  // anything, so its request stayed outstanding for ever and the block kept a
+  // flag no cut could clear — with the slide sitting right there in Needs
+  // Sectioning. `stains` is the older field name for the same thing and is
+  // accepted for plans written by earlier builds.
   const cut: Array<{ assay_type: string; assay_name: string }> = [];
   for (const g of groups) {
-    if (g.assay_type && g.assay_name) {
-      for (let i = 0; i < Math.max(1, g.duplicates); i += 1) {
-        cut.push({ assay_type: g.assay_type, assay_name: g.assay_name });
-      }
+    const name = (g.assay_name || g.stains || "").trim();
+    if (!name) continue;
+    for (let i = 0; i < Math.max(1, g.duplicates); i += 1) {
+      cut.push({ assay_type: g.assay_type ?? "", assay_name: name });
     }
   }
   if (cut.length > 0) {
@@ -2208,17 +2284,33 @@ export async function createSectionRequests(
   return ids;
 }
 
-/** Remove up to one entry per `toRemove` item from an outstanding-requests list
- *  (case-insensitive match on type+name), returning what stays outstanding. */
+/**
+ * Remove up to one entry per `toRemove` item from an outstanding-requests list,
+ * returning what stays outstanding.
+ *
+ * The agent NAME is the identity; the type only has to agree when both sides
+ * state one (#112). Insisting on an exact type match let a blank or
+ * differently-typed entry survive a cut that plainly fulfilled it, which is how
+ * a block ended up flagged for a stain whose slide already existed.
+ */
 function removeFromRequests(
   current: Array<{ assay_type: string; assay_name: string }>,
   toRemove: Array<{ assay_type: string; assay_name: string }>,
 ): Array<{ assay_type: string; assay_name: string }> {
   const remaining = [...current];
+  const sameAgent = (
+    a: { assay_type: string; assay_name: string },
+    b: { assay_type: string; assay_name: string },
+  ) =>
+    a.assay_name.trim().toLowerCase() === b.assay_name.trim().toLowerCase() &&
+    (!a.assay_type || !b.assay_type || a.assay_type === b.assay_type);
   for (const r of toRemove) {
-    const idx = remaining.findIndex(
-      (a) => a.assay_type === r.assay_type && a.assay_name.toLowerCase() === r.assay_name.toLowerCase(),
+    // Prefer an exact type match so a genuine stain/IHC pair of the same name
+    // is not consumed by the wrong one; fall back to name alone.
+    let idx = remaining.findIndex(
+      (a) => a.assay_type === r.assay_type && sameAgent(a, r),
     );
+    if (idx < 0) idx = remaining.findIndex((a) => sameAgent(a, r));
     if (idx >= 0) remaining.splice(idx, 1);
   }
   return remaining;
@@ -3132,6 +3224,52 @@ export async function requestStainForSample(input: {
     input.sampleId,
   ]);
   return { target: "block", slideId: null, stackId: null, createdStackId: null };
+}
+
+/**
+ * Withdraw ONE outstanding stain request from a block (#112).
+ *
+ * The outstanding list is a multiset — asking twice queues two slides — so this
+ * removes a single entry, not every entry naming that agent.
+ *
+ * This exists because the list is bookkeeping that can drift out of step with
+ * the slides, and until now there was no way to correct it from the app: a
+ * request stranded by a failed trim left the block flagged with no cure short of
+ * editing the database. Both directions are now recoverable by hand — remove a
+ * request that is no longer wanted, re-add one the repair pass cleared too
+ * eagerly.
+ */
+export async function withdrawStainRequest(
+  sampleId: number,
+  assayType: string,
+  assayName: string,
+): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ preselected_stains: string }>>(
+    `SELECT preselected_stains FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const current = parsePreselectedStains(rows[0]?.preselected_stains);
+  const remaining = removeFromRequests(current, [
+    { assay_type: assayType, assay_name: assayName },
+  ]);
+  if (remaining.length === current.length) return;
+  await db.execute(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [
+    remaining.length ? JSON.stringify(remaining) : "",
+    sampleId,
+  ]);
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'stain_request_withdrawn', ?, ?, ?)`,
+    [
+      sampleId,
+      `Withdrew stain request: ${assayName}`,
+      JSON.stringify({ assay_type: assayType, assay_name: assayName }),
+      nowTimestamp(),
+    ],
+  );
 }
 
 /** Resolve a sample's numeric id from its code (case-insensitive). */

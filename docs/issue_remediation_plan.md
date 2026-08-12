@@ -375,6 +375,50 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #111–#112 — the needs-cut flag, Needs Sectioning filters — status as of 0.11.1
+
+- **#112 — the flag survived the cut that should have cleared it · ✅ fixed.**
+  Two independent leaks, either of which alone reproduces the report.
+  1. *Regression from 0.11.0.* `plan_saved` was `EXISTS(sectioning_plan event)`.
+     A timeline event is never cleared, so one deliberately saved plan flagged
+     the block permanently. The event is still needed — it is what tells a saved
+     plan from the one every block is auto-seeded at embedding — but the
+     predicate now ALSO requires `sectioning_plan <> ''`, and
+     `createSectionRequests` clears that column when it sends. So the flag drops
+     exactly when the cut happens, which is what the reporter asked for.
+  2. *Older.* The trim in `createSectionRequests` only considered groups with
+     BOTH `assay_type` and `assay_name`, and `removeFromRequests` demanded an
+     exact type match. A group naming an agent without a type could therefore
+     fulfil nothing: the request outlived the slide that satisfied it, and no
+     later cut could clear it either. Matching is now on the agent name, with
+     the type honoured only when both sides state one.
+  *Live-data repair:* `reconcileFulfilledRequests`, guarded by a `schema_meta`
+  key so it runs once per image, subtracts produced slides from the outstanding
+  multiset. Multiset, not "drop every agent with a slide", because asking twice
+  is legitimate (#62/#66). It cannot be exact — a stale entry and a deliberate
+  re-request are the same two rows — so it resolves towards clearing, on the
+  grounds that an uncleanable flag is worse than one that has to be set again.
+  *Escape hatch:* outstanding requests can now be withdrawn from the drawer
+  (`withdrawStainRequest`, recorded on the timeline), which makes BOTH directions
+  recoverable: withdraw one the repair missed, re-add one it cleared too eagerly.
+  This is the reporter's "perhaps we should be able to manage requested stains?".
+  *Tests:* harness gates for both leaks — one asserts the flag drops after a cut,
+  one asserts a typeless plan still clears its request — plus three e2e tests.
+  *Note on coverage:* `revert-verify 112-trim` is **expected vacuous** against
+  the e2e suite. A request made through the drawer always carries a type, and so
+  does the plan built from it, so that path always worked; the typeless plan is
+  only reachable at the data layer. The harness gate is the load-bearing check,
+  and is revert-verified separately.
+- **#111 · ✅ shipped** — Needs Sectioning filter + sort. Unlike every other
+  column this one holds GROUPS (all of a block's un-sectioned cut groups
+  aggregate into one card, #33), so the sort key is read off the group's first
+  section. Its date key is `stage_needs_sectioning_at` — when the cut was
+  ordered — since nothing in the column has been sectioned yet. Includes the #85
+  stale-filter guard, and `sectionGroupOrder` now follows the DISPLAYED list so
+  shift-range selection walks what is on screen.
+
+---
+
 ## #109–#110 — bulk stain requests, the needs-cut flag — status as of 0.11.0
 
 - **#109 — the stain dropdown ignored the selection · ✅ fixed.** *Root cause:*

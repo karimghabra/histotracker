@@ -1,6 +1,42 @@
 # Changelog
 
-## 0.11.0 - unreleased
+## 0.11.1 - unreleased
+
+No schema change. **Opening this build repairs lingering flags in your existing
+database** — see below.
+
+**The needs-cut flag clears when the cut happens (#112).** Two independent leaks
+kept it lit on blocks whose slides were already sitting in Needs Sectioning:
+
+- **A saved cutting plan flagged the block for ever.** 0.11.0 keyed that half of
+  the flag on a timeline event, and an event is never cleared — so one saved plan
+  flagged the block permanently, cut or not. It now also requires the block to
+  still be *holding* a plan, and sending for cutting clears that. This was a
+  regression introduced in 0.11.0 and it is the main thing this release fixes.
+- **A cut did not always clear the request it fulfilled.** The trim skipped any
+  planned group that named an agent without also naming its type, and the matcher
+  demanded an exact type match — so such a request stayed outstanding for ever
+  and no amount of cutting could satisfy it. Matching is now on the agent name,
+  with the type honoured only when both sides state one.
+
+**Your database is repaired on first open.** A one-time pass clears outstanding
+requests that an existing slide already accounts for. It is a *multiset*
+subtraction, so asking for the same agent twice still queues two slides. It
+cannot be perfect — "stale because the trim failed" and "deliberately
+re-requested after an earlier cut" look identical in the data — so it resolves
+towards clearing, on the grounds that a flag you cannot clear is worse than one
+you have to set again. Which is also why:
+
+**Outstanding stain requests can be withdrawn (#112).** Each *Requested* line in
+the drawer's Stains / IHC list now has a control to take it back, recorded on the
+block's timeline. Both directions are recoverable by hand: withdraw one the
+repair missed, re-add one it cleared too eagerly.
+
+**Needs Sectioning can be filtered and sorted (#111)**, like the other busy
+columns — by project, and by date queued, name or sample ID. Shift-range
+selection follows the order on screen rather than the underlying one.
+
+## 0.11.0 - 2026-08-12
 
 No schema change.
 

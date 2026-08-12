@@ -36,6 +36,7 @@ type ExtraSlidesSort = "sample_id" | "name";
 // needs the same project filter and sort the downstream queues already have.
 type PreprocessingSort = "received_date" | "name" | "sample_id";
 type NeedsEmbeddingSort = "picked_up_date" | "name" | "sample_id";
+type NeedsSectioningSort = "queued_date" | "name" | "sample_id";
 
 /** Shared empty list so an absent queue keeps a stable identity across renders. */
 const NO_STACKS: SlideStack[] = [];
@@ -117,6 +118,42 @@ function sortNeedsEmbedding(samples: Sample[], key: NeedsEmbeddingSort): Sample[
       default:
         return (a.stage_picked_up_at ?? a.stage_needs_embedding_at ?? "").localeCompare(
           b.stage_picked_up_at ?? b.stage_needs_embedding_at ?? "",
+        );
+    }
+  });
+  return copy;
+}
+
+/**
+ * Needs Sectioning ordering (#111). Unlike every other column this one holds
+ * GROUPS — all of a block's not-yet-sectioned cut groups aggregate into one card
+ * (#33) — so the key is read off the group's first section, which is the one the
+ * card renders. Priority still wins, as everywhere else on the board.
+ */
+function sortSectionGroups(
+  groups: SectionRequest[][],
+  key: NeedsSectioningSort,
+): SectionRequest[][] {
+  const copy = [...groups];
+  copy.sort((ga, gb) => {
+    const a = ga[0];
+    const b = gb[0];
+    if ((a.is_priority ?? 0) !== (b.is_priority ?? 0)) {
+      return (b.is_priority ?? 0) - (a.is_priority ?? 0);
+    }
+    switch (key) {
+      case "name":
+        return (a.parent_description || a.parent_code || "").localeCompare(
+          b.parent_description || b.parent_code || "",
+        );
+      case "sample_id":
+        return compareSampleCodes(a.parent_code ?? "", b.parent_code ?? "");
+      case "queued_date":
+      default:
+        // When the cut was ordered — the only date every card in this column
+        // has, since nothing here has been sectioned yet.
+        return (a.stage_needs_sectioning_at ?? "").localeCompare(
+          b.stage_needs_sectioning_at ?? "",
         );
     }
   });
@@ -228,6 +265,8 @@ export function Board({
   const [preprocessingSort, setPreprocessingSort] = useViewPref<PreprocessingSort>("board.preprocessingSort", "received_date");
   const [needsEmbeddingFilter, setNeedsEmbeddingFilter] = useViewPref<number | "all">("board.needsEmbeddingFilter", "all");
   const [needsEmbeddingSort, setNeedsEmbeddingSort] = useViewPref<NeedsEmbeddingSort>("board.needsEmbeddingSort", "picked_up_date");
+  const [needsSectioningFilter, setNeedsSectioningFilter] = useViewPref<number | "all">("board.needsSectioningFilter", "all");
+  const [needsSectioningSort, setNeedsSectioningSort] = useViewPref<NeedsSectioningSort>("board.needsSectioningSort", "queued_date");
   const [extraSlidesFilter, setExtraSlidesFilter] = useViewPref<string>("board.extraSlidesFilter", "all");
   const [extraSlidesSort, setExtraSlidesSort] = useViewPref<ExtraSlidesSort>("board.extraSlidesSort", "sample_id");
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
@@ -337,9 +376,43 @@ export function Board({
     }
     return [...bySample.values()];
   }, [sectionsByQueue]);
+  // ---- Needs Sectioning filter + sort (#111) ----
+  const projectsInNeedsSectioning = useMemo(() => {
+    const seen = new Map<number, string>();
+    for (const group of needsSectioningGroups) {
+      const section = group[0];
+      if (section.project_id != null && section.project_code) {
+        seen.set(section.project_id, section.project_code);
+      }
+    }
+    return [...seen.entries()];
+  }, [needsSectioningGroups]);
+
+  const displayedSectionGroups = useMemo(() => {
+    let items = needsSectioningGroups;
+    if (needsSectioningFilter !== "all") {
+      items = items.filter((group) => group[0].project_id === needsSectioningFilter);
+    }
+    return sortSectionGroups(items, needsSectioningSort);
+  }, [needsSectioningGroups, needsSectioningFilter, needsSectioningSort]);
+
+  // The #85 trap: a <select> whose selected option disappears keeps reporting
+  // the stale value and fires no change event, so the column filters itself down
+  // to nothing while other projects' cards sit there unshown.
+  useEffect(() => {
+    if (
+      needsSectioningFilter !== "all" &&
+      !projectsInNeedsSectioning.some(([id]) => id === needsSectioningFilter)
+    ) {
+      setNeedsSectioningFilter("all");
+    }
+  }, [needsSectioningFilter, projectsInNeedsSectioning, setNeedsSectioningFilter]);
+
+  // Shift-range selection walks the ORDER ON SCREEN, so it has to follow the
+  // filtered and sorted list rather than the raw one (#37/#82).
   const sectionGroupOrder = useMemo(
-    () => needsSectioningGroups.map((group) => group[0].id),
-    [needsSectioningGroups],
+    () => displayedSectionGroups.map((group) => group[0].id),
+    [displayedSectionGroups],
   );
 
   const projectsInEmbedded = useMemo(() => {
@@ -848,7 +921,8 @@ export function Board({
                     // other downstream queue renders its stacks unfiltered.
                     const isImaging = queueKey === "analysis_pending";
                     const visibleStacks = isImaging ? displayedImagingStacks : stackItems;
-                    const groups = queueKey === "needs_sectioning" ? needsSectioningGroups : [];
+                    const groups = queueKey === "needs_sectioning" ? displayedSectionGroups : [];
+                    const isNeedsSectioning = queueKey === "needs_sectioning";
                     const groupSelectedCount = groups.filter((group) =>
                       group.every((section) => selectedSections.has(section.id)),
                     ).length;
@@ -889,6 +963,36 @@ export function Board({
                                 {stainsInImaging.map((name) => (
                                   <option key={name} value={name}>{name}</option>
                                 ))}
+                              </select>
+                            </div>
+                          ) : isNeedsSectioning && needsSectioningGroups.length > 0 ? (
+                            <div className="flex gap-1">
+                              <select
+                                aria-label="Filter needs sectioning by project"
+                                className={selectClass}
+                                value={String(needsSectioningFilter)}
+                                onChange={(event) =>
+                                  setNeedsSectioningFilter(
+                                    event.target.value === "all" ? "all" : Number(event.target.value),
+                                  )
+                                }
+                              >
+                                <option value="all">All Projects</option>
+                                {projectsInNeedsSectioning.map(([id, code]) => (
+                                  <option key={id} value={id}>{code}</option>
+                                ))}
+                              </select>
+                              <select
+                                aria-label="Sort needs sectioning"
+                                className={selectClass}
+                                value={needsSectioningSort}
+                                onChange={(event) =>
+                                  setNeedsSectioningSort(event.target.value as NeedsSectioningSort)
+                                }
+                              >
+                                <option value="queued_date">Date queued</option>
+                                <option value="name">Name</option>
+                                <option value="sample_id">Sample ID</option>
                               </select>
                             </div>
                           ) : undefined

@@ -24,6 +24,7 @@ import {
   confirmProcessingBatchStart as confirmProcessingBatchStartDb,
   updateBatchMembers,
   requestStainForSample as requestStainForSampleDb,
+  withdrawStainRequest as withdrawStainRequestDb,
   recordAuditEvent,
   snapshotDb,
   updateProcessingBatchStart,
@@ -523,6 +524,15 @@ export function useActions() {
     [commit],
   );
 
+  /** Take back an outstanding stain request (#112). */
+  const withdrawStainRequest = useCallback(
+    (sampleId: number, assayType: string, assayName: string) =>
+      commit(`Withdraw ${assayName} request`, () =>
+        withdrawStainRequestDb(sampleId, assayType, assayName),
+      ),
+    [commit],
+  );
+
   const setSlidePicturesTaken = useCallback(
     async (slideId: number, complete: boolean) => {
       const before = await getSlide(slideId);
@@ -760,6 +770,7 @@ export function useActions() {
     assignExtraSlide,
     requestStain,
     requestStainForSamples,
+    withdrawStainRequest,
     setSlidePicturesTaken,
     completeSectionImaging,
     moveSlideStacks,

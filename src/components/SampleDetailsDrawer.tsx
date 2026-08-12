@@ -39,6 +39,7 @@ export function SampleDetailsDrawer({
     setExhaustedSamples,
     editTimestamp,
     requestStainForSamples,
+    withdrawStainRequest,
     editSampleDescription,
   } = useActions();
   // Viewers mirror the workstation read-only; the write controls below are
@@ -229,7 +230,17 @@ export function SampleDetailsDrawer({
             with the board. It now lists what actually exists — every slide
             carrying an agent, with the state that slide is in — plus every agent
             asked for that has not been cut yet. */}
-        <StainList sampleSlides={sampleSlides} pending={pendingAgents} legacy={sample.stains} />
+        <StainList
+          sampleSlides={sampleSlides}
+          pending={pendingAgents}
+          legacy={sample.stains}
+          onWithdraw={
+            readOnly
+              ? undefined
+              : (assayType, assayName) =>
+                  void withdrawStainRequest(sample.id, assayType, assayName)
+          }
+        />
         {sample.cut_notes && <Section title="Cut Notes">{sample.cut_notes}</Section>}
         {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
         {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}
@@ -572,16 +583,27 @@ function StainList({
   sampleSlides,
   pending,
   legacy,
+  onWithdraw,
 }: {
   sampleSlides: Slide[];
   pending: Array<{ assay_type: string; assay_name: string }>;
   /** The frozen intake string, shown only when there is nothing live to show. */
   legacy: string;
+  /** Take back an outstanding request (#112). Absent on a viewer. */
+  onWithdraw?: (assayType: string, assayName: string) => void;
 }) {
   const withAgent = sampleSlides.filter((slide) => (slide.assay_name || slide.stain_name).trim());
   // Slide.assay_type is a narrow union, a pending request's is a plain string,
   // and the two lists merge into one — widen once, here.
-  type Row = { key: string; code: string; agent: string; type: string; status: string };
+  type Row = {
+    key: string;
+    code: string;
+    agent: string;
+    type: string;
+    status: string;
+    /** Set on OUTSTANDING rows only — a cut slide is a fact, not a request. */
+    pending?: boolean;
+  };
   const rows: Row[] = withAgent.map((slide) => ({
     key: `slide-${slide.id}`,
     code: displayCode(slide.slide_code),
@@ -599,6 +621,7 @@ function StainList({
       agent: agent.assay_name,
       type: agent.assay_type,
       status: "Requested",
+      pending: true,
     });
   }
 
@@ -627,6 +650,19 @@ function StainList({
               )}
             </span>
             <span className={cn("shrink-0 text-[10px]", statusTone(row.status))}>{row.status}</span>
+            {/* Only an OUTSTANDING row can be withdrawn — a cut slide is a
+                fact about the bench, not a request (#112). */}
+            {row.pending && onWithdraw && (
+              <button
+                type="button"
+                aria-label={`Withdraw ${row.agent} request`}
+                title={`Withdraw the ${row.agent} request — the block stops being flagged for it`}
+                onClick={() => onWithdraw(row.type, row.agent)}
+                className="shrink-0 rounded p-0.5 text-ink-faint hover:bg-red-50 hover:text-red-600"
+              >
+                <X size={11} />
+              </button>
+            )}
           </li>
         ))}
       </ul>
