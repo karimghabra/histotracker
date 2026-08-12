@@ -72,6 +72,50 @@ jobs:
           path: ~\AppData\Local\tauri
           key: tauri-bundler-tools-${{ runner.os }}-v1
 
+      # …and fetch them ourselves if the cache is cold, because the bundler's own
+      # download has no retry: one dropped connection and the build dies AFTER
+      # the eight-minute Rust compile, with
+      # `failed to bundle project: io: Peer disconnected`. That hit 0.11.0 three
+      # times running — twice on WiX, once on NSIS — so the download is the least
+      # reliable step in the whole pipeline and the only one with no second
+      # chance.
+      #
+      # Best effort by design: if the layout the bundler expects ever changes,
+      # this step simply does not satisfy it and the bundler downloads as before.
+      # It must never be the reason a build fails, hence continue-on-error.
+      - name: Pre-fetch WiX and NSIS (with retries)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $root = "$env:LOCALAPPDATA\tauri"
+          function Get-WithRetry($url, $out) {
+            for ($i = 1; $i -le 5; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 120
+                return $true
+              } catch {
+                Write-Host "attempt $i failed for $url : $($_.Exception.Message)"
+                Start-Sleep -Seconds ($i * 5)
+              }
+            }
+            return $false
+          }
+          $targets = @(
+            @{ Url = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip"; Dir = "$root\WixTools314" },
+            @{ Url = "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip"; Dir = "$root\NSIS" }
+          )
+          foreach ($t in $targets) {
+            if (Test-Path $t.Dir) { Write-Host "cached already: $($t.Dir)"; continue }
+            $zip = Join-Path $env:RUNNER_TEMP ([System.IO.Path]::GetFileName($t.Url))
+            if (Get-WithRetry $t.Url $zip) {
+              New-Item -ItemType Directory -Force -Path $t.Dir | Out-Null
+              Expand-Archive -Path $zip -DestinationPath $t.Dir -Force
+              Write-Host "unpacked to $($t.Dir)"
+            } else {
+              Write-Host "giving up on $($t.Url) — the bundler will try its own download"
+            }
+          }
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
