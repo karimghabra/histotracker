@@ -38,7 +38,7 @@ export function SampleDetailsDrawer({
     setExhausted,
     setExhaustedSamples,
     editTimestamp,
-    requestStain,
+    requestStainForSamples,
     editSampleDescription,
   } = useActions();
   // Viewers mirror the workstation read-only; the write controls below are
@@ -87,6 +87,8 @@ export function SampleDetailsDrawer({
       ? `${removeTargets.length} selected samples`
       : displayCode(sample.sample_code);
   const deleteLabel = `Delete ${removeWhat}`;
+  // Same set Delete acts on: the selection if there is one, else this block.
+  const stainTargets = removeTargets;
   const selectedEmbedded = selectedGroup.filter((selected) => selected.current_stage === "embedded");
   const needsEmbedding = sample.current_stage === "needs_embedding";
 
@@ -271,8 +273,18 @@ export function SampleDetailsDrawer({
         </div>
 
         <div className="mb-4">
+          {/* The heading counts the blocks it will act on (#109). The drawer has
+              always been multi-select — the checklist, Start Run, Delete and Mark
+              Exhausted all use the selection — but this control read `sample.id`
+              alone, so asking twelve selected blocks for H&E stained one and said
+              nothing about the other eleven. */}
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
             Add a Stain
+            {stainTargets.length > 1 && (
+              <span className="ml-1 font-normal normal-case text-brand">
+                {" "}· {stainTargets.length} selected blocks
+              </span>
+            )}
           </h3>
           <div className="flex items-center gap-2">
             <select
@@ -297,14 +309,26 @@ export function SampleDetailsDrawer({
                 // block with no extras left to fulfil it (#70). Surface the
                 // reason instead of failing silently.
                 try {
-                  const result = await requestStain(sample.id, assayType as "stain" | "ihc", assayName);
-                  setRequestAgent("");
-                  setRequestFailed(false);
-                  setRequestFlash(
-                    result.target === "extra"
-                      ? `${assayName} pulled from an extra slide → now in Staining`
-                      : `${assayName} flagged on the block — a new cut is needed`,
+                  // A refusal is per BLOCK, not per batch: an exhausted block
+                  // with no extras left cannot fulfil one (#70), and that must
+                  // not abandon the blocks behind it in the loop. The outcome is
+                  // summarised rather than thrown.
+                  const { added, pulled, failed } = await requestStainForSamples(
+                    stainTargets,
+                    assayType as "stain" | "ihc",
+                    assayName,
                   );
+                  setRequestAgent("");
+                  setRequestFailed(failed.length > 0 && added.length + pulled.length === 0);
+                  const parts: string[] = [];
+                  if (pulled.length) {
+                    parts.push(`${pulled.length} pulled from an extra slide → now in Staining`);
+                  }
+                  if (added.length) {
+                    parts.push(`${added.length} flagged on the block — a new cut is needed`);
+                  }
+                  if (failed.length) parts.push(`${failed.length} refused: ${failed[0].message}`);
+                  setRequestFlash(`${assayName}: ${parts.join("; ")}`);
                 } catch (error) {
                   setRequestFailed(true);
                   setRequestFlash(error instanceof Error ? error.message : String(error));
@@ -493,7 +517,11 @@ export function SampleDetailsDrawer({
         <SectioningPlanDialog
           sample={sample}
           catalog={catalog}
-          batchSamples={selectedEmbedded}
+          // The whole selection, not just its embedded members (#110). Bulk
+          // PLANNING is the point now, and a block does not have to be embedded
+          // to be planned — the dialog hides Send unless every block can be
+          // sent (#98), so a mixed selection is safe.
+          batchSamples={selectedGroup}
           onSendPlans={async (entries) => {
             await sendPlansToCutting(entries);
           }}

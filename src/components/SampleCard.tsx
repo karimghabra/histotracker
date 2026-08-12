@@ -79,6 +79,20 @@ export function SampleCard({
   const pendingStainNames = parsePreselectedStains(sample.pending_stains)
     .map((a) => a.assay_name)
     .join(", ");
+  // #110 — the flag says NEEDS CUT, not "needs stain". A pending agent on a
+  // block sitting in Embedded Inventory is not waiting to be stained: it is
+  // waiting to be CUT, because the slide that will carry the stain does not
+  // exist yet. Naming it after the downstream step sent people looking for it
+  // in the staining column.
+  //
+  // A deliberately saved cutting plan raises the same flag for the same reason —
+  // somebody has decided how this block gets cut and the cut has not happened.
+  // `plan_saved`, not `sectioning_plan`: every block is auto-seeded a plan at
+  // embedding, so the column would be a wall of flags.
+  const needsCut = Boolean(pendingStainNames) || sample.plan_saved === 1;
+  const needsCutReason = pendingStainNames
+    ? `Awaiting cut for: ${pendingStainNames}`
+    : "Cutting plan saved — ready to send for cutting";
 
   const base = cn(
     "group touch-none rounded-md border bg-white transition select-none",
@@ -110,12 +124,12 @@ export function SampleCard({
         <span className="min-w-0 flex-1 truncate text-[11px] text-ink-soft">
           {sample.sample_description || "—"}
         </span>
-        {pendingStainNames && (
+        {needsCut && (
           <span
             className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
-            title={`Awaiting staining: ${pendingStainNames}`}
+            title={needsCutReason}
           >
-            ⚑ needs stain
+            ⚑ needs cut
           </span>
         )}
         <button

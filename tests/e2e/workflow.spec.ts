@@ -213,8 +213,9 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   await expect(page.getByText(/preselected/i).first()).toBeVisible();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
-  // #41a: the embedded tile shows the needs-stain flag.
-  await expect(page.getByText(/needs stain/i)).toBeVisible();
+  // #41a: the embedded tile is flagged. It says NEEDS CUT (#110): the
+  // slide that will carry the stain has not been cut yet.
+  await expect(page.getByText(/needs cut/i)).toBeVisible();
 
   // #41b: Send for Cutting is prefilled from the block's preselected stains.
   await page.getByText("EE-1", { exact: true }).first().click();

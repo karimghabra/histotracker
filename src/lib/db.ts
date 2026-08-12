@@ -737,7 +737,16 @@ export async function listOpenSamples(): Promise<Sample[]> {
   // createSectionRequests). A duplicate request queues a second slide (#62/#66),
   // and re-requesting an already-produced agent flags the block again (#41).
   const rows = await db.select<Array<Sample>>(
-    `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead
+    `SELECT s.*, p.code AS project_code, p.name AS project_name, p.team_lead AS team_lead,
+            -- Did somebody actually SAVE a cutting plan for this block (#110)?
+            -- Not "does it have a plan": every block is auto-seeded one the
+            -- moment it reaches Embedded Inventory, so a non-empty
+            -- sectioning_plan is true of everything and would flag everything.
+            -- Only a deliberate save writes a sectioning_plan timeline event.
+            EXISTS (
+              SELECT 1 FROM sample_timeline_events e
+               WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan'
+            ) AS plan_saved
        FROM samples s
        JOIN projects p ON p.id = s.project_id
       WHERE p.is_active = 1 AND s.current_stage != 'analyzed' AND s.block_exhausted = 0

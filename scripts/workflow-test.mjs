@@ -1536,6 +1536,41 @@ issue(106, "renaming a project carries through to its samples and slides", () =>
      "another project's samples are left alone");
 });
 
+// #110 — the Embedded Inventory flag must distinguish a plan somebody SAVED
+// from the one every block is auto-seeded at embedding.
+//
+// This is the whole difficulty of the issue: `sectioning_plan` is non-empty for
+// every block in the column, so flagging on it flags everything and says
+// nothing. Only a deliberate save writes a `sectioning_plan` timeline event, and
+// that is what `listOpenSamples` derives `plan_saved` from.
+issue(110, "the needs-cut flag tells a saved cutting plan from the auto-seeded one", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const seeded = api.addSample(p, "EE", "auto-seeded only");
+  const planned = api.addSample(p, "EE", "deliberately planned");
+  api.markEmbedded(seeded.id);
+  api.markEmbedded(planned.id);
+
+  // Both have a plan — that is exactly why "has a plan" cannot be the flag.
+  for (const s of [seeded, planned]) {
+    assert(api.get(`SELECT sectioning_plan AS pl FROM samples WHERE id = ?`, [s.id]).pl,
+      "every embedded block is auto-seeded a sectioning plan");
+  }
+
+  // One of them is planned on purpose, which is what updateSectioningPlan
+  // records.
+  api.run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
+           VALUES (?, 'sectioning_plan', 'Sectioning plan created', '{}', ?)`,
+          [planned.id, "2026-08-12 09:00"]);
+
+  const flagged = (id) => api.get(
+    `SELECT EXISTS (SELECT 1 FROM sample_timeline_events e
+                     WHERE e.sample_id = s.id AND e.event_type = 'sectioning_plan') AS f
+       FROM samples s WHERE s.id = ?`, [id]).f;
+  eq(flagged(planned.id), 1, "the deliberately planned block is flagged");
+  eq(flagged(seeded.id), 0, "the auto-seeded one is not — otherwise the whole column flags");
+});
+
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
 // stack. The fix captures the resulting stacks from the moved slides' current
 // stack_id (a scattered rack is deleted, so its id can't be relied on).

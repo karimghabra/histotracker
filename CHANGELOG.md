@@ -1,6 +1,34 @@
 # Changelog
 
-## 0.10.0 - unreleased
+## 0.11.0 - unreleased
+
+No schema change.
+
+- **Adding a stain applies to every selected block (#109).** The drawer has
+  always been multi-select — the preprocessing checklist, Start Run, Delete and
+  Mark Exhausted all act on the selection — but the stain dropdown read the one
+  block whose panel was open, so selecting twelve and asking for H&E gave you one
+  slide and no hint that the other eleven were skipped. The heading now counts
+  what it will act on, and the result is summarised. A block that legitimately
+  refuses (exhausted, no extras left) is reported and **does not abandon the rest
+  of the batch**; the whole thing is still a single undo step.
+- **The Embedded Inventory flag reads "needs cut" (#110).** It said "needs
+  stain", which sent people looking in the staining column — but a pending agent
+  on an embedded block is waiting to be **cut**: the slide that will carry the
+  stain does not exist yet.
+- **A saved cutting plan raises the same flag (#110)**, because somebody has
+  decided how the block gets cut and the cut has not happened. Only a plan you
+  *saved* counts — every block is auto-seeded one the moment it reaches Embedded
+  Inventory, so flagging "has a plan" would flag the entire column.
+- **Cutting plans can be saved in bulk (#110).** Save Plan was hidden whenever
+  more than one block was selected, so a batch could be sent but never planned —
+  twelve blocks meant opening twelve drawers. Each block keeps its own plan, so a
+  bulk save writes what is on each page; "Copy to all blocks" is still there for
+  when they should be identical. The plan dialog now takes the whole selection
+  rather than only its embedded members, so a batch can be planned before it is
+  embedded (Send stays hidden until every block can actually be sent, #98).
+
+## 0.10.0 - 2026-08-10
 
 Board and log housekeeping. No schema change.
 

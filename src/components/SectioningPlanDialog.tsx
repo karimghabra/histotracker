@@ -81,11 +81,12 @@ export function SectioningPlanDialog({
   sample: Sample;
   /** Stain/IHC agents the technician can attach to a slide. */
   catalog?: Array<{ assay_type: string; name: string }>;
-  /** The selected embedded blocks when sending a batch (includes `sample`). */
+  /** The selected blocks (includes `sample`). Send is gated on all of them
+   *  being embedded; planning is not. */
   batchSamples?: Sample[];
   /** Cut every block by its own (reviewed/edited) plan. */
   onSendPlans: (entries: Array<{ sampleId: number; groups: Group[] }>) => Promise<void>;
-  /** Save the shown block's plan as a draft (single-block only). */
+  /** Save a plan as a draft. Called once per block in the dialog (#110). */
   onSave?: (sampleId: number, plan: Group[]) => Promise<void>;
   onClose: () => void;
 }) {
@@ -131,10 +132,21 @@ export function SectioningPlanDialog({
     setBusy(false);
     onClose();
   }
+  /**
+   * Save the plan for EVERY block in the dialog (#110).
+   *
+   * Save Plan used to be hidden whenever more than one block was selected, so a
+   * batch could only be sent, never planned — you had to open twelve blocks one
+   * at a time to draft twelve plans. Each block keeps its own plan, so this
+   * saves what is actually on each page rather than copying the visible one;
+   * "Copy to all blocks" is still there for when they SHOULD be identical.
+   */
   async function saveDraft() {
     if (!onSave) return;
     setBusy(true);
-    await onSave(current.id, rowsToGroups(rows));
+    for (const [index, block] of blocks.entries()) {
+      await onSave(block.id, rowsToGroups(plans[index] ?? []));
+    }
     setBusy(false);
     onClose();
   }
@@ -257,16 +269,16 @@ export function SectioningPlanDialog({
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        {isBatch ? (
+        {isBatch && (
           <Button variant="subtle" onClick={copyToAll} disabled={busy} title="Copy this block's plan to every selected block">
             <Copy size={14} /> Copy to all blocks
           </Button>
-        ) : (
-          onSave && (
-            <Button variant="subtle" onClick={saveDraft} disabled={busy}>
-              Save Plan
-            </Button>
-          )
+        )}
+        {/* Offered for a batch too now (#110) — see saveDraft. */}
+        {onSave && (
+          <Button variant="subtle" onClick={saveDraft} disabled={busy}>
+            Save Plan{isBatch ? ` · ${blocks.length} blocks` : ""}
+          </Button>
         )}
         {/* HIDDEN, not disabled, until every block is embedded (#98). A greyed
             "Send for Cutting" sitting there in pre-processing invited the

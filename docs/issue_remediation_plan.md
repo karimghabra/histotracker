@@ -375,6 +375,39 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #109–#110 — bulk stain requests, the needs-cut flag — status as of 0.11.0
+
+- **#109 — the stain dropdown ignored the selection · ✅ fixed.** *Root cause:*
+  the drawer is multi-select everywhere else (checklist, Start Run, Delete, Mark
+  Exhausted) but this one control read `sample.id`. *Fix:*
+  `requestStainForSamples` over the same target set Delete uses, in one commit so
+  it is one undo step, with **per-block** error handling — an exhausted block
+  legitimately refuses (#70) and must not abandon the blocks behind it in the
+  loop. The heading counts its targets so the scope is visible before the click.
+- **#110 — the flag · ✅ fixed.** Renamed to **needs cut**: a pending agent on an
+  embedded block is waiting to be cut, not stained, and naming it after the
+  downstream step sent people to the wrong column.
+  *The hard part:* "saved cutting plans should add a needs cutting flag" cannot
+  be implemented as "has a `sectioning_plan`", because `ensureAutoSectioningPlan`
+  seeds one for **every** block on arrival in Embedded Inventory — the flag would
+  be on everything and mean nothing. A deliberate save goes through
+  `updateSectioningPlan`, which writes a `sectioning_plan` timeline event; the
+  auto-seed writes none. `listOpenSamples` derives `plan_saved` from that.
+  *Known edge:* `updateSectioningPlan` early-returns when the plan is unchanged,
+  so opening the dialog and saving without editing records nothing and raises no
+  flag. That is indistinguishable from never having opened it, and treating it as
+  a deliberate plan would flag blocks nobody decided anything about.
+  *Test:* harness gate `issue(110, …)` asserts both blocks carry an auto-seeded
+  plan and only the deliberately planned one is flagged — the assertion that
+  fails if the flag is keyed on the column.
+- **#110's parenthetical — plans could not be saved in bulk · ✅ fixed.** Save
+  Plan was rendered only when `!isBatch`. It now saves every block in the dialog,
+  each by its own page's plan. The drawer also passes the whole selection rather
+  than only its embedded members, so a batch can be planned before embedding;
+  Send remains gated on every block being embedded (#98).
+
+---
+
 ## #102–#108 — board and log housekeeping — status as of 0.10.0
 
 - **#106 — a project rename did not reach its samples or slides · ✅ fixed.**

@@ -318,6 +318,45 @@ const CASES = {
     ],
   },
 
+  // #109 — point the stain control back at the single block.
+  "109-bulk-stain": {
+    grep: "#109: adding a stain applies to every selected block",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /  const stainTargets = removeTargets;/,
+        replace: "  const stainTargets = [sample.id];",
+      },
+    ],
+  },
+
+  // #110 — flag on "has a plan" instead of "a plan was saved", which is what
+  // makes the whole column light up.
+  "110-flag": {
+    grep: "#110: the flag reads needs cut, and a saved plan raises it",
+    edits: [
+      {
+        file: "src/components/SampleCard.tsx",
+        find: /  const needsCut = Boolean\(pendingStainNames\) \|\| sample\.plan_saved === 1;/,
+        replace:
+          "  const needsCut = Boolean(pendingStainNames) || Boolean(sample.sectioning_plan);",
+      },
+    ],
+  },
+
+  // #110 parenthetical — hide Save Plan for a batch again.
+  "110-bulk-save": {
+    grep: "#110: a cutting plan can be saved for a whole selection",
+    edits: [
+      {
+        file: "src/components/SectioningPlanDialog.tsx",
+        find: /        \{onSave && \(\r?\n          <Button variant="subtle" onClick=\{saveDraft\} disabled=\{busy\}>/,
+        replace:
+          "        {onSave && !isBatch && (\n          <Button variant=\"subtle\" onClick={saveDraft} disabled={busy}>",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

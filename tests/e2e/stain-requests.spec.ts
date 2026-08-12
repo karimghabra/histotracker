@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
-// Stain-request cluster (#41 / #62 / #66): the "needs stain" flag on an embedded
+// Stain-request cluster (#41 / #62 / #66): the "needs cut" flag on an embedded
 // block and the Send-for-Cutting prefill are driven by an OUTSTANDING-requests
 // multiset. These validate the two behaviours that were genuinely broken:
 //   1. requesting the same agent twice queues TWO slides (was deduped to one);

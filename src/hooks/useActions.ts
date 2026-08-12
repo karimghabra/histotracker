@@ -481,6 +481,48 @@ export function useActions() {
     [commit],
   );
 
+  /**
+   * Add one agent to EVERY selected block (#109).
+   *
+   * The drawer has always been multi-select — the checklist, Start Run, Delete
+   * and Mark Exhausted all act on the selection — but the stain dropdown read
+   * `sample.id` and quietly did one block, so selecting twelve and asking for
+   * H&E gave you one slide and no hint that the other eleven were skipped.
+   *
+   * A refusal is per-block, not per-batch: an exhausted block with no extras
+   * left legitimately rejects a request (#70), and that must not abandon the
+   * eleven blocks behind it in the loop. Failures are collected and returned so
+   * the caller can name them. Still ONE undo step — the snapshot is taken before
+   * the first write, so Ctrl+Z puts all of it back.
+   */
+  const requestStainForSamples = useCallback(
+    (sampleIds: number[], assayType: "stain" | "ihc", assayName: string) =>
+      commit(
+        sampleIds.length === 1
+          ? `Request ${assayName}`
+          : `Request ${assayName} · ${sampleIds.length} blocks`,
+        async () => {
+          const added: number[] = [];
+          const pulled: number[] = [];
+          const failed: Array<{ sampleId: number; message: string }> = [];
+          for (const sampleId of sampleIds) {
+            try {
+              const result = await requestStainForSampleDb({ sampleId, assayType, assayName });
+              if (result.target === "extra") pulled.push(sampleId);
+              else added.push(sampleId);
+            } catch (error) {
+              failed.push({
+                sampleId,
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          return { added, pulled, failed };
+        },
+      ),
+    [commit],
+  );
+
   const setSlidePicturesTaken = useCallback(
     async (slideId: number, complete: boolean) => {
       const before = await getSlide(slideId);
@@ -717,6 +759,7 @@ export function useActions() {
     assignSlide,
     assignExtraSlide,
     requestStain,
+    requestStainForSamples,
     setSlidePicturesTaken,
     completeSectionImaging,
     moveSlideStacks,

@@ -259,7 +259,7 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
 });
 
 // A viewer's stain request should raise the SAME formal request the bench does:
-// the workstation drains it and flags the block (⚑ needs stain), and that flag
+// the workstation drains it and flags the block (⚑ needs cut, #110), and that flag
 // streams back to the viewer — not just a passive inbox note.
 test("viewer stain request formally flags the block on the workstation", async ({ browser }) => {
   const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `req-${Date.now()}`);
@@ -294,10 +294,11 @@ test("viewer stain request formally flags the block on the workstation", async (
     .selectOption({ index: 1 });
   await vw.getByRole("button", { name: /Send request/ }).click();
 
-  // Workstation drains it → the block is flagged "needs stain" (formal request).
+  // Workstation drains it → the block is flagged "needs cut" (formal request):
+  // the slide that will carry the stain has not been cut yet (#110).
   await expect(async () => {
     await syncNow(ws);
-    await expect(column(ws, "Embedded Inventory").getByText(/needs stain/i)).toBeVisible({ timeout: 3000 });
+    await expect(column(ws, "Embedded Inventory").getByText(/needs cut/i)).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 40000 });
 
   // The request also lands in the workstation inbox.
@@ -306,7 +307,7 @@ test("viewer stain request formally flags the block on the workstation", async (
   await ws.keyboard.press("Escape");
 
   // The flag streams back to the viewer, and the viewer tracks its request.
-  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText(/needs stain/i));
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText(/needs cut/i));
   await vw.getByRole("button", { name: /My requests/ }).click();
   await expect(vw.getByText("EE-1").first()).toBeVisible();
   await vw.screenshot({ path: "test-results/sync-request.png", fullPage: true });

@@ -34,6 +34,9 @@ export interface Sample {
   stains: string;
   overall_notes: string;
   sectioning_plan: string;
+  /** 1 when a cutting plan was deliberately SAVED for this block (#110) —
+   *  derived, not stored; see listOpenSamples. */
+  plan_saved?: number;
   current_stage: string;
 
   stage_received_at: string | null;
