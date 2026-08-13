@@ -101,6 +101,24 @@ export default class Database {
       db.run(sql, normalizeBinds(params) as never);
       instance.persist();
     };
+    // The read counterpart, for the stress suite: it lets a spec check the DATA
+    // after driving the UI, not just what the UI drew. Most of what goes wrong
+    // in a workflow app is invisible on screen — an orphaned slide, a rack left
+    // open with nothing in it, a code issued twice — and only a query finds it.
+    (window as unknown as Record<string, unknown>).__SHIM_SELECT__ = (
+      sql: string,
+      params?: unknown[],
+    ) => {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.bind(normalizeBinds(params));
+        const rows: unknown[] = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        return rows;
+      } finally {
+        stmt.free();
+      }
+    };
     instance.persist();
     return instance;
   }
