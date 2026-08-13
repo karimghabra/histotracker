@@ -1,7 +1,7 @@
 {
   "name": "histometer",
   "private": true,
-  "version": "0.13.2",
+  "version": "0.13.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,9 @@
     "test:ui": "vitest run",
     "dev:browser": "vite --config vite.config.playwright.ts",
     "test:e2e": "playwright test",
+    "test:stress": "playwright test --config playwright.stress.config.ts",
+    "test:stress2": "playwright test --config playwright.stress2.config.ts",
+    "test:stress3": "playwright test --config playwright.stress3.config.ts",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui"
   },

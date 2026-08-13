@@ -826,6 +826,38 @@ function makeApi(db) {
     return stackId;
   }
 
+  // Port of setSlidesDepthTag() — src/lib/db.ts. Removed slides are skipped, not
+  // rejected: this is the one slide mutation that acts on a SELECTION, so one
+  // broken slide must not cost the ten beside it.
+  function setSlidesDepthTag(slideIds, label, note) {
+    if (slideIds.length === 0) return;
+    const marks = slideIds.map(() => "?").join(", ");
+    run(`UPDATE slides SET depth_label = ?, depth_note = ?
+          WHERE id IN (${marks}) AND current_stage <> 'removed'`,
+        [label.trim(), note.trim(), ...slideIds]);
+  }
+
+  // Port of revertSectionToStage() — src/lib/db.ts. Dragging a cut group back to
+  // Needs Sectioning clears stage_cut_at on its slides, so it has to be refused
+  // once any of that glass has actually been worked on: otherwise the slide
+  // asserts it was stained on a day it had not yet been cut.
+  function revertSectionToStage(sectionId, stageKey) {
+    if (stageKey === "needs_sectioning") {
+      const worked = all(
+        `SELECT slide_code FROM slides
+          WHERE section_request_id = ? AND current_stage <> 'removed'
+            AND (stage_stained_at IS NOT NULL OR stage_coverslipped_at IS NOT NULL
+                 OR stage_pictures_taken_at IS NOT NULL)`, [sectionId]);
+      if (worked.length > 0) {
+        throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already stained or imaged`);
+      }
+      run(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [sectionId]);
+      run(`UPDATE slides SET stage_cut_at = NULL WHERE section_request_id = ?`, [sectionId]);
+      return;
+    }
+    run(`UPDATE section_requests SET current_stage = ? WHERE id = ?`, [stageKey, sectionId]);
+  }
+
   // Save the whole assignment set for a section, then move it to staining.
   // Port of updateSectionStage(id, 'stain_requested') — src/lib/db.ts.
   function startAssayWork(sectionId) {
@@ -1175,6 +1207,7 @@ function makeApi(db) {
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     completeStackImaging, relabelSlideToSample, addSlideToSection,
     closeEmptyOpenStacks, closeSlideStack,
+    revertSectionToStage, setSlidesDepthTag,
     tickSectionStainedCheckbox,
     removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
@@ -3522,6 +3555,81 @@ invariant("a rack holding live glass is never retired", () => {
 
   eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [slide.stack]).c, null,
      "closing is refused while a live slide is inside — it would vanish from the board");
+});
+
+
+// ---------------------------------------------------------------------------
+// 0.13.2 — found by the EXPLORER: many walkers plus cross-cutting moves
+// (docs/stress_test_v3.md).
+// ---------------------------------------------------------------------------
+
+invariant("a cut cannot be retracted once the glass has been stained", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "already at the bench");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`, [section]);
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, [now(), slide.id]);
+
+  // Dragging the group back to Needs Sectioning would clear stage_cut_at while
+  // stage_stained_at stands — a slide stained before it existed.
+  let refused = false;
+  try {
+    api.revertSectionToStage(section, "needs_sectioning");
+  } catch {
+    refused = true;
+  }
+  assert(refused, "the revert is refused rather than silently rewriting history");
+
+  const after = api.get(
+    `SELECT stage_cut_at AS cut, stage_stained_at AS stained FROM slides WHERE id = ?`, [slide.id]);
+  assert(after.cut != null, "the cut date survives the refused revert");
+  assert(after.stained != null, "and so does the staining date");
+});
+
+invariant("an untouched cut group can still be dragged back", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "sent by mistake");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+
+  // The guard must not cost the common case: a group sent for cutting by
+  // accident, with nothing done to it yet, still comes straight back.
+  api.revertSectionToStage(section, "needs_sectioning");
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s,
+     "needs_sectioning", "the group returns to the queue");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides
+               WHERE section_request_id = ? AND stage_cut_at IS NOT NULL`, [section]).c, 0,
+     "and no slide is left claiming a cut that was retracted");
+});
+
+invariant("a removed slide cannot be given a depth tag", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "broken glass");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2, stains: "" }]);
+  const slides = api.all(
+    `SELECT id FROM slides WHERE section_request_id = ? ORDER BY id`, [section]);
+  api.removeSlide(slides[0].id, "dropped it");
+
+  // The bulk shape matters: tagging a selection that happens to contain one
+  // broken slide must tag the rest, not fail outright.
+  api.setSlidesDepthTag([slides[0].id, slides[1].id], "surface", "");
+
+  eq(api.get(`SELECT depth_label AS d FROM slides WHERE id = ?`, [slides[0].id]).d, "",
+     "the removed slide keeps no depth it was never cut to");
+  eq(api.get(`SELECT depth_label AS d FROM slides WHERE id = ?`, [slides[1].id]).d, "surface",
+     "and the live slide beside it is tagged as asked");
 });
 
 // ---------------------------------------------------------------------------

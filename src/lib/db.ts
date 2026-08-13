@@ -1259,8 +1259,18 @@ export async function setSlidesDepthTag(
   if (slideIds.length === 0) return;
   const db = await getDb();
   const placeholders = slideIds.map(() => "?").join(", ");
+  // Removed slides are excluded rather than rejected. Every sibling mutation
+  // (setSlidePicturesTaken, reassignSlide, relabelSlideToSample, removeSlide)
+  // refuses a removed slide outright, and this one silently retagged one — a
+  // removed slide is the record of glass that is gone, so its depth can no
+  // longer be established by anyone.
+  //
+  // Skipping rather than throwing because this is the only one of the five that
+  // acts on a SELECTION: a technician tagging eleven slides, one of which was
+  // broken last week, should get the ten tagged, not an error and nothing done.
   await db.execute(
-    `UPDATE slides SET depth_label = ?, depth_note = ? WHERE id IN (${placeholders})`,
+    `UPDATE slides SET depth_label = ?, depth_note = ?
+      WHERE id IN (${placeholders}) AND current_stage <> 'removed'`,
     [label.trim(), note.trim(), ...slideIds],
   );
 }
@@ -4628,6 +4638,38 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
   const db = await getDb();
   const targetOrder = SECTION_STAGE_ORDER[stageKey];
   if (targetOrder === undefined) throw new Error(`Unknown section stage: ${stageKey}`);
+
+  // Retracting the cut is refused once the glass has been worked on.
+  //
+  // Reverting to needs_sectioning clears stage_cut_at on every slide in the
+  // group (below). If one of those slides has already been stained, that leaves
+  // a slide asserting it was stained on a day it had not yet been cut — a
+  // physical impossibility, and one the swarm produced by simply dragging a
+  // group backwards, which is a thing people do on the board every day.
+  //
+  // The alternative fix — cascade the revert and clear the staining dates too —
+  // was rejected: it destroys the record of work that genuinely happened, which
+  // is the one thing this application exists not to do. Once a section is on a
+  // slide and stained, the cut is a fact. Fix the slide (reassign it, or remove
+  // it with a reason), not the history.
+  if (stageKey === "needs_sectioning") {
+    const worked = await db.select<Array<{ slide_code: string }>>(
+      `SELECT slide_code FROM slides
+        WHERE section_request_id = ? AND current_stage <> 'removed'
+          AND (stage_stained_at IS NOT NULL OR stage_coverslipped_at IS NOT NULL
+               OR stage_pictures_taken_at IS NOT NULL)
+        ORDER BY slide_ordinal, id`,
+      [id],
+    );
+    if (worked.length > 0) {
+      const codes = worked.map((row) => displayCode(row.slide_code)).join(", ");
+      throw new Error(
+        `${codes} ${worked.length === 1 ? "has" : "have"} already been stained or imaged, so ` +
+          `this cut cannot be retracted. Reassign or remove the slide instead.`,
+      );
+    }
+  }
+
   const clear = SECTION_STAGES.filter((s) => SECTION_STAGE_ORDER[s.key] > targetOrder).map(
     (s) => s.column,
   );

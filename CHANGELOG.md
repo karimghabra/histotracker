@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.13.3 - unreleased
+
+No schema change. A third stress harness — **the explorer** — which does the one
+thing the second one couldn't: it *looks at the screen*. Ten walkers, twenty move
+types, and every few rounds the board and the Logs are opened and compared with
+counts recomputed from the database. Full account in `docs/stress_test_v3.md`.
+
+The wider point of v3 is that the previous harness only ever moved *along* the
+slide lifecycle, which is the part of the app the tests were already thinking
+about. These walkers move *across* it — archiving a block mid-cut, renaming a
+project while its codes are in use, retiring an agent that open racks depend on,
+reverting a block's stage while its slides are downstream — and they press the
+real Undo and Redo buttons, hundreds of times.
+
+- **A cut could be retracted after the glass had already been stained.** Dragging
+  a cut group back to Needs Sectioning strips the cut date from its slides, which
+  is right when the group was sent by mistake and wrong once someone has actually
+  stained one — it left a slide whose record said it was stained on a day it had
+  not yet been cut. The drag is now refused, naming the slides, with the honest
+  alternative: reassign the slide, or remove it with a reason. Cascading the
+  revert and wiping the staining dates was the other option and was rejected —
+  once a section is on a slide and stained, the cut is a fact. A group nobody has
+  touched still comes straight back, and there is a test insisting on that too.
+- **A removed slide could still be given a depth tag.** Every other slide action
+  refuses a slide that has been removed; this one quietly retagged it. It now
+  skips removed slides instead of failing, so tagging eleven slides when one of
+  them broke last week still tags the other ten.
+- **Undo and redo were put through a whole-database comparison** rather than a
+  spot check: 24 single-move round-trips and a 31-move storm all the way back and
+  all the way forward, every one byte-identical. Nothing to fix — but that is now
+  a fact rather than an assumption.
+
+Also fixed in the harnesses themselves, because both produced confident and
+completely false alarms: the stress suites no longer reuse a running dev server
+(a hot-reloaded one serves two copies of the database layer, which made redo look
+like it wiped everything), and the view checks now force a real refresh before
+reading the screen.
+
 ## 0.13.2 - unreleased
 
 No schema change. Six more defects, found by pointing **many random walkers at
