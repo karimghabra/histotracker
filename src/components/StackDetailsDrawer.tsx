@@ -73,6 +73,15 @@ export function StackDetailsDrawer({
   );
   const imagedCount = slides.filter((slide) => Boolean(slide.stage_pictures_taken_at)).length;
 
+  // A stack can hold glass in different states — a late arrival from a second
+  // rack, or a slide moved in that was already stained (#115). The stack's own
+  // protocol is one state for all of them, so these two counts are what tells
+  // the operator that the card and the glass do not agree.
+  const liveSlides = slides.filter((slide) => slide.current_stage !== "removed");
+  const unimagedSlides = liveSlides.filter((slide) => !slide.stage_pictures_taken_at);
+  const stainedCount = liveSlides.filter((slide) => Boolean(slide.stage_stained_at)).length;
+  const mixedStaining = stainedCount > 0 && stainedCount < liveSlides.length;
+
   // The aggregate stack row loses the pre-imaging stamps (Stained/Coverslipped/
   // Dried…) when a stain rack scatters into a per-sample imaging stack — the old
   // rack is deleted and only the new stage is stamped. The SLIDES keep their own
@@ -159,6 +168,17 @@ export function StackDetailsDrawer({
               )}
             </div>
           </div>
+          {/* Say it out loud when the rack holds glass at different points. This
+              happens legitimately — a slide moved in from another agent brings
+              its staining with it (#115) — but the rack's own protocol below
+              reports a single state, so without this the two simply disagree
+              and the reader has to guess which is true. */}
+          {mixedStaining && (
+            <p className="mb-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+              {stainedCount} of {liveSlides.length} slides here were already stained — the protocol
+              below tracks this rack, not those slides. Their own dates are shown beside them.
+            </p>
+          )}
           {!readOnly && selectingSlides && (
             <Button
               variant="subtle"
@@ -205,6 +225,16 @@ export function StackDetailsDrawer({
                     <span className="block truncate text-[10px] text-ink-faint">
                       {slide.assay_name || slide.stain_name}{slide.parent_code ? ` | ${displayCode(slide.parent_code)}` : ""}
                     </span>
+                    {/* Per-slide truth, beside the slide. The protocol checklist
+                        below is ONE state for the whole rack, which cannot say
+                        that this slide arrived already stained (or that it did
+                        not) — and a rack reading "0/2 complete" over a stained
+                        slide is the kind of contradiction nobody reconciles. */}
+                    {slide.stage_stained_at && (
+                      <span className="block truncate text-[10px] text-brand">
+                        Stained {slide.stage_stained_at.slice(0, 10)}
+                      </span>
+                    )}
                   </span>
                   <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>
                   {/* Reassign, even from here (#115). A slide can be put on the
@@ -328,7 +358,22 @@ export function StackDetailsDrawer({
               <CheckCircle2 size={15} /> Workflow In Progress
             </Button>
           ) : stack.current_stage === "ready_for_imaging" ? (
-            <Button variant="primary" className="flex-1" onClick={() => void run(() => completeSlideStacksImaging(imagingIds))}>
+            <Button
+              variant="primary"
+              className="flex-1"
+              // Disabled rather than refused after the click: the data layer
+              // still refuses (that is the guarantee), but a button that cannot
+              // work should say so before it is pressed.
+              disabled={unimagedSlides.length > 0}
+              title={
+                unimagedSlides.length > 0
+                  ? `${unimagedSlides
+                      .map((slide) => displayCode(slide.slide_code))
+                      .join(", ")} ${unimagedSlides.length === 1 ? "has" : "have"} no images captured yet.`
+                  : "Record this stack's imaging as finished"
+              }
+              onClick={() => void run(() => completeSlideStacksImaging(imagingIds))}
+            >
               <CheckCircle2 size={15} /> {imagingIds.length > 1 ? `Complete Imaging (${imagingIds.length})` : "Complete Imaging"}
             </Button>
           ) : (

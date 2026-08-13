@@ -295,6 +295,20 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await page.screenshot({ path: "test-results/stack-timeline.png" });
 
   // Complete Imaging → Mark Analyzed → the slide is analyzed.
+  // Tick each slide's "images captured" first: completing imaging no longer
+  // back-fills a stamp for glass nobody photographed, so the button stays
+  // disabled until the record says what was actually done.
+  {
+    const boxes = page.getByRole("checkbox", { name: /^Images captured for / });
+    // Wait for the drawer's slides to arrive first: ticking nothing because the
+    // list had not loaded yet leaves the button disabled, which then looks like
+    // a product bug rather than a race in the test.
+    await expect(boxes.first()).toBeVisible();
+    for (let i = 0; i < (await boxes.count()); i += 1) {
+      const box = boxes.nth(i);
+      if (!(await box.isChecked())) await box.check();
+    }
+  }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
 
@@ -339,6 +353,20 @@ test("Logs status partition + CSV export", async ({ page }) => {
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
   await imaging.getByText("EE-1", { exact: true }).first().click();
+  // Tick each slide's "images captured" first: completing imaging no longer
+  // back-fills a stamp for glass nobody photographed, so the button stays
+  // disabled until the record says what was actually done.
+  {
+    const boxes = page.getByRole("checkbox", { name: /^Images captured for / });
+    // Wait for the drawer's slides to arrive first: ticking nothing because the
+    // list had not loaded yet leaves the button disabled, which then looks like
+    // a product bug rather than a race in the test.
+    await expect(boxes.first()).toBeVisible();
+    for (let i = 0; i < (await boxes.count()); i += 1) {
+      const box = boxes.nth(i);
+      if (!(await box.isChecked())) await box.check();
+    }
+  }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
   // Marking analyzed removes the stack from the board and auto-closes its drawer.

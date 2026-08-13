@@ -481,7 +481,7 @@ test("merge: per-sample stacks converge at imaging, including a half-imaged one"
         }
       }
       const done = page.getByRole("button", { name: /Complete Imaging|Analyz/ });
-      if (await done.count()) {
+      if ((await done.count()) && (await done.first().isEnabled())) {
         await done.first().click();
         acted += 1;
       }

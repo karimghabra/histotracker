@@ -226,7 +226,7 @@ test("matrix: purpose, reassignment, depth tags, removal and undo at every slide
         }
       }
       const done = page.getByRole("button", { name: /Complete Imaging|Analyz/ });
-      if (await done.count()) {
+      if ((await done.count()) && (await done.first().isEnabled())) {
         await done.first().click();
         acted += 1;
       }

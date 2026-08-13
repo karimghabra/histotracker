@@ -10,11 +10,21 @@ export function StackCard({
   selected = false,
   onSelect,
   overlay = false,
+  laterRackFor,
 }: {
   stack: SlideStack;
   selected?: boolean;
   onSelect?: (id: number, event: MouseEvent<HTMLDivElement>) => void;
   overlay?: boolean;
+  /**
+   * True when an OLDER open rack for the same agent already exists.
+   *
+   * Two racks for one agent is correct — a rack that has begun its protocol
+   * cannot take newcomers (#81), so the next slide starts a fresh one — but on
+   * the board it just looked like a duplicate, with nothing to say which was
+   * which or why. Saying it is the difference between a rule and a glitch.
+   */
+  laterRackFor?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `stack-${stack.id}`,
@@ -63,6 +73,14 @@ export function StackCard({
         {stack.kind === "stain" && (
           <span className="rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
             {memberSampleCount} {memberSampleCount === 1 ? "sample" : "samples"}
+          </span>
+        )}
+        {laterRackFor && (
+          <span
+            className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800"
+            title="An earlier rack for this agent has already started its protocol, so it can no longer take new slides. These went into a fresh rack."
+          >
+            new rack
           </span>
         )}
         {stack.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}

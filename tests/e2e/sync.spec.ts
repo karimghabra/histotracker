@@ -237,6 +237,20 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
 
   // 8. Analyzed (complete imaging + mark analyzed) → shows in the viewer's Logs.
   await column(ws, "Ready for Imaging").getByText("EE-1", { exact: true }).first().click();
+  // Tick each slide's "images captured" first: completing imaging no longer
+  // back-fills a stamp for glass nobody photographed, so the button stays
+  // disabled until the record says what was actually done.
+  {
+    const boxes = ws.getByRole("checkbox", { name: /^Images captured for / });
+    // Wait for the drawer's slides to arrive first: ticking nothing because the
+    // list had not loaded yet leaves the button disabled, which then looks like
+    // a product bug rather than a race in the test.
+    await expect(boxes.first()).toBeVisible();
+    for (let i = 0; i < (await boxes.count()); i += 1) {
+      const box = boxes.nth(i);
+      if (!(await box.isChecked())) await box.check();
+    }
+  }
   await ws.getByRole("button", { name: /Complete Imaging/ }).click();
   await ws.getByRole("button", { name: /Mark Analyzed/ }).click();
   // Analyzed is terminal — the stack leaves the board; wait for that on the

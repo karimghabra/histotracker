@@ -263,7 +263,7 @@ test("fill: three projects, bulk intake, full pipeline, integrity at every junct
       }
 
       const analyzed = page.getByRole("button", { name: /Complete Imaging|Analyz/ });
-      if (await analyzed.count()) {
+      if ((await analyzed.count()) && (await analyzed.first().isEnabled())) {
         await analyzed.first().click();
         acted += 1;
       } else if (pass === 0) {

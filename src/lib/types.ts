@@ -158,6 +158,17 @@ export interface Slide {
   control_agent: string;
   assay_type: "" | "stain" | "ihc";
   assay_name: string;
+  /**
+   * What the slide was ASKED for, as against what it turned out to be.
+   *
+   * Written once when the slide is planned, cut, or pulled from extras for an
+   * agent; never rewritten by a later correction. Where these differ from
+   * `assay_*`, something was put right at the bench and both halves survive —
+   * which is the difference between "the PAS was done" and "a PAS was ordered,
+   * an H&E was made, and the PAS is still owed".
+   */
+  requested_assay_type: "" | "stain" | "ihc";
+  requested_assay_name: string;
   assignment_saved: number;
   current_stage: string;
   stage_cut_at: string | null;

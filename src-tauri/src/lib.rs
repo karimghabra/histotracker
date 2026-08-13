@@ -160,6 +160,12 @@ pub fn run() {
             sql: include_str!("../migrations/0023_slide_sequence_and_archive.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 24,
+            description: "slide_requested_assay",
+            sql: include_str!("../migrations/0024_slide_requested_assay.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

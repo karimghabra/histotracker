@@ -419,10 +419,14 @@ function makeApi(db) {
         const slideCode = `${parentCode}-${duplicateLabel(nextOrdinal).toUpperCase()}`;
         if (preassigned) {
           run(
+            // requested_* is the ORDER, written once and never rewritten by a
+            // correction — mirrors createSectionRequests in db.ts.
             `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
-               assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
-             VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
-            [sectionId, ordinal, slideCode, g.assay_name, g.assay_type, g.assay_name],
+               assay_type, assay_name, requested_assay_type, requested_assay_name,
+               assignment_saved, slice_count, control_agent, current_stage)
+             VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
+            [sectionId, ordinal, slideCode, g.assay_name, g.assay_type, g.assay_name,
+             g.assay_type, g.assay_name],
           );
         } else {
           // Extras are a saved disposition chosen at cut time (issues #34/#38).
@@ -948,14 +952,32 @@ function makeApi(db) {
   // green twice: every gate exercised the rack checkbox, so the rack's columns
   // were always the ones set, and a rack lookup keyed on those columns looked
   // correct. Mirroring it is what makes the gate below able to fail.
-  function tickSectionStainedCheckbox(sectionRequestId, assayType = "stain") {
-    const ts = now();
-    run(
-      `UPDATE slides SET stage_stained_at = ?
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [ts, sectionRequestId, assayType]);
+  function tickSectionStainedCheckbox(sectionRequestId, assayType = "stain", complete = true) {
+    const ts = complete ? now() : null;
     const sectionColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
-    run(`UPDATE section_requests SET ${sectionColumn} = ? WHERE id = ?`, [ts, sectionRequestId]);
+    if (complete) {
+      // COALESCE, not a bare SET: a slide can arrive already stained (moved in
+      // from another rack, #115), and a later group tick must not rewrite the
+      // date that says when that glass was actually stained.
+      run(
+        `UPDATE slides SET stage_stained_at = COALESCE(stage_stained_at, ?)
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [ts, sectionRequestId, assayType]);
+      run(`UPDATE section_requests SET ${sectionColumn} = COALESCE(${sectionColumn}, ?) WHERE id = ?`,
+        [ts, sectionRequestId]);
+    } else {
+      // Untick clears only what THIS group stamped, matched by its own value.
+      const stamp = get(`SELECT ${sectionColumn} AS stamp FROM section_requests WHERE id = ?`,
+        [sectionRequestId])?.stamp ?? null;
+      if (stamp !== null) {
+        run(
+          `UPDATE slides SET stage_stained_at = NULL
+            WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?
+              AND stage_stained_at = ?`,
+          [sectionRequestId, assayType, stamp]);
+      }
+      run(`UPDATE section_requests SET ${sectionColumn} = NULL WHERE id = ?`, [sectionRequestId]);
+    }
   }
 
   // Port of syncAssayStackWorkflowStep() step 0 — src/lib/db.ts. This is the
@@ -963,14 +985,148 @@ function makeApi(db) {
   // substage timestamp and leaves current_stage at 'stain_requested' (the stack
   // only advances once every checklist step is ticked), which is precisely why
   // the rack lookup cannot key off current_stage alone (issue #81).
-  function tickStainedCheckbox(stackId, assayType = "stain") {
-    const ts = now();
-    run(
-      `UPDATE slides SET stage_stained_at = ?
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [ts, stackId, assayType]);
+  function tickStainedCheckbox(stackId, assayType = "stain", complete = true) {
+    const ts = complete ? now() : null;
     const stackColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
-    run(`UPDATE slide_stacks SET ${stackColumn} = ? WHERE id = ?`, [ts, stackId]);
+    if (complete) {
+      run(
+        `UPDATE slides SET stage_stained_at = COALESCE(stage_stained_at, ?)
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [ts, stackId, assayType]);
+      run(`UPDATE slide_stacks SET ${stackColumn} = COALESCE(${stackColumn}, ?) WHERE id = ?`,
+        [ts, stackId]);
+    } else {
+      const stamp = get(`SELECT ${stackColumn} AS stamp FROM slide_stacks WHERE id = ?`,
+        [stackId])?.stamp ?? null;
+      if (stamp !== null) {
+        run(
+          `UPDATE slides SET stage_stained_at = NULL
+            WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ? AND stage_stained_at = ?`,
+          [stackId, assayType, stamp]);
+      }
+      run(`UPDATE slide_stacks SET ${stackColumn} = NULL WHERE id = ?`, [stackId]);
+    }
+  }
+
+  /**
+   * Port of the `pictures_taken` guard in updateSlideStackStage() — src/lib/db.ts.
+   *
+   * A per-sample stack keeps accepting slides after its imaging session, because
+   * `idx_slide_stacks_sample_stage` makes one open stack per (sample, stage) a
+   * UNIQUE constraint — a late arrival has nowhere else to go. Advancing the
+   * stack used to stamp every member, so glass that arrived after the operator
+   * left the microscope was recorded as photographed.
+   */
+  function completeStackImaging(stackId) {
+    const unimaged = all(
+      `SELECT slide_code FROM slides
+        WHERE stack_id = ? AND purpose = 'stain' AND current_stage <> 'removed'
+          AND stage_pictures_taken_at IS NULL`,
+      [stackId]);
+    if (unimaged.length > 0) {
+      throw new Error(`${unimaged.map((r) => r.slide_code).join(", ")} has no images captured yet.`);
+    }
+    return moveSlideStack(stackId, "pictures_taken");
+  }
+
+  /**
+   * Port of relabelSlideToSample() — src/lib/db.ts.
+   *
+   * The glass keeps every stamp it earned; only the block it is filed under
+   * changes, and it takes a fresh code from THAT block's sequence. The letter it
+   * vacated stays burned on the old block (#73), and both blocks record it.
+   */
+  function relabelSlideToSample(slideId, targetSampleId, reason) {
+    if (!reason || !reason.trim()) throw new Error("A relabel needs a reason.");
+    const slide = get(
+      `SELECT sl.slide_code AS code, sl.assay_type AS at, sl.assay_name AS an,
+              sl.current_stage AS stage, sl.section_request_id AS section, sr.sample_id AS sample
+         FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+        WHERE sl.id = ?`, [slideId]);
+    if (!slide) throw new Error("That slide no longer exists.");
+    if (slide.stage === "removed") throw new Error("That slide was removed.");
+    if (slide.sample === targetSampleId) throw new Error("Already filed under this block.");
+    const target = get(`SELECT sample_code AS code FROM samples WHERE id = ?`, [targetSampleId]);
+    if (!target) throw new Error("That block no longer exists.");
+
+    // A cut group names its agent in `stains`; assay_type/assay_name live on the
+    // SLIDES. Mirrors relabelSlideToSample in db.ts.
+    const agent = (slide.an ?? "").trim();
+    let group = get(
+      `SELECT id FROM section_requests
+        WHERE sample_id = ? AND COALESCE(stains, '') = ? ORDER BY id LIMIT 1`,
+      [targetSampleId, agent])?.id ?? null;
+    if (group == null) {
+      group = Number(run(
+        `INSERT INTO section_requests
+          (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at, stage_sectioned_at)
+         VALUES (?, 0, ?, 'sectioned', ?, ?)`,
+        [targetSampleId, agent, now(), now()]).lastInsertRowid);
+    }
+    const letter = nextSlideLetter(targetSampleId);
+    const newCode = `${target.code}-${duplicateLabel(letter).toUpperCase()}`;
+    const ordinal = (get(
+      `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
+      [group]).next) ?? 1;
+    run(`UPDATE slides SET section_request_id = ?, slide_ordinal = ?, slide_code = ? WHERE id = ?`,
+      [group, ordinal, newCode, slideId]);
+    recordSlidesIssued(targetSampleId, letter);
+    recordSlidesIssued(slide.sample, nextSlideLetter(slide.sample) - 1);
+    for (const [sample, type] of [[slide.sample, "slide_relabelled_out"], [targetSampleId, "slide_relabelled_in"]]) {
+      run(
+        `INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [sample, type, `${slide.code} → ${newCode}`,
+         JSON.stringify({ from_code: slide.code, to_code: newCode, reason: reason.trim() }), now()]);
+    }
+  }
+
+  /**
+   * Port of addSlideToSection() — src/lib/db.ts. One more section off the same
+   * ribbon, joining the group where it is: cut if the group has been cut.
+   */
+  function addSlideToSection(sectionId, target) {
+    const section = get(
+      `SELECT sr.sample_id AS sample, s.sample_code AS code,
+              (SELECT MAX(sl.stage_cut_at) FROM slides sl WHERE sl.section_request_id = sr.id) AS cut
+         FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`,
+      [sectionId]);
+    if (!section) throw new Error("That cut group no longer exists.");
+    const letter = nextSlideLetter(section.sample);
+    const code = `${section.code}-${duplicateLabel(letter).toUpperCase()}`;
+    const ordinal = (get(
+      `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
+      [sectionId]).next) ?? 1;
+    const ts = now();
+    const alreadyCut = Boolean(section.cut);
+    if (target && target.extra) {
+      run(
+        `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose,
+           assignment_saved, current_stage, stage_cut_at)
+         VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
+        [sectionId, ordinal, code, alreadyCut ? ts : null]);
+    } else {
+      let stackId = null;
+      if (alreadyCut) {
+        const open = openStainRack(target.assayType, target.assayName);
+        stackId = open
+          ? open.id
+          : Number(run(
+              `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+               VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+              [target.assayType, target.assayName, ts]).lastInsertRowid);
+      }
+      run(
+        `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+           assay_type, assay_name, requested_assay_type, requested_assay_name,
+           assignment_saved, slice_count, control_agent, current_stage, stack_id,
+           stage_cut_at, stage_stain_requested_at)
+         VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, ?, ?, ?)`,
+        [sectionId, ordinal, code, target.assayName, target.assayType, target.assayName,
+         target.assayType, target.assayName, alreadyCut ? "stain_requested" : "assigned",
+         stackId, alreadyCut ? ts : null, alreadyCut ? ts : null]);
+    }
+    recordSlidesIssued(section.sample, letter);
   }
 
   return {
@@ -979,6 +1135,7 @@ function makeApi(db) {
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
+    completeStackImaging, relabelSlideToSample, addSlideToSection,
     tickSectionStainedCheckbox,
     removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
@@ -2992,10 +3149,177 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
   const converged = [
     /ensureColumn\(\s*db,\s*"slides",\s*"stage_deparaffinized_at"/,
     /ensureColumn\(\s*db,\s*"samples",\s*"preselected_stains"/,
+    // 0024 — read on every slide row in the Logs, so an older image opened by
+    // this build would break outright without them.
+    /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_type"/,
+    /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_name"/,
   ];
   for (const re of converged) {
     assert(re.test(db), `ensureRuntimeSchema must converge ${re}`);
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// 0.13.0 — the record must match the work that was actually done.
+// Found by the stress suite (docs/stress_test_0_12_0.md), not by a report.
+// ---------------------------------------------------------------------------
+
+invariant("a rack's protocol tick never rewrites a slide's earlier stain date", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "already stained");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id FROM slides WHERE section_request_id = ? AND assay_name = 'H&E'`,
+    [section]);
+
+  // The state #115 makes easy to reach: glass stained on an earlier day that
+  // now sits in a rack somebody else is about to tick.
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, ["2020-01-02 09:00", slide.id]);
+  api.tickStainedCheckbox(slide.stack_id, "stain");
+
+  eq(api.get(`SELECT stage_stained_at AS at FROM slides WHERE id = ?`, [slide.id]).at,
+     "2020-01-02 09:00",
+     "the day that glass was actually stained survives a later rack tick");
+});
+
+invariant("unticking a rack's step clears only the slides that rack stamped", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "mixed rack");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slides = api.all(
+    `SELECT id, stack_id FROM slides WHERE section_request_id = ? AND assay_name = 'H&E' ORDER BY id`,
+    [section]);
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, ["2020-01-02 09:00", slides[0].id]);
+
+  api.tickStainedCheckbox(slides[0].stack_id, "stain");
+  api.tickStainedCheckbox(slides[0].stack_id, "stain", false);
+
+  eq(api.get(`SELECT stage_stained_at AS at FROM slides WHERE id = ?`, [slides[0].id]).at,
+     "2020-01-02 09:00",
+     "the older date is not collateral damage of an untick");
+  eq(api.get(`SELECT stage_stained_at AS at FROM slides WHERE id = ?`, [slides[1].id]).at, null,
+     "…while the slide this rack DID stamp is cleared");
+});
+
+invariant("completing imaging refuses a stack holding glass with no images", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "half imaged");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slides = api.all(
+    `SELECT id, stack_id FROM slides WHERE section_request_id = ? AND assay_name = 'H&E' ORDER BY id`,
+    [section]);
+  const stack = slides[0].stack_id;
+  api.moveSlideStack(stack, "ready_for_imaging");
+  // One photographed, one not — exactly what a late arrival produces, since the
+  // UNIQUE index on (sample, stage) leaves it nowhere else to go.
+  api.run(`UPDATE slides SET stage_pictures_taken_at = ? WHERE id = ?`, [now(), slides[0].id]);
+
+  let refused = false;
+  try {
+    api.completeStackImaging(stack);
+  } catch {
+    refused = true;
+  }
+  assert(refused, "the stack cannot be completed while a member has no images");
+  eq(api.get(`SELECT stage_pictures_taken_at AS at FROM slides WHERE id = ?`, [slides[1].id]).at, null,
+     "and no photograph is invented for the slide that was never ticked");
+});
+
+invariant("what a slide was asked for survives being corrected to what it is", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "wrong dish");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "PAS", assay_type: "stain", assay_name: "PAS" },
+  ]);
+  const slide = api.get(
+    `SELECT id FROM slides WHERE section_request_id = ? AND assay_name = 'PAS'`, [section]);
+  eq(api.get(`SELECT requested_assay_name AS n FROM slides WHERE id = ?`, [slide.id]).n, "PAS",
+     "the order is recorded when the slide is planned");
+
+  api.startAssayWork(section);
+  api.reassignSlide(slide.id, { assayType: "stain", assayName: "H&E" });
+
+  const after = api.get(
+    `SELECT assay_name AS is_now, requested_assay_name AS was_asked FROM slides WHERE id = ?`,
+    [slide.id]);
+  eq(after.is_now, "H&E", "the slide says what the glass actually is");
+  eq(after.was_asked, "PAS",
+     "…and still says what was ordered, so the PAS is visibly still owed");
+});
+
+invariant("a slide can be relabelled onto the block it really came from", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const wrong = api.addSample(p, "EE", "wrong block").id;
+  const right = api.addSample(p, "EE", "right block").id;
+  api.markEmbedded(wrong);
+  api.markEmbedded(right);
+  const [section] = api.createSectionRequests(wrong, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, slide_code AS code FROM slides WHERE section_request_id = ?`, [section]);
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, ["2026-01-01 10:00", slide.id]);
+  const burned = api.nextSlideLetter(wrong);
+
+  api.relabelSlideToSample(slide.id, right, "mislabelled at the microtome");
+
+  const moved = api.get(
+    `SELECT sl.slide_code AS code, sr.sample_id AS sample, sl.stage_stained_at AS stained
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.id = ?`, [slide.id]);
+  eq(moved.sample, right, "the slide is filed under the correct block");
+  const rightCode = api.get(`SELECT sample_code AS c FROM samples WHERE id = ?`, [right]).c;
+  assert(moved.code.startsWith(rightCode),
+     "…under a code from that block's own sequence");
+  eq(moved.stained, "2026-01-01 10:00", "and every stamp the glass earned is untouched");
+  eq(api.nextSlideLetter(wrong), burned,
+     "the letter it vacated stays burned on the old block");
+  eq(api.all(`SELECT 1 FROM sample_timeline_events WHERE event_type LIKE 'slide_relabelled%'`).length, 2,
+     "both blocks record the correction");
+});
+
+invariant("a good ribbon can add one more slide to a cut that already happened", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "generous ribbon");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const before = api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [section]).length;
+  const letterBefore = api.nextSlideLetter(id);
+
+  api.addSlideToSection(section, { extra: true });
+
+  const after = api.all(
+    `SELECT slide_code AS code, purpose, stage_cut_at AS cut FROM slides
+      WHERE section_request_id = ? ORDER BY id`, [section]);
+  eq(after.length, before + 1, "the group holds one more slide");
+  eq(after[after.length - 1].purpose, "extra", "…as an extra");
+  assert(after[after.length - 1].cut != null,
+     "and it is cut, because the group it joined had already been cut");
+  eq(api.nextSlideLetter(id), letterBefore + 1, "it consumed exactly one letter");
 });
 
 // ---------------------------------------------------------------------------

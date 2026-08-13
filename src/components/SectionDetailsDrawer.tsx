@@ -115,7 +115,14 @@ export function SectionDetailsDrawer({
     assignSlide,
     setSlidePicturesTaken,
     completeSectionImaging,
+    addSlideToSection,
   } = useActions();
+  // One more section off the same ribbon. The block often gives a better ribbon
+  // than the plan asked for, and the only way to record the extra slide used to
+  // be a whole new cutting plan — which says a second trip to the microtome
+  // happened on a later date, which is not what happened.
+  const [addChoice, setAddChoice] = useState("");
+  const [addFlash, setAddFlash] = useState<string | null>(null);
   // A viewer reads the cutting plan and its progress, but drives none of it (#72).
   const readOnly = useReadOnly();
   // A Needs-Sectioning card groups every cut group of a sample, so the drawer
@@ -247,6 +254,68 @@ export function SectionDetailsDrawer({
             users see cutting plans", and this is the cutting plan. Only the
             controls inside are disabled. Hiding the whole block, as the first
             pass did, took away a read the viewer is explicitly promised. */}
+        {!readOnly && (
+          <section className="mb-4 rounded-lg border border-line bg-surface px-2.5 py-2">
+            <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
+              One more off this ribbon
+            </h3>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <select
+                aria-label="Add another slide to this cut"
+                value={addChoice}
+                onChange={(event) => setAddChoice(event.target.value)}
+                className="min-w-0 flex-1 rounded border border-line bg-white px-1.5 py-1 text-xs text-ink outline-none focus:border-brand"
+              >
+                <option value="">Add a slide…</option>
+                <option value="extra">Extra (no stain)</option>
+                <optgroup label="Stains">
+                  {assayCatalog
+                    .filter((entry) => entry.assay_type === "stain")
+                    .map((entry) => (
+                      <option key={`stain-${entry.name}`} value={`stain::${entry.name}`}>
+                        {entry.name}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="IHC">
+                  {assayCatalog
+                    .filter((entry) => entry.assay_type === "ihc")
+                    .map((entry) => (
+                      <option key={`ihc-${entry.name}`} value={`ihc::${entry.name}`}>
+                        {entry.name}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+              <Button
+                variant="subtle"
+                className="px-2 py-1 text-xs"
+                disabled={!addChoice}
+                onClick={async () => {
+                  try {
+                    const [type, name] = addChoice.split("::");
+                    await addSlideToSection(
+                      section.id,
+                      type === "extra" ? { extra: true } : { assayType: type as "stain" | "ihc", assayName: name },
+                    );
+                    setAddChoice("");
+                    setAddFlash("Added to this cut.");
+                  } catch (error) {
+                    setAddFlash(error instanceof Error ? error.message : String(error));
+                  }
+                }}
+              >
+                Add
+              </Button>
+            </div>
+            {addFlash && (
+              <p role="status" className="mt-1 text-[11px] text-brand">
+                {addFlash}
+              </p>
+            )}
+          </section>
+        )}
+
         {showAssignments && (
           <section className="mb-5">
             <div className="mb-2 flex items-center justify-between">

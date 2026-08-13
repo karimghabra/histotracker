@@ -10,6 +10,8 @@ import {
   removeSamples as removeSamplesDb,
   removeSlide,
   reassignSlide as reassignSlideDb,
+  addSlideToSection as addSlideToSectionDb,
+  relabelSlideToSample as relabelSlideToSampleDb,
   closeSlideStack,
   closeSlideStackIfEmpty,
   removeSectionRequestIfEmpty,
@@ -534,6 +536,33 @@ export function useActions() {
     [commit],
   );
 
+  /**
+   * One more slide off the same ribbon, into a group that already exists.
+   *
+   * The alternative was a whole new cutting plan, which records a second trip to
+   * the microtome that never happened.
+   */
+  const addSlideToSection = useCallback(
+    (
+      sectionId: number,
+      target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
+    ) =>
+      commit(
+        "extra" in target ? "Add an extra slide to this cut" : `Add a ${target.assayName} slide to this cut`,
+        () => addSlideToSectionDb(sectionId, target),
+      ),
+    [commit],
+  );
+
+  /** File a slide under the block it actually came from, with a reason (C4). */
+  const relabelSlideToSample = useCallback(
+    (slideId: number, targetSampleId: number, reason: string) =>
+      commit("Relabel a slide onto another block", () =>
+        relabelSlideToSampleDb(slideId, targetSampleId, reason),
+      ),
+    [commit],
+  );
+
   /** Move a slide to a different agent, or back to extras (#115). */
   const reassignSlide = useCallback(
     (
@@ -785,6 +814,8 @@ export function useActions() {
     requestStain,
     requestStainForSamples,
     reassignSlide,
+    addSlideToSection,
+    relabelSlideToSample,
     withdrawStainRequest,
     setSlidePicturesTaken,
     completeSectionImaging,

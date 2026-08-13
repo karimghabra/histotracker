@@ -375,6 +375,77 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## 0.13.0 — the record must match the work that was done
+
+Not from a report: from a deep stress test of 0.12.0
+(`docs/stress_test_0_12_0.md`). Nothing crashed. Everything below is a place
+where the database said something that did not happen, or a correction the bench
+needs and the model could not express.
+
+**Schema change — migration 0024.** Two additive columns on `slides`. Per
+`shared_data_sync.md` §1 this needs every instance on the same build.
+
+### Four ways the record drifted from the work
+
+1. **A rack tick rewrote slide stain dates.** `syncAssayStackWorkflowStep` issued
+   a bare `SET stage_stained_at = ?` across every member. Since #115 lets a slide
+   move between racks, a slide stained days earlier could be restamped with
+   today — demonstrated by planting `2020-01-02` and watching it become today.
+   Ticking now `COALESCE`s. **Unticking** was worse: it nulled the column for the
+   whole rack, including dates the rack never wrote; it now clears only the slides
+   carrying that rack's own stamp. Fixed in BOTH checkbox paths — the rack drawer
+   and the cut-group drawer — because fixing one and not the other is exactly the
+   shape #81 was reported in twice.
+2. **Completing imaging stamped slides nobody photographed.** The per-sample
+   stack keeps accepting late arrivals; `idx_slide_stacks_sample_stage` makes one
+   open stack per (sample, stage) a UNIQUE constraint, so there is nowhere else
+   for them to go. Advancing the stack stamped every member. It is now refused,
+   naming the glass, at the data layer and on a disabled button.
+   *Worth knowing:* four existing e2e tests broke on this fix, because they
+   pressed Complete Imaging without ticking anything — they had been depending on
+   the back-fill.
+3. **A rack could not say what it held.** One panel showed `Protocol v1 · 0/2
+   complete`, a stack timeline reading `Stained`, and a database holding one
+   stained and one unstained slide. Each slide now shows its own stained date, and
+   the panel says when the rack is a mixture.
+4. **A second rack for one agent looked like a duplicate.** It is the #81 guard
+   working — a rack that has begun its protocol cannot take newcomers — so the
+   later rack is now labelled *new rack* with the reason on hover.
+
+### Five corrections the bench needs
+
+- **Requested vs applied (migration 0024).** `assay_name` held both the order and
+  the result, so correcting a slide erased the order and the block stopped
+  looking like it still owed a PAS. `requested_assay_type` / `requested_assay_name`
+  are written once — at plan, at cut, or when an extra is pulled for an agent —
+  and never touched by a correction. The Logs marks a divergence *asked for PAS*.
+- **Refile a slide onto the right block.** Nothing could change
+  `slides.section_request_id`, so a mislabelled slide could only be removed and
+  re-cut. `relabelSlideToSample` moves it: the glass keeps every stamp, takes a
+  fresh code from the correct block's sequence, the vacated letter stays burned
+  (#73), and both blocks get a timeline event with the reason.
+  *The policy call:* a slide is filed under the block it came from, not the block
+  it was written up as, and the correction is part of the record rather than a
+  quiet edit.
+- **One more off the ribbon.** `addSlideToSection` adds a slide to a group that
+  has already been cut, with the next burned letter and a cut stamp — instead of
+  a new cutting plan, which records a second trip to the microtome.
+- **Re-staining.** The column keeps the FIRST date, which is when that glass was
+  stained; a second run is recorded as a `slide_restained` timeline event. Not a
+  staining-run model — enough that the second run is not lost.
+- **Reassignments are narrated.** `slide_reassigned` on the timeline, so a
+  correction is distinguishable later from the mistake never having happened.
+
+### Coverage
+
+6 new harness gates (85 total), including one that plants a 2020 stain date and
+insists it survives a rack tick, and one that insists imaging completion is
+refused. The harness port and the legacy-upgrade port both gained the new
+functions and columns — the legacy test's drift guard caught the omission before
+it could ship, which is what it is for.
+
+---
+
 ## #113–#120 — what the Logs claim, and where a slide can go — status as of 0.12.0
 
 ### The one root cause behind #117, #118 and #119

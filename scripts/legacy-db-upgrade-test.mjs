@@ -63,6 +63,8 @@ function ensureRuntimeSchema(db) {
   ensureColumn(db, "slides", "depth_note", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "samples", "slides_issued", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "samples", "archived_at", "TEXT");
+  ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
 }
 
 /**

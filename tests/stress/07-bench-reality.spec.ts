@@ -419,42 +419,112 @@ test("bench: capabilities that have no affordance at all", async ({ page, consol
   await cutAndSection(page, "NA-1", ["stain::H&E", "extra"]);
 
   // -- B7: the ribbon gave one more usable section than the plan called for.
-  // Can a slide be ADDED to a group that has already been cut?
+  // The cut group's own drawer takes it now, so the slide joins the cut that
+  // actually produced it instead of inventing a second trip to the microtome.
   await closeDrawer(page);
-  await page.locator("nav").getByRole("button", { name: "Board" }).click();
-  const extras = column(page, "Extras").locator("button").filter({ hasText: /^NA-/ }).first();
-  let addAffordance = "none";
-  if (await extras.count()) {
-    await extras.click();
-    const panel = page.locator("div.border-l").last();
-    const buttons = await panel.getByRole("button").allInnerTexts();
-    addAffordance = JSON.stringify(buttons.map((b) => b.trim().replace(/\s+/g, " ")).filter(Boolean));
+  const queuedCard = column(page, "Staining / IHC").locator("div[aria-selected]").first();
+  const beforeAdd = await count(page, `SELECT COUNT(*) AS n FROM slides`);
+  const sections = await sql<{ id: number }>(page, `SELECT id FROM section_requests ORDER BY id LIMIT 1`);
+  if (sections.length > 0) {
+    const added = await page.evaluate(async (sectionId) => {
+      try {
+        const mod = await import("/src/lib/db.ts");
+        await (mod as { addSlideToSection: (id: number, t: unknown) => Promise<number> })
+          .addSlideToSection(sectionId as number, { extra: true });
+        return "ok";
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    }, sections[0].id);
+    const afterAdd = await count(page, `SELECT COUNT(*) AS n FROM slides`);
+    findings.push({
+      where: "B7 one extra section",
+      detail: `adding one more slide to an already-cut group: ${added} (${beforeAdd} → ${afterAdd} slides)`,
+    });
+    if (afterAdd !== beforeAdd + 1) {
+      findings.push({ where: "B7 one extra section", detail: "DEFECT: the slide was not added" });
+    }
+    const late = await sql<{ code: string; cut: string | null }>(
+      page,
+      `SELECT slide_code AS code, stage_cut_at AS cut FROM slides ORDER BY id DESC LIMIT 1`,
+    );
+    if (!late[0]?.cut) {
+      findings.push({
+        where: "B7 one extra section",
+        detail: "DEFECT: a slide added to an already-cut group carries no cut stamp",
+      });
+    }
   }
-  findings.push({
-    where: "B7 one extra section",
-    detail: `the extras panel offers: ${addAffordance}. Adding a slide to an ALREADY CUT group is not among them — the only route is a fresh cutting plan, which reads in the log as a second trip to the microtome.`,
-  });
+  void queuedCard;
 
   // -- B8: the slide was labelled with the wrong block.
-  const moves = await count(
+  const twoBlocks = await sql<{ id: number; code: string }>(
     page,
-    `SELECT COUNT(*) AS n FROM slides WHERE section_request_id IS NOT NULL`,
+    `SELECT id, sample_code AS code FROM samples ORDER BY id LIMIT 2`,
   );
-  findings.push({
-    where: "B8 wrong block",
-    detail:
-      `every one of the ${moves} slides is tied to its sample through section_request_id, and no code path ` +
-      `anywhere updates that column. A slide cut from block A and labelled B can never be corrected — ` +
-      `the only recourse is to remove it and cut another, which loses the fact that the glass exists.`,
-  });
+  const victim = await sql<{ id: number; code: string; stained: string | null; sample: number }>(
+    page,
+    `SELECT sl.id AS id, sl.slide_code AS code, sl.stage_stained_at AS stained, sr.sample_id AS sample
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.current_stage <> 'removed' ORDER BY sl.id LIMIT 1`,
+  );
+  if (twoBlocks.length === 2 && victim.length === 1) {
+    const target = twoBlocks.find((b) => b.id !== victim[0].sample);
+    const outcome = await page.evaluate(
+      async ([slideId, sampleId]) => {
+        try {
+          const mod = await import("/src/lib/db.ts");
+          await (mod as {
+            relabelSlideToSample: (s: number, t: number, r: string) => Promise<void>;
+          }).relabelSlideToSample(slideId as number, sampleId as number, "labelled with the wrong block");
+          return "ok";
+        } catch (e) {
+          return e instanceof Error ? e.message : String(e);
+        }
+      },
+      [victim[0].id, target?.id ?? -1] as const,
+    );
+    const after = await sql<{ code: string; sample: number; stained: string | null }>(
+      page,
+      `SELECT sl.slide_code AS code, sr.sample_id AS sample, sl.stage_stained_at AS stained
+         FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id WHERE sl.id = ?`,
+      [victim[0].id],
+    );
+    findings.push({
+      where: "B8 wrong block",
+      detail:
+        `refiling ${victim[0].code} onto ${target?.code}: ${outcome}. It is now ${after[0]?.code} ` +
+        `under sample ${after[0]?.sample} (was ${victim[0].sample}), stamps ${
+          after[0]?.stained === victim[0].stained ? "intact" : "CHANGED"
+        }`,
+    });
+    if (after[0]?.sample !== target?.id) {
+      findings.push({ where: "B8 wrong block", detail: "DEFECT: the slide did not move blocks" });
+    }
+    const events = await count(
+      page,
+      `SELECT COUNT(*) AS n FROM sample_timeline_events WHERE event_type LIKE 'slide_relabelled%'`,
+    );
+    findings.push({ where: "B8 wrong block", detail: `${events} timeline events recorded the correction` });
+    if (events < 2) {
+      findings.push({
+        where: "B8 wrong block",
+        detail: "DEFECT: a relabel must be recorded on BOTH blocks",
+      });
+    }
+  }
 
   // -- B9: a pale H&E is re-run through the stainer.
+  const restains = await count(
+    page,
+    `SELECT COUNT(*) AS n FROM sample_timeline_events WHERE event_type = 'slide_restained'`,
+  );
   findings.push({
     where: "B9 re-stain",
     detail:
-      "a slide carries ONE stage_stained_at, so a second run through the stainer either overwrites the " +
-      "first date or is not recorded at all. There is no concept of a staining RUN, so 'stained twice, " +
-      "second time properly' cannot be said.",
+      `a slide still carries ONE stage_stained_at — the FIRST one, which is the date that glass was ` +
+      `actually stained — and a second run is recorded on the timeline instead (${restains} so far in ` +
+      `this fixture). The column is the current state; the timeline is what happened.`,
   });
 
   expect(consoleErrors, `console errors:\n${consoleErrors.join("\n")}`).toEqual([]);

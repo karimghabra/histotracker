@@ -85,6 +85,16 @@ test("merge consequence: can a newcomer be swept through imaging it never had?",
     if (!(await box.isChecked())) await box.check();
   }
   await page.waitForTimeout(300);
+  const tickedNow = await sql<{ code: string; imaged: string | null }>(
+    page,
+    `SELECT slide_code AS code, stage_pictures_taken_at AS imaged FROM slides WHERE purpose = 'stain'`,
+  );
+  findings.push({
+    where: "sweep",
+    detail: `after ticking the first stack: ${tickedNow
+      .map((s) => `${s.code}=${s.imaged ? "imaged" : "NO"}`)
+      .join(", ")} (${await boxes.count()} checkbox(es) were on screen)`,
+  });
   await closeDrawer(page);
 
   // CD31 now scatters into the SAME per-sample stack, unimaged.
@@ -116,8 +126,34 @@ test("merge consequence: can a newcomer be swept through imaging it never had?",
     where: "sweep",
     detail: `with an unimaged slide in the stack, Complete Imaging is ${
       offered ? (enabled ? "offered and ENABLED" : "offered but disabled") : "not offered"
-    }`,
+    }${offered && !enabled ? ` — tooltip: "${await complete.first().getAttribute("title")}"` : ""}`,
   });
+  if (offered && !enabled) {
+    // The button being disabled is the fix; the data layer refusing is the
+    // guarantee. Drive the underlying action directly to prove the second one.
+    const refusal = await page.evaluate(async () => {
+      try {
+        const mod = await import("/src/lib/db.ts");
+        const stacks = (
+          window as unknown as { __SHIM_SELECT__: (s: string) => Array<{ id: number }> }
+        ).__SHIM_SELECT__(
+          "SELECT id FROM slide_stacks WHERE kind='sample' AND closed_at IS NULL AND current_stage='ready_for_imaging'",
+        );
+        await (mod as { updateSlideStackStage: (id: number, s: string) => Promise<number> })
+          .updateSlideStackStage(stacks[0].id, "pictures_taken");
+        return "(no refusal — it went through)";
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    });
+    findings.push({ where: "sweep", detail: `the data layer refuses too: "${refusal}"` });
+    if (refusal.startsWith("(no refusal")) {
+      findings.push({
+        where: "sweep",
+        detail: "DEFECT: the button is disabled but the data layer still allows the sweep",
+      });
+    }
+  }
 
   // Per-slide evidence, so the report can name the glass.
   const perSlideBefore = await sql<{ code: string; imaged: string | null; analyzed: string | null }>(
@@ -137,6 +173,14 @@ test("merge consequence: can a newcomer be swept through imaging it never had?",
   if (offered && enabled) {
     await complete.first().click();
     await page.waitForTimeout(600);
+    const errorText = await drawer(page)
+      .locator("p.text-red-600, p.text-red-700, [role=alert]")
+      .first()
+      .innerText()
+      .catch(() => "");
+    if (errorText.trim()) {
+      findings.push({ where: "sweep", detail: `the panel reported: "${errorText.trim()}"` });
+    }
 
     const perSlideAfter = await sql<{ code: string; imaged: string | null; analyzed: string | null }>(
       page,

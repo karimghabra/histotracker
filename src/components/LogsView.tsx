@@ -212,6 +212,21 @@ function agentLabel(slide: Slide): string {
   return "—";
 }
 
+/**
+ * What was ordered, when that is not what the glass turned out to be.
+ *
+ * `assay_name` used to be both, so correcting a slide that went into the wrong
+ * dish erased the order along with the error — the block stopped looking like it
+ * still owed a PAS. These are stored separately now, and this is where the
+ * difference gets said out loud.
+ */
+function unmetRequest(slide: Slide): string | null {
+  const requested = (slide.requested_assay_name ?? "").trim();
+  if (!requested) return null;
+  if (requested === (slide.assay_name ?? "").trim()) return null;
+  return requested;
+}
+
 // Free-text notes with a save-on-blur textarea (only writes when changed).
 function NotesEditor({
   value,
@@ -401,6 +416,21 @@ export function LogsView() {
     [samples, slidesBySample],
   );
 
+  // Candidate blocks for refiling a mislabelled slide. Every live block the
+  // Logs already knows about, minus the one it is filed under — computed once
+  // here rather than per row, and derived from the same data the table draws so
+  // it can never offer a block that is not on screen.
+  const relabelTargets = useMemo(
+    () =>
+      rows
+        .filter((row) => row.sample.current_stage !== "removed")
+        .map((row) => ({
+          id: row.sample.id,
+          code: displayCode(row.sample.sample_code),
+          description: row.sample.sample_description ?? "",
+        })),
+    [rows],
+  );
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -739,6 +769,9 @@ export function LogsView() {
                   onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
                   addableAgents={addableAgents}
+                  relabelTargets={relabelTargets.filter(
+                    (candidate) => candidate.id !== row.sample.id,
+                  )}
                   selectedSlideIds={selectedSlideIds}
                   onToggleSlideSelect={toggleSlideSelect}
                 />
@@ -847,6 +880,7 @@ function FragmentRow({
   onlyMatching,
   colCount,
   addableAgents,
+  relabelTargets,
   selectedSlideIds,
   onToggleSlideSelect,
 }: {
@@ -872,6 +906,8 @@ function FragmentRow({
   colCount: number;
   /** Active agents that can be added straight onto this block (#114). */
   addableAgents: Array<{ assay_type: string; name: string }>;
+  /** The other blocks a mislabelled slide could actually have come from. */
+  relabelTargets: Array<{ id: number; code: string; description: string }>;
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
@@ -881,7 +917,14 @@ function FragmentRow({
     editSampleDescription,
     setArchived,
     requestStainForSamples,
+    relabelSlideToSample,
   } = useActions();
+  // Relabelling is per-slide, so the draft is keyed by slide id — otherwise
+  // opening a second row inherits the first one's half-typed reason.
+  const [relabelFor, setRelabelFor] = useState<number | null>(null);
+  const [relabelTo, setRelabelTo] = useState("");
+  const [relabelWhy, setRelabelWhy] = useState("");
+  const [relabelFlash, setRelabelFlash] = useState<string | null>(null);
   const [stainToAdd, setStainToAdd] = useState("");
   const [addFlash, setAddFlash] = useState<string | null>(null);
   const readOnly = useReadOnly();
@@ -1193,6 +1236,14 @@ function FragmentRow({
                             </span>
                           )}
                           <span className="text-ink-soft">{agentLabel(slide)}</span>
+                          {unmetRequest(slide) && (
+                            <span
+                              className="rounded bg-amber-100 px-1 text-[9px] font-medium text-amber-800"
+                              title={`This slide was cut for ${unmetRequest(slide)} and ended up as ${agentLabel(slide)}. The ${unmetRequest(slide)} has not been made.`}
+                            >
+                              asked for {unmetRequest(slide)}
+                            </span>
+                          )}
                           {slide.depth_label && (
                             <span
                               className="rounded-full bg-violet-100 px-1.5 text-[9px] font-medium text-violet-700"
@@ -1235,6 +1286,94 @@ function FragmentRow({
                             placeholder="Notes about this slide…"
                             onSave={(notes) => void editSlideNotes(slide.id, notes)}
                           />
+                          {/* Mislabelling is the one correction the app could
+                              not make: a slide reaches its block only through
+                              its cut group, so glass cut from one block and
+                              written up as another could only be removed and
+                              re-cut — throwing away the fact that it exists.
+                              The Logs is the right home for it because this is
+                              the one place every slide is visible at every
+                              stage, including after its rack has retired. */}
+                          {!readOnly && !removed && relabelTargets.length > 0 && (
+                            <div className="rounded-md border border-line bg-surface px-2 py-1.5">
+                              {relabelFor === slide.id ? (
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <select
+                                    aria-label={`Move ${displayCode(slide.slide_code)} to another block`}
+                                    value={relabelTo}
+                                    onChange={(event) => setRelabelTo(event.target.value)}
+                                    className="rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
+                                  >
+                                    <option value="">Which block is it really from…</option>
+                                    {relabelTargets.map((candidate) => (
+                                      <option key={candidate.id} value={candidate.id}>
+                                        {candidate.code}
+                                        {candidate.description ? ` — ${candidate.description}` : ""}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input
+                                    aria-label={`Why ${displayCode(slide.slide_code)} is being moved`}
+                                    value={relabelWhy}
+                                    onChange={(event) => setRelabelWhy(event.target.value)}
+                                    placeholder="Why — this is the record"
+                                    className="min-w-40 flex-1 rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={!relabelTo || !relabelWhy.trim()}
+                                    onClick={async () => {
+                                      try {
+                                        await relabelSlideToSample(
+                                          slide.id,
+                                          Number(relabelTo),
+                                          relabelWhy,
+                                        );
+                                        setRelabelFlash("Refiled — both blocks record it.");
+                                        setRelabelFor(null);
+                                        setRelabelTo("");
+                                        setRelabelWhy("");
+                                      } catch (error) {
+                                        setRelabelFlash(
+                                          error instanceof Error ? error.message : String(error),
+                                        );
+                                      }
+                                    }}
+                                    className="rounded px-1.5 py-1 text-[11px] font-medium text-brand hover:bg-brand/10 disabled:opacity-40"
+                                  >
+                                    Refile
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRelabelFor(null);
+                                      setRelabelWhy("");
+                                      setRelabelTo("");
+                                    }}
+                                    className="rounded px-1.5 py-1 text-[11px] text-ink-soft hover:bg-black/5"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRelabelFor(slide.id);
+                                    setRelabelFlash(null);
+                                  }}
+                                  className="text-[11px] font-medium text-ink-soft hover:text-brand"
+                                >
+                                  Wrong block? Refile this slide…
+                                </button>
+                              )}
+                              {relabelFlash && relabelFor !== slide.id && (
+                                <span role="status" className="ml-2 text-[11px] text-brand">
+                                  {relabelFlash}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

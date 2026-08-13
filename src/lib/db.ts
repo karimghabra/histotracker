@@ -134,6 +134,11 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // 0023 — slide-letter high-water mark (#73) and archiving (#74).
   await ensureColumn(db, "samples", "slides_issued", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "samples", "archived_at", "TEXT");
+  // 0024 — what a slide was ASKED for, kept apart from what it became. Read on
+  // every slide row in the Logs and the rack panel, so an older image without
+  // them would break both.
+  await ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(
     `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
@@ -1961,31 +1966,76 @@ export async function syncAssayWorkflowStep(
   // it: `ensureChecklist` reuses an existing run, so a rack that was already
   // mid-protocol when this build landed still has its three-item checklist and
   // must be able to finish it. Deleting this branch would strand those racks.
+  // Same rule as the rack path (`syncAssayStackWorkflowStep`): tick COALESCEs so
+  // an earlier, truthful date survives, and untick clears only what THIS group
+  // stamped. Both sets of checkboxes drive the same slides, so a fix on one side
+  // only is no fix at all — that is the shape #81 was reported in twice.
+  const clearMatching = async (columns: string[], keyColumn: string, sectionColumn: string) => {
+    const rows = await db.select<Array<{ stamp: string | null }>>(
+      `SELECT ${sectionColumn} AS stamp FROM section_requests WHERE id = ?`,
+      [sectionRequestId],
+    );
+    const stamp = rows[0]?.stamp ?? null;
+    if (stamp === null) return;
+    await db.execute(
+      `UPDATE slides SET ${columns.map((c) => `${c} = NULL`).join(", ")}
+        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?`,
+      [sectionRequestId, assayType, stamp],
+    );
+  };
+
   if (sortOrder === 0) {
-    await db.execute(
-      `UPDATE slides SET stage_stained_at = ?
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, sectionRequestId, assayType],
-    );
     const sectionColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
-    await db.execute(`UPDATE section_requests SET ${sectionColumn} = ? WHERE id = ?`, [timestamp, sectionRequestId]);
-  } else if (sortOrder === 1) {
+    if (complete) {
+      await db.execute(
+        `UPDATE slides SET stage_stained_at = COALESCE(stage_stained_at, ?)
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, sectionRequestId, assayType],
+      );
+    } else {
+      await clearMatching(["stage_stained_at"], "stage_stained_at", sectionColumn);
+    }
     await db.execute(
-      `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, timestamp, sectionRequestId, assayType],
+      `UPDATE section_requests SET ${sectionColumn} = ${complete ? `COALESCE(${sectionColumn}, ?)` : "?"} WHERE id = ?`,
+      [timestamp, sectionRequestId],
     );
+  } else if (sortOrder === 1) {
+    if (complete) {
+      await db.execute(
+        `UPDATE slides
+            SET stage_refrax_at = COALESCE(stage_refrax_at, ?),
+                stage_coverslipped_at = COALESCE(stage_coverslipped_at, ?)
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, timestamp, sectionRequestId, assayType],
+      );
+    } else {
+      await clearMatching(
+        ["stage_refrax_at", "stage_coverslipped_at"],
+        "stage_coverslipped_at",
+        "stage_coverslipped_at",
+      );
+    }
     await db.execute(
-      `UPDATE section_requests SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
+      `UPDATE section_requests
+          SET stage_refrax_at = ${complete ? "COALESCE(stage_refrax_at, ?)" : "?"},
+              stage_coverslipped_at = ${complete ? "COALESCE(stage_coverslipped_at, ?)" : "?"}
+        WHERE id = ?`,
       [timestamp, timestamp, sectionRequestId],
     );
   } else if (sortOrder === 2) {
+    if (complete) {
+      await db.execute(
+        `UPDATE slides SET stage_dried_at = COALESCE(stage_dried_at, ?)
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, sectionRequestId, assayType],
+      );
+    } else {
+      await clearMatching(["stage_dried_at"], "stage_dried_at", "stage_dried_at");
+    }
     await db.execute(
-      `UPDATE slides SET stage_dried_at = ?
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, sectionRequestId, assayType],
+      `UPDATE section_requests SET stage_dried_at = ${complete ? "COALESCE(stage_dried_at, ?)" : "?"} WHERE id = ?`,
+      [timestamp, sectionRequestId],
     );
-    await db.execute(`UPDATE section_requests SET stage_dried_at = ? WHERE id = ?`, [timestamp, sectionRequestId]);
   }
 
   const assayTypes = await db.select<Array<{ assay_type: "stain" | "ihc" }>>(
@@ -2200,11 +2250,25 @@ export async function createSectionRequests(
           // the log, and made undoing a sectioning look broken (#95). The stamp
           // happens in updateSectionStage, when the group actually leaves the
           // queue.
+          // requested_* is the ORDER: written once, here, and never touched by a
+          // later correction. assay_* goes on meaning "what this glass is", so
+          // the two can differ and the log can say a PAS was asked for and an
+          // H&E was made.
           `INSERT INTO slides
             (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
-             assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
-           VALUES (?, ?, ?, 'stain', ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
-          [sectionId, ordinal, slideCodeFor(parentCode, nextOrdinal), g.assay_name, g.assay_type, g.assay_name],
+             assay_type, assay_name, requested_assay_type, requested_assay_name,
+             assignment_saved, slice_count, control_agent, current_stage)
+           VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', 'assigned')`,
+          [
+            sectionId,
+            ordinal,
+            slideCodeFor(parentCode, nextOrdinal),
+            g.assay_name,
+            g.assay_type,
+            g.assay_name,
+            g.assay_type,
+            g.assay_name,
+          ],
         );
       } else {
         // Extras are a deliberate, saved disposition chosen at cut time — no
@@ -2961,6 +3025,38 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
   const db = await getDb();
   const timestamp = nowTimestamp();
   const slideColumn = SECTION_STAGE_COLUMNS[stageKey];
+
+  // Completing imaging must never invent a photograph.
+  //
+  // A per-sample stack keeps accepting slides after its imaging session: a
+  // second rack scattering in is not a bug but a rule — `idx_slide_stacks_sample_stage`
+  // makes one open stack per (sample, stage) a UNIQUE constraint, so there is
+  // nowhere else for a late arrival to go. That is fine for the board (one card
+  // per block) and fatal for the record: the old code advanced the stack and
+  // stamped EVERY member, so glass that arrived after the operator left the
+  // microscope was recorded as photographed.
+  //
+  // Since the slides cannot be set aside, the action is refused instead, naming
+  // the glass. The operator images it, or removes it — both of which are true
+  // things to say. Silently stamping it is not.
+  if (stageKey === "pictures_taken") {
+    const unimaged = await db.select<Array<{ code: string }>>(
+      `SELECT sl.slide_code AS code
+         FROM slides sl
+        WHERE sl.stack_id = ? AND sl.purpose = 'stain'
+          AND sl.current_stage <> 'removed'
+          AND sl.stage_pictures_taken_at IS NULL
+        ORDER BY sl.slide_ordinal, sl.id`,
+      [stackId],
+    );
+    if (unimaged.length > 0) {
+      const names = unimaged.map((row) => displayCode(row.code)).join(", ");
+      throw new Error(
+        `${names} ${unimaged.length === 1 ? "has" : "have"} no images captured yet. ` +
+          "Tick each slide that was photographed — or remove the ones that were not — before completing imaging.",
+      );
+    }
+  }
   const setSlideStage = async (targetStackId: number) => {
     if (slideColumn) {
       await db.execute(
@@ -3068,31 +3164,115 @@ export async function syncAssayStackWorkflowStep(
   // it: `ensureChecklist` reuses an existing run, so a rack that was already
   // mid-protocol when this build landed still has its three-item checklist and
   // must be able to finish it. Deleting this branch would strand those racks.
+  // A rack step writes the SLIDES, and a rack is not the only thing that ever
+  // stains a slide: a slide reassigned in (#115) can arrive already stained, on
+  // a different day, in a different rack. So:
+  //
+  //   ticking   COALESCEs — an existing date is the truth about that glass and
+  //             a later rack tick does not get to rewrite it. Before this, the
+  //             statement was a bare `SET`, so ticking a rack rewrote the
+  //             stained date of every member; a slide stained in 2020 and moved
+  //             in today read as stained today.
+  //   unticking clears ONLY the slides this rack stamped, identified by their
+  //             carrying the rack's own timestamp. A bare `SET … = NULL` wiped
+  //             the whole rack, including dates it never wrote.
+  //
+  // (If a slide arrived already carrying a stamp equal to this rack's, to the
+  // second, unticking will clear it too. That needs two racks stamping in the
+  // same second and a move between them; the alternative is a per-slide
+  // provenance column, which is not worth a wire-format change for it.)
+  const clearMatching = async (columns: string[], keyColumn: string, stackColumn: string) => {
+    const rows = await db.select<Array<Record<string, string | null>>>(
+      `SELECT ${stackColumn} AS stamp FROM slide_stacks WHERE id = ?`,
+      [stackId],
+    );
+    const stamp = rows[0]?.stamp ?? null;
+    if (stamp === null) return;
+    await db.execute(
+      `UPDATE slides SET ${columns.map((c) => `${c} = NULL`).join(", ")}
+        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?`,
+      [stackId, assayType, stamp],
+    );
+  };
+
   if (sortOrder === 0) {
-    await db.execute(
-      `UPDATE slides SET stage_stained_at = ?
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, stackId, assayType],
-    );
     const stackColumn = assayType === "ihc" ? "stage_ihc_at" : "stage_stained_at";
-    await db.execute(`UPDATE slide_stacks SET ${stackColumn} = ? WHERE id = ?`, [timestamp, stackId]);
-  } else if (sortOrder === 1) {
+    if (complete) {
+      // A slide that ALREADY carries a stained date is going through the stainer
+      // a second time — a pale H&E re-run, a counterstain, or a slide that moved
+      // in from another rack. The column holds one date and keeps the first
+      // (above), so without this the second run would leave no trace at all.
+      // The timeline is where a thing that happened twice gets to be said twice.
+      const restained = await db.select<Array<{ code: string; sample_id: number; at: string }>>(
+        `SELECT sl.slide_code AS code, sr.sample_id AS sample_id, sl.stage_stained_at AS at
+           FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+          WHERE sl.stack_id = ? AND sl.purpose = 'stain' AND sl.assay_type = ?
+            AND sl.current_stage <> 'removed' AND sl.stage_stained_at IS NOT NULL`,
+        [stackId, assayType],
+      );
+      await db.execute(
+        `UPDATE slides SET stage_stained_at = COALESCE(stage_stained_at, ?)
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, stackId, assayType],
+      );
+      for (const slide of restained) {
+        await db.execute(
+          `INSERT INTO sample_timeline_events
+            (sample_id, user_id, event_type, summary, details, created_at)
+           VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+                   'slide_restained', ?, ?, ?)`,
+          [
+            slide.sample_id,
+            `${displayCode(slide.code)} went through the stainer again`,
+            JSON.stringify({ slide_code: slide.code, first_stained_at: slide.at, again_at: timestamp }),
+            timestamp,
+          ],
+        );
+      }
+    } else {
+      await clearMatching(["stage_stained_at"], "stage_stained_at", stackColumn);
+    }
     await db.execute(
-      `UPDATE slides SET stage_refrax_at = ?, stage_coverslipped_at = ?
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, timestamp, stackId, assayType],
+      `UPDATE slide_stacks SET ${stackColumn} = ${complete ? `COALESCE(${stackColumn}, ?)` : "?"} WHERE id = ?`,
+      [timestamp, stackId],
     );
+  } else if (sortOrder === 1) {
+    if (complete) {
+      await db.execute(
+        `UPDATE slides
+            SET stage_refrax_at = COALESCE(stage_refrax_at, ?),
+                stage_coverslipped_at = COALESCE(stage_coverslipped_at, ?)
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, timestamp, stackId, assayType],
+      );
+    } else {
+      await clearMatching(
+        ["stage_refrax_at", "stage_coverslipped_at"],
+        "stage_coverslipped_at",
+        "stage_coverslipped_at",
+      );
+    }
     await db.execute(
-      `UPDATE slide_stacks SET stage_refrax_at = ?, stage_coverslipped_at = ? WHERE id = ?`,
+      `UPDATE slide_stacks
+          SET stage_refrax_at = ${complete ? "COALESCE(stage_refrax_at, ?)" : "?"},
+              stage_coverslipped_at = ${complete ? "COALESCE(stage_coverslipped_at, ?)" : "?"}
+        WHERE id = ?`,
       [timestamp, timestamp, stackId],
     );
   } else if (sortOrder === 2) {
+    if (complete) {
+      await db.execute(
+        `UPDATE slides SET stage_dried_at = COALESCE(stage_dried_at, ?)
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+        [timestamp, stackId, assayType],
+      );
+    } else {
+      await clearMatching(["stage_dried_at"], "stage_dried_at", "stage_dried_at");
+    }
     await db.execute(
-      `UPDATE slides SET stage_dried_at = ?
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
-      [timestamp, stackId, assayType],
+      `UPDATE slide_stacks SET stage_dried_at = ${complete ? "COALESCE(stage_dried_at, ?)" : "?"} WHERE id = ?`,
+      [timestamp, stackId],
     );
-    await db.execute(`UPDATE slide_stacks SET stage_dried_at = ? WHERE id = ?`, [timestamp, stackId]);
   }
 
   const assayTypes = await db.select<Array<{ assay_type: "stain" | "ihc" }>>(
@@ -3178,13 +3358,17 @@ export async function requestStainForSample(input: {
     const stackId = openRack?.id ?? (await getOrCreateStainRack(input.assayType, assayName));
     const timestamp = nowTimestamp();
     await db.execute(
+      // An extra was cut for nothing in particular, so being pulled for this
+      // agent IS its request — which is why requested_* is written here, unlike
+      // a reassignment, where the order already exists and must survive.
       `UPDATE slides
           SET stack_id = ?, purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+              requested_assay_type = ?, requested_assay_name = ?,
               assignment_saved = 1, slice_count = 2, control_agent = 'IgG',
               current_stage = 'stain_requested',
               stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
         WHERE id = ?`,
-      [stackId, input.assayType, assayName, assayName, timestamp, extras[0].id],
+      [stackId, input.assayType, assayName, assayName, input.assayType, assayName, timestamp, extras[0].id],
     );
     return {
       target: "extra",
@@ -3437,8 +3621,18 @@ export async function reassignSlide(
   target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
 ): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ stack_id: number | null; current_stage: string }>>(
-    `SELECT stack_id, current_stage FROM slides WHERE id = ?`,
+  const rows = await db.select<
+    Array<{
+      stack_id: number | null;
+      current_stage: string;
+      slide_code: string;
+      assay_name: string | null;
+      sample_id: number;
+    }>
+  >(
+    `SELECT sl.stack_id, sl.current_stage, sl.slide_code, sl.assay_name, sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.id = ?`,
     [slideId],
   );
   const slide = rows[0];
@@ -3472,7 +3666,290 @@ export async function reassignSlide(
     );
   }
 
+  // Say it happened. A correction that leaves no trace reads, later, exactly
+  // like the mistake never occurred — and the whole point of correcting a slide
+  // rather than removing it is that the glass and its history are real.
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'slide_reassigned', ?, ?, ?)`,
+    [
+      slide.sample_id,
+      "extra" in target
+        ? `${displayCode(slide.slide_code)} returned to extras from ${slide.assay_name || "no agent"}`
+        : `${displayCode(slide.slide_code)} moved from ${slide.assay_name || "no agent"} to ${target.assayName.trim()}`,
+      JSON.stringify({
+        slide_id: slideId,
+        slide_code: slide.slide_code,
+        from: slide.assay_name ?? "",
+        to: "extra" in target ? "extra" : target.assayName.trim(),
+      }),
+      nowTimestamp(),
+    ],
+  );
+
   if (previousStackId != null) await closeSlideStackIfEmpty(previousStackId);
+}
+
+/**
+ * Add one more slide to a cut group that already exists.
+ *
+ * The block ribbons better than the plan expected and the technician mounts an
+ * extra section. Until now there was nowhere to put it: the only route was a
+ * fresh cutting plan, which records a second, separate trip to the microtome on
+ * a later date — a different thing from what happened.
+ *
+ * The new slide takes the next BURNED letter for its sample (never a count, see
+ * `nextSlideLetter`), and joins the group where it is: if the group has already
+ * been cut the slide is cut too, so it carries a cut stamp and goes straight to
+ * the loading rack for its agent; if the group is still queued, it is planned
+ * like its siblings and will be cut with them.
+ */
+export async function addSlideToSection(
+  sectionId: number,
+  target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
+): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<
+    Array<{ sample_id: number; parent_code: string; section_stage: string; cut_at: string | null }>
+  >(
+    `SELECT sr.sample_id AS sample_id, s.sample_code AS parent_code,
+            sr.current_stage AS section_stage,
+            (SELECT MAX(sl.stage_cut_at) FROM slides sl WHERE sl.section_request_id = sr.id) AS cut_at
+       FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
+      WHERE sr.id = ?`,
+    [sectionId],
+  );
+  const section = rows[0];
+  if (!section) throw new Error("That cut group no longer exists.");
+
+  const letter = await nextSlideLetter(db, section.sample_id);
+  const code = slideCodeFor(section.parent_code, letter);
+  const ordinalRows = await db.select<Array<{ next: number }>>(
+    `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
+    [sectionId],
+  );
+  const ordinal = Number(ordinalRows[0]?.next ?? 1);
+  const timestamp = nowTimestamp();
+  // "Already cut" is read off the SIBLING slides, not the group's stage: the
+  // group's stage moves on for other reasons, and the cut stamp is the thing
+  // that says a blade touched the block (#95).
+  const alreadyCut = Boolean(section.cut_at);
+
+  let slideId: number;
+  if ("extra" in target) {
+    const result = await db.execute(
+      `INSERT INTO slides
+        (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved,
+         current_stage, stage_cut_at)
+       VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
+      [sectionId, ordinal, code, alreadyCut ? timestamp : null],
+    );
+    if (result.lastInsertId == null) throw new Error("Could not add the slide.");
+    slideId = result.lastInsertId;
+  } else {
+    const assayName = target.assayName.trim();
+    if (!assayName) throw new Error("Choose a stain or IHC agent for this slide.");
+    let stackId: number | null = null;
+    if (alreadyCut) {
+      const openRack = await getOpenStainRack(target.assayType, assayName);
+      stackId = openRack?.id ?? (await getOrCreateStainRack(target.assayType, assayName));
+    }
+    const result = await db.execute(
+      `INSERT INTO slides
+        (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+         assay_type, assay_name, requested_assay_type, requested_assay_name,
+         assignment_saved, slice_count, control_agent,
+         current_stage, stack_id, stage_cut_at, stage_stain_requested_at)
+       VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, ?, ?, ?)`,
+      [
+        sectionId,
+        ordinal,
+        code,
+        assayName,
+        target.assayType,
+        assayName,
+        target.assayType,
+        assayName,
+        alreadyCut ? "stain_requested" : "assigned",
+        stackId,
+        alreadyCut ? timestamp : null,
+        alreadyCut ? timestamp : null,
+      ],
+    );
+    if (result.lastInsertId == null) throw new Error("Could not add the slide.");
+    slideId = result.lastInsertId;
+  }
+
+  await recordSlidesIssued(db, section.sample_id, letter);
+  const what = "extra" in target ? "as an extra" : `for ${target.assayName.trim()}`;
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'slide_added', ?, ?, ?)`,
+    [
+      section.sample_id,
+      `${code} added to an existing cut ${what}`,
+      alreadyCut
+        ? "Mounted from the same ribbon after the group had been cut."
+        : "Added to the plan before the group was cut.",
+      timestamp,
+    ],
+  );
+  return slideId;
+}
+
+/**
+ * Correct a slide that was labelled with the wrong block.
+ *
+ * This is the correction the model made impossible: a slide reaches its sample
+ * only through `section_request_id`, and nothing anywhere updated that column,
+ * so a slide cut from one block and written up as another could only be removed
+ * and re-cut — which throws away the fact that the glass exists and is sitting
+ * in a folder.
+ *
+ * The policy this implements:
+ *
+ *   • **The glass keeps its history.** Cut, stained, coverslipped, imaged,
+ *     analyzed — all of it happened to this piece of glass and none of it is
+ *     touched. Only the block it is filed under changes.
+ *   • **It gets a fresh code under the correct block**, from that block's own
+ *     burned sequence, because the code says which block a slide came from and
+ *     the old one said the wrong thing.
+ *   • **The old code stays burned** on the old block, so it can never be handed
+ *     to a different piece of glass (#73).
+ *   • **Both blocks say so.** A timeline event on each — the old block records
+ *     what left and why, the new one records what arrived and where from. A
+ *     correction that leaves no trace is indistinguishable from a mistake.
+ *
+ * The slide lands in a cut group belonging to the target block: an existing
+ * group for the same agent if there is one, otherwise a new group created for
+ * it, so the target's own cut history stays coherent.
+ */
+export async function relabelSlideToSample(
+  slideId: number,
+  targetSampleId: number,
+  reason: string,
+): Promise<void> {
+  const note = reason.trim();
+  if (!note) throw new Error("Say why this slide is being moved — the reason is the record.");
+  const db = await getDb();
+
+  const rows = await db.select<
+    Array<{
+      slide_code: string;
+      purpose: SlidePurpose;
+      current_stage: string;
+      assay_type: string | null;
+      assay_name: string | null;
+      section_request_id: number;
+      sample_id: number;
+      parent_code: string;
+    }>
+  >(
+    `SELECT sl.slide_code, sl.purpose, sl.current_stage, sl.assay_type, sl.assay_name,
+            sl.section_request_id, sr.sample_id, s.sample_code AS parent_code
+       FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+       JOIN samples s ON s.id = sr.sample_id
+      WHERE sl.id = ?`,
+    [slideId],
+  );
+  const slide = rows[0];
+  if (!slide) throw new Error("That slide no longer exists.");
+  if (slide.current_stage === "removed") {
+    throw new Error("That slide was removed — it cannot be relabelled.");
+  }
+  if (slide.sample_id === targetSampleId) {
+    throw new Error("That slide is already filed under this block.");
+  }
+
+  const targetRows = await db.select<Array<{ sample_code: string }>>(
+    `SELECT sample_code FROM samples WHERE id = ?`,
+    [targetSampleId],
+  );
+  const target = targetRows[0];
+  if (!target) throw new Error("That block no longer exists.");
+
+  // Land it in a group belonging to the TARGET. Prefer one already carrying the
+  // same agent so the target's cut history reads as one cut, not many.
+  //
+  // A cut group names its agent in `stains` — it has no assay_type/assay_name of
+  // its own; those live on the SLIDES. Matching on the wrong column here would
+  // throw on every relabel, which is exactly what the harness caught.
+  const agent = (slide.assay_name ?? "").trim();
+  const groupRows = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests
+      WHERE sample_id = ? AND COALESCE(stains, '') = ?
+      ORDER BY id LIMIT 1`,
+    [targetSampleId, agent],
+  );
+  let groupId = groupRows[0]?.id ?? null;
+  if (groupId == null) {
+    const created = await db.execute(
+      `INSERT INTO section_requests
+        (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at, stage_sectioned_at)
+       VALUES (?, 0, ?, 'sectioned', ?, ?)`,
+      [targetSampleId, agent, nowTimestamp(), nowTimestamp()],
+    );
+    if (created.lastInsertId == null) throw new Error("Could not file the slide under that block.");
+    groupId = created.lastInsertId;
+  }
+
+  const letter = await nextSlideLetter(db, targetSampleId);
+  const newCode = slideCodeFor(target.sample_code, letter);
+  const ordinalRows = await db.select<Array<{ next: number }>>(
+    `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
+    [groupId],
+  );
+  const timestamp = nowTimestamp();
+
+  await db.execute(
+    `UPDATE slides SET section_request_id = ?, slide_ordinal = ?, slide_code = ? WHERE id = ?`,
+    [groupId, Number(ordinalRows[0]?.next ?? 1), newCode, slideId],
+  );
+  await recordSlidesIssued(db, targetSampleId, letter);
+  // The letter the slide vacated stays burned on the OLD block — nothing else
+  // may ever be called that.
+  await recordSlidesIssued(db, slide.sample_id, await nextSlideLetter(db, slide.sample_id) - 1);
+
+  const detail = JSON.stringify({
+    slide_id: slideId,
+    from_code: slide.slide_code,
+    to_code: newCode,
+    from_sample: slide.parent_code,
+    to_sample: target.sample_code,
+    reason: note,
+  });
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'slide_relabelled_out', ?, ?, ?)`,
+    [
+      slide.sample_id,
+      `${displayCode(slide.slide_code)} was not from this block — refiled as ${displayCode(newCode)} under ${displayCode(target.sample_code)}`,
+      detail,
+      timestamp,
+    ],
+  );
+  await db.execute(
+    `INSERT INTO sample_timeline_events
+      (sample_id, user_id, event_type, summary, details, created_at)
+     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+             'slide_relabelled_in', ?, ?, ?)`,
+    [
+      targetSampleId,
+      `${displayCode(newCode)} arrived here — cut from this block but labelled ${displayCode(slide.slide_code)}`,
+      detail,
+      timestamp,
+    ],
+  );
+
+  await syncSectionDuplicates(db, slide.section_request_id);
+  await syncSectionDuplicates(db, groupId);
 }
 
 /** Record imaging for one assay slide and derive the parent section's image status. */

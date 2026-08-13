@@ -1,5 +1,14 @@
 # Deep stress test — 0.12.0
 
+> **Status: all nine findings below are fixed in 0.13.0.** This document is kept
+> as written — the investigation, the evidence, and the reasoning that led to the
+> fixes — with a short note under each finding saying what was done. The one
+> conclusion that changed on contact with the code is D2: setting late arrivals
+> aside is not possible, because one open stack per (sample, stage) is a UNIQUE
+> constraint. That made refusing the sweep the only honest fix, and it sharpens
+> rather than weakens the structural argument in Part 2.
+
+
 A dedicated stress suite (`tests/stress/`, run with
 `pnpm exec playwright test --config playwright.stress.config.ts`) that fills the
 board up and drives every workflow through the real UI in Chromium, then reads
@@ -67,6 +76,8 @@ advisory and the log cannot be trusted on the one question it is there to
 answer. In the merge case above the operator has no way to know: they imaged
 what was in front of them, and the newcomer arrived afterwards.
 
+**Fixed in 0.13.0.** Completing imaging is refused while any live member has no images, naming them; the button is disabled with the same wording. Four existing e2e tests had to be updated because they were pressing the button with nothing ticked — i.e. they were relying on the back-fill.
+
 **Note:** the same click does *not* mark the newcomer analyzed — the analyzed
 stamp is correctly withheld. So the guard exists one step later but not here.
 
@@ -101,6 +112,8 @@ part-way through imaging is indistinguishable from a fresh one.
 
 The second is probably right — the merge is a feature, the back-fill is not.
 
+**Fixed in 0.13.0, and the first option turned out to be impossible.** `idx_slide_stacks_sample_stage` (migration 0018) makes one open stack per `(sample_id, current_stage)` a UNIQUE constraint, so a late arrival has nowhere else to go — an attempt to set slides aside failed with `UNIQUE constraint failed`. The merge stays; D1 is fixed instead. This is the two-ideas-in-one-table problem in Part 2 showing its teeth.
+
 **Verified correct alongside it:** a **closed** stack never absorbs anything. A
 second wave of slides for the same sample, after its stack was analyzed and
 retired, correctly opened a new stack (`#5 sample/1 ready_for_imaging ×1`).
@@ -127,6 +140,8 @@ second one:
 after a stained slide joined the PAS rack, a new PAS slide produced
 2 open PAS rack(s): #2 ×2 (1 worked), #3 ×1 (0 worked)
 ```
+
+**Fixed in 0.13.0** — the later rack is marked *new rack* on the board, with the reason on hover.
 
 This follows logically from #81 — the PAS rack now has a worked member, so it is
 no longer a loading rack — but nothing on screen explains it. The bench sees two
@@ -162,7 +177,9 @@ the check could not tell them apart. Re-run with a planted date, the original is
 issues `SET stage_stained_at = ?` with no `COALESCE`. So a mixed rack does not
 merely display three answers — ticking it destroys one of them.
 
-**Suggested direction:** either show per-slide state in the rack panel (a tick
+**Fixed in 0.13.0** — both halves. Each slide in the rack panel shows its own stained date, and the panel says plainly when the rack holds a mixture. The overwrite is fixed at the query (see C2).
+
+**Suggested direction (as written):** either show per-slide state in the rack panel (a tick
 beside each slide, not just a rack-level fraction), or refuse the move that
 creates the mixture and require the slide to go back to extras first.
 
@@ -344,6 +361,8 @@ two different facts**: what was asked for, and what the glass actually is. After
 the correction the slide says "H&E", and nothing says a PAS was ordered and never
 made — so the block no longer looks like it still needs one.
 
+**Fixed in 0.13.0** — migration 0024 adds `requested_assay_type` / `requested_assay_name`, written once when the slide is planned, cut or pulled from extras, and never touched by a correction. The Logs marks a slide whose two disagree with *asked for PAS*.
+
 The only trace left is the `sectioning_cut` timeline event that happens to name
 the original plan. That is incidental, not a record of the mistake.
 
@@ -363,7 +382,11 @@ that assay in the rack, with **no `COALESCE`**. So:
 
 Same class as D1: a rack-level action writing slide-level truth it does not know.
 
+**Fixed in 0.13.0** — ticking COALESCEs, so the earlier date survives; unticking clears only the slides carrying this rack's own stamp. Both checkbox paths, and mirrored in the harness with a gate that plants a 2020 date and insists it survives.
+
 ### C3 — a slide cannot be re-stained
+
+**Addressed in 0.13.0** — the column keeps the FIRST date (the truth about that glass) and a second run is recorded on the timeline as `slide_restained`. Not a full staining-run model; enough to stop the second run vanishing.
 
 One slide carries one `stage_stained_at`. A pale H&E sent back through the
 stainer either overwrites its own history or goes unrecorded. There is no concept
@@ -377,10 +400,14 @@ anywhere updates that column**. A slide cut from block A and labelled B can neve
 be corrected. The only recourse is to remove it and cut another, which destroys
 the fact that the glass physically exists and is sitting in a folder.
 
+**Fixed in 0.13.0** — *Wrong block? Refile this slide…* in the Logs. The glass keeps every stamp, takes a fresh code from the correct block's sequence, the old code stays burned, and both blocks record the correction with its reason.
+
 I would rank this highest of the four: mislabelling is common, it is discovered
 late, and the workaround is a lie in the record.
 
 ### C5 — a good ribbon cannot add a slide to a group already cut
+
+**Fixed in 0.13.0** — *One more off this ribbon* in the cut group's own panel.
 
 If the block ribbons better than planned and the technician mounts one more
 section, there is no way to add it to that cut group. The only route is a fresh

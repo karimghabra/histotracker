@@ -142,6 +142,20 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
   await tiles.first().click();
   // Ready for Imaging → Complete Imaging (pictures taken) → Mark Analyzed, which
   // is what finally removes the stack from this queue.
+  // Tick each slide's "images captured" first: completing imaging no longer
+  // back-fills a stamp for glass nobody photographed, so the button stays
+  // disabled until the record says what was actually done.
+  {
+    const boxes = page.getByRole("checkbox", { name: /^Images captured for / });
+    // Wait for the drawer's slides to arrive first: ticking nothing because the
+    // list had not loaded yet leaves the button disabled, which then looks like
+    // a product bug rather than a race in the test.
+    await expect(boxes.first()).toBeVisible();
+    for (let i = 0; i < (await boxes.count()); i += 1) {
+      const box = boxes.nth(i);
+      if (!(await box.isChecked())) await box.check();
+    }
+  }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
 

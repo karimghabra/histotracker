@@ -1,6 +1,67 @@
 # Changelog
 
-## 0.12.0 - unreleased
+## 0.13.0 - unreleased
+
+**Schema change (migration 0024) — every instance must be on this build.** Two
+additive columns on `slides`; older builds ignore them and older backups gain
+them on open. See `docs/shared_data_sync.md` §1.
+
+Everything here came out of a deep stress test of 0.12.0 rather than a report —
+21 scripted runs that fill the board up, drive every workflow through the real
+UI, and then read the database to check what actually happened
+(`docs/stress_test_0_12_0.md`). Nothing crashed. What it found were four places
+where the record did not match the work, and five corrections the bench needs
+that the app could not express.
+
+### The record now matches the work
+
+- **A rack's protocol tick no longer rewrites a slide's stain date.** The step
+  wrote `SET stage_stained_at = ?` over every slide in the rack, so glass that
+  arrived already stained — easy to arrange since 0.12.0 let a slide be moved
+  between agents — was restamped with today. Proved with a planted date:
+  `2020-01-02` became today. Ticking now keeps the earlier date, and **unticking
+  clears only the slides that rack actually stamped** rather than the whole rack.
+  Both sets of protocol checkboxes are fixed, not just the one that was found.
+- **Completing imaging no longer invents a photograph.** A per-sample stack keeps
+  accepting slides after its imaging session — it has to, since one open stack
+  per block per stage is a database constraint — so *Complete Imaging* could be
+  pressed on glass that arrived after the operator left the microscope, and it
+  stamped every member. It is now refused, naming the slides: *"EE-1-B has no
+  images captured yet."* The button says so before it is pressed, and the data
+  layer refuses regardless of route.
+- **A rack shows which of its slides are stained**, beside each slide, and says
+  plainly when it holds a mixture. A rack reading `0/2 complete` over a slide
+  stained last week, with `Stained` in its own timeline, was three answers to one
+  question.
+- **The board says why a second rack appeared.** A rack that has begun its
+  protocol cannot take newcomers (#81), so the next slide starts a fresh one —
+  correct, and previously indistinguishable from a duplicate. The later rack is
+  now marked *new rack*, with the reason on hover.
+
+### Corrections the bench needs
+
+- **"It was stained with the wrong thing."** `assay_name` was doing two jobs:
+  what was ordered, and what the glass is. Correcting a slide erased the order,
+  so a PAS that was asked for and never made simply vanished. The order is now
+  kept separately, and a slide whose two disagree says *asked for PAS* in the
+  Logs. This is the migration.
+- **"This slide is from the wrong block."** A slide reached its block only
+  through its cut group, and nothing anywhere could change that — so a
+  mislabelled slide could only be removed and re-cut, which throws away the fact
+  that the glass exists. It can now be **refiled** from the Logs, with a reason.
+  The glass keeps every stamp it earned, takes a fresh code from the correct
+  block's own sequence, the old code stays burned so nothing can reuse it, and
+  **both blocks record the correction**.
+- **"The ribbon gave one more than the plan asked for."** A slide can be added to
+  a cut group that has already been cut, from the group's own panel. It takes the
+  next burned letter and is cut, because it was — rather than needing a whole new
+  cutting plan, which records a second trip to the microtome that never happened.
+- **"It went through the stainer twice."** The slide keeps the date it was first
+  stained, which is the truth about that glass, and the second run is recorded on
+  the timeline. Reassignments are recorded there too: a correction that leaves no
+  trace reads, later, exactly like the mistake never happened.
+
+## 0.12.0 - 2026-08-13
 
 No schema change.
 
