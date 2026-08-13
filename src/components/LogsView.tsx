@@ -7,8 +7,14 @@ import { useActions } from "../hooks/useActions";
 import { useViewPref, useViewPrefSet } from "../hooks/useViewPref";
 import { saveLogsCsv, saveLogsXlsx } from "../lib/export";
 import { useAllSamples, useAllSlides, useAssayCatalog, useSampleRemovals, useSlideRemovals } from "../hooks/useData";
-import { BLOCK_TIMELINE_STAGES, SECTION_STAGE_LABELS, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { cn, compareSlideCodes, displayCode, sampleCodeVariants, slideCutAt } from "../lib/utils";
+import {
+  BLOCK_TIMELINE_STAGES,
+  SECTION_STAGE_LABELS,
+  SECTION_STAGE_TO_QUEUE,
+  STAGE_LABELS,
+  STAGE_ORDER,
+} from "../lib/stages";
+import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
@@ -40,17 +46,73 @@ function isRemoved(slide: Slide): boolean {
   return slide.current_stage === "removed";
 }
 
-function samplePhase(sample: Sample, slides: Slide[]): PhaseKey {
+/** A slide is only cut once its group has left the Needs Sectioning queue
+ *  (#95) — before that it is planned, not made. */
+function isCut(slide: Slide): boolean {
+  return slide.section_stage !== "needs_sectioning";
+}
+
+/**
+ * Every phase a sample is CURRENTLY in — a set, not a single value (#119).
+ *
+ * The old version answered "what is the furthest thing that has happened to
+ * this block", which is the wrong question for a filter that reads as an
+ * inventory. A block sitting in Embedded Inventory with two slides in staining
+ * is in BOTH places at once, and picking one made it vanish from the other:
+ * "once samples are moved to sectioning, they are removed from the embedded
+ * filter … this is not how inventories work".
+ *
+ * It also derived each phase from "has this timestamp ever been set", which got
+ * two of them wrong outright:
+ *   · Sectioned fired as soon as a live slide existed — and slides are created
+ *     when the cutting PLAN is made, so a block read Sectioned before anyone had
+ *     been near a microtome (#118). It now requires the slide to be cut.
+ *   · Staining required `stage_stained_at`, so a slide sitting IN the staining
+ *     column that had not been stained yet matched nothing, and the filter came
+ *     back empty (#117). It now asks which queue the slide is in.
+ */
+function samplePhases(sample: Sample, slides: Slide[]): Set<PhaseKey> {
+  const phases = new Set<PhaseKey>();
   const live = slides.filter((s) => !isRemoved(s));
-  const assay = live.filter((s) => s.purpose !== "extra");
-  if (assay.length > 0 && assay.every((s) => Boolean(s.stage_analyzed_at))) return "analyzed";
-  if (assay.some((s) => s.stage_ready_for_imaging_at || s.stage_pictures_taken_at)) return "imaging";
-  if (assay.some((s) => s.stage_stained_at || s.stage_coverslipped_at || s.stage_dried_at)) return "staining";
-  // `live`, not `slides`: a sample whose only slide was removed has no slides at
-  // the bench any more, so it reads by its block stage again rather than being
-  // pinned at "Sectioned" forever.
-  if (live.length > 0) return "sectioned";
-  return (STAGE_ORDER[sample.current_stage] ?? 0) >= (STAGE_ORDER.embedded ?? 99) ? "embedded" : "preprocessing";
+  const cut = live.filter(isCut);
+  const assay = cut.filter((s) => s.purpose !== "extra");
+
+  // The block's own position. It stays `embedded` for the rest of its life —
+  // cut groups have their own stages — so this is exactly "is it in the
+  // Embedded Inventory".
+  if (sample.current_stage === "embedded") phases.add("embedded");
+  else if ((STAGE_ORDER[sample.current_stage] ?? 0) < (STAGE_ORDER.embedded ?? 99)) {
+    phases.add("preprocessing");
+  }
+
+  // Where its slides are now, by the queue each one is actually sitting in.
+  if (cut.length > 0) phases.add("sectioned");
+  for (const slide of cut) {
+    const queue = SECTION_STAGE_TO_QUEUE[slide.current_stage];
+    if (queue === "staining") phases.add("staining");
+    if (queue === "analysis_pending") phases.add("imaging");
+  }
+  if (assay.length > 0 && assay.every((s) => Boolean(s.stage_analyzed_at))) phases.add("analyzed");
+
+  // A block with nothing else to say is still somewhere: fall back to its own
+  // stage so no row is unclassifiable.
+  if (phases.size === 0) {
+    phases.add(
+      (STAGE_ORDER[sample.current_stage] ?? 0) >= (STAGE_ORDER.embedded ?? 99)
+        ? "embedded"
+        : "preprocessing",
+    );
+  }
+  return phases;
+}
+
+/** The furthest phase, for the Stage column and for stage sorting. */
+function furthestPhase(phases: Set<PhaseKey>): PhaseKey {
+  let best: PhaseKey = "preprocessing";
+  for (const phase of phases) {
+    if (PHASE_RANK[phase] > PHASE_RANK[best]) best = phase;
+  }
+  return best;
 }
 
 // Per-slide timestamp columns that count as "activity" (created_at is UTC and the
@@ -77,7 +139,9 @@ function lastActivityOf(sample: Sample, slides: Slide[]): string {
 // removed slide never will either — leaving it in the denominator would strand
 // the sample at 3/4 for good, #83).
 function analyzedProgress(slides: Slide[]): { done: number; total: number } {
-  const assay = slides.filter((s) => s.purpose !== "extra" && !isRemoved(s));
+  // `isCut` too (#118): a slide the plan says will exist has not been cut, so
+  // counting it showed "0/1 analyzed" for a block nobody had sectioned.
+  const assay = slides.filter((s) => s.purpose !== "extra" && !isRemoved(s) && isCut(s));
   return { done: assay.filter((s) => Boolean(s.stage_analyzed_at)).length, total: assay.length };
 }
 
@@ -223,7 +287,7 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
   );
 }
 
-export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: string) => void } = {}) {
+export function LogsView() {
   const { tagSlidesDepth } = useActions();
   const readOnly = useReadOnly();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
@@ -238,6 +302,13 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
   const { data: samples = [] } = useAllSamples();
   const { data: slides = [] } = useAllSlides();
   const { data: catalog = [] } = useAssayCatalog(true);
+  // Only ACTIVE agents can be added to a block (#114); the full catalogue,
+  // inactive ones included, still drives the stain FILTER so historic slides
+  // stay findable.
+  const addableAgents = useMemo(
+    () => catalog.filter((agent) => agent.is_active !== 0),
+    [catalog],
+  );
   const { data: removalList = [] } = useSlideRemovals();
   const removals = useMemo(
     () => new Map(removalList.map((entry) => [entry.slide_id, entry])),
@@ -303,7 +374,8 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
       samples.map((sample) => {
         const slidesForSample = slidesBySample.get(sample.sample_code) ?? [];
         const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
-        const phase = samplePhase(sample, slidesForSample);
+        const phases = samplePhases(sample, slidesForSample);
+        const phase = furthestPhase(phases);
         const progress = analyzedProgress(slidesForSample);
         // Removed slides are listed in the drill-down but are not inventory, so
         // they are excluded from both the "N slides" column and the extras
@@ -318,6 +390,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
           slides: slidesForSample,
           agents,
           phase,
+          phases,
           progress,
           extras,
           removedCount,
@@ -331,25 +404,28 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const { sample, slides: sampleSlides, agents, phase } = row;
+      const { sample, slides: sampleSlides, agents, phases: rowPhases } = row;
       // Archived samples stay out of the way unless explicitly asked for (#74).
       if (!showArchived && sample.archived_at) return false;
       // …and so do removed ones (#105, #96).
       if (!showRemoved && sample.current_stage === "removed") return false;
       if (project !== "all" && sample.project_code !== project) return false;
-      if (phases.size > 0 && !phases.has(phase)) return false;
+      // ANY, not the single furthest one: a block in Embedded Inventory whose
+      // slides are in staining is in both places, and the filters read as
+      // inventories (#119).
+      if (phases.size > 0 && ![...rowPhases].some((p) => phases.has(p))) return false;
       if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       const added = (sample.date_added || "").slice(0, 10);
       if (fromDate && added && added < fromDate) return false;
       if (toDate && added && added > toDate) return false;
-      if (query) {
-        const hay = [
+      // One shared matcher with the Extras inventory (#120): padding-insensitive
+      // codes, and every term has to match somewhere rather than the whole
+      // query having to appear as one adjacent run.
+      if (
+        query &&
+        !matchesSearch(search, [
           sample.sample_code,
-          // Both spellings, so searching "EE-0001" still finds "EE-1" and vice
-          // versa — the number on the physical block may be written either way
-          // depending on when it was cut (#87).
-          ...sampleCodeVariants(sample.sample_code),
           sample.sample_description,
           sample.project_code,
           sample.project_name,
@@ -357,11 +433,9 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
           ...agents,
           ...sampleSlides.map((s) => s.slide_code),
           ...sampleSlides.map((s) => s.notes),
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!hay.includes(query)) return false;
+        ])
+      ) {
+        return false;
       }
       return true;
     });
@@ -664,7 +738,7 @@ export function LogsView({ onRequestStain }: { onRequestStain?: (sampleCode: str
                   stainFilter={stain === "all" ? null : stain}
                   onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
-                  onRequestStain={onRequestStain}
+                  addableAgents={addableAgents}
                   selectedSlideIds={selectedSlideIds}
                   onToggleSlideSelect={toggleSlideSelect}
                 />
@@ -772,7 +846,7 @@ function FragmentRow({
   stainFilter,
   onlyMatching,
   colCount,
-  onRequestStain,
+  addableAgents,
   selectedSlideIds,
   onToggleSlideSelect,
 }: {
@@ -796,11 +870,20 @@ function FragmentRow({
   stainFilter: string | null;
   onlyMatching: boolean;
   colCount: number;
-  onRequestStain?: (sampleCode: string) => void;
+  /** Active agents that can be added straight onto this block (#114). */
+  addableAgents: Array<{ assay_type: string; name: string }>;
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
-  const { editSampleNotes, editSlideNotes, editSampleDescription, setArchived } = useActions();
+  const {
+    editSampleNotes,
+    editSlideNotes,
+    editSampleDescription,
+    setArchived,
+    requestStainForSamples,
+  } = useActions();
+  const [stainToAdd, setStainToAdd] = useState("");
+  const [addFlash, setAddFlash] = useState<string | null>(null);
   const readOnly = useReadOnly();
   const [openSlides, setOpenSlides] = useState<Set<number>>(new Set());
   function toggleSlide(id: number) {
@@ -935,13 +1018,67 @@ function FragmentRow({
               </div>
             )}
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              {onRequestStain && !readOnly && (
-                <button
-                  onClick={() => onRequestStain(sample.sample_code)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand/50"
-                >
-                  <Send size={13} /> Request stain for {displayCode(sample.sample_code)}
-                </button>
+              {/* Adds the stain outright (#114). This used to open the SYNC
+                  request dialog — the flow a viewer uses to ask the workstation
+                  for something — so on the workstation it filed a request with
+                  itself and waited for a drain. The direct path is the same one
+                  the block drawer uses: take a free extra if there is one, else
+                  leave the block flagged as needing a cut. */}
+              {!readOnly && addableAgents.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-lg border border-line bg-white px-1.5 py-1">
+                  <Send size={13} className="text-ink-faint" />
+                  <select
+                    aria-label={`Add a stain to ${displayCode(sample.sample_code)}`}
+                    value={stainToAdd}
+                    onChange={(event) => setStainToAdd(event.target.value)}
+                    className="bg-transparent text-xs text-ink outline-none"
+                  >
+                    <option value="">Add a stain…</option>
+                    {addableAgents.map((agent) => (
+                      <option
+                        key={`${agent.assay_type}::${agent.name}`}
+                        value={`${agent.assay_type}::${agent.name}`}
+                      >
+                        {agent.name} ({agent.assay_type})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={!stainToAdd}
+                    onClick={async () => {
+                      const [assayType, assayName] = stainToAdd.split("::");
+                      try {
+                        const { pulled, failed } = await requestStainForSamples(
+                          [sample.id],
+                          assayType as "stain" | "ihc",
+                          assayName,
+                        );
+                        setStainToAdd("");
+                        setAddFlash(
+                          failed.length
+                            ? failed[0].message
+                            : pulled.length
+                              ? `${assayName} pulled from an extra → now in Staining`
+                              : `${assayName} added — the block needs a cut`,
+                        );
+                      } catch (error) {
+                        setAddFlash(error instanceof Error ? error.message : String(error));
+                      }
+                    }}
+                    className="rounded px-1.5 py-0.5 text-xs font-medium text-brand hover:bg-brand/10 disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                </span>
+              )}
+              {/* A status, not decoration: this is where a refusal is reported —
+                  an exhausted block with nothing left to give (#70) fails here
+                  rather than silently doing nothing. */}
+              {addFlash && (
+                <span role="status" className="text-[11px] text-brand">
+                  {addFlash}
+                </span>
               )}
               {/* Archive is a reversible hide, not a delete, and never renumbers
                   anything — so it asks first and says so plainly (#74). Hidden

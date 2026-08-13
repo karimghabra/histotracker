@@ -420,6 +420,118 @@ const CASES = {
     ],
   },
 
+  // #118 — call a block Sectioned as soon as a slide row exists, cut or not.
+  "118-sectioned": {
+    grep: "#118/#119: a queued block is not Sectioned, and stays in Embedded",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /  const cut = live\.filter\(isCut\);/,
+        replace: "  const cut = live;",
+      },
+    ],
+  },
+
+  // #119 — make the phase exclusive again: the furthest one wins, so a block in
+  // Embedded Inventory with cut slides drops out of the Embedded filter.
+  //
+  // Pointed at the #117 test, not the #118/#119 one. In that test nothing has
+  // been cut yet, so the block's only phase IS "embedded" and furthest-wins
+  // agrees with the set — the assertion cannot tell them apart. The #117 test is
+  // where they genuinely disagree: the block is in Embedded Inventory AND its
+  // slides are in staining, and it has to appear under both.
+  "119-inventory": {
+    grep: "#117: the Staining filter finds a block whose slides are in staining",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /      if \(phases\.size > 0 && !\[\.\.\.rowPhases\]\.some\(\(p\) => phases\.has\(p\)\)\) return false;/,
+        replace:
+          "      if (phases.size > 0 && !phases.has(furthestPhase(rowPhases))) return false;",
+      },
+    ],
+  },
+
+  // #117 — require a staining STAMP again, so a slide sitting in the staining
+  // column that has not been stained matches nothing.
+  "117-staining": {
+    grep: "#117: the Staining filter finds a block whose slides are in staining",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /    if \(queue === "staining"\) phases\.add\("staining"\);/,
+        replace:
+          '    if (queue === "staining" && slide.stage_stained_at) phases.add("staining");',
+      },
+    ],
+  },
+
+  // #114 — send the Logs back through the sync request dialog.
+  "114-direct-add": {
+    grep: "#114: the Logs add a stain directly, with no sync request",
+    edits: [
+      {
+        file: "src/components/LogsView.tsx",
+        find: /              \{!readOnly && addableAgents\.length > 0 && \(/,
+        replace: "              {false && addableAgents.length > 0 && (",
+      },
+    ],
+  },
+
+  // #113 — put Add a Stain back on the embedded drawer.
+  "113-no-add": {
+    grep: "#113: no Add a Stain in the embedded-inventory drawer",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /        \{!isEmbedded && \(\r?\n        <div className="mb-4">/,
+        replace: '        {true && (\n        <div className="mb-4">',
+      },
+    ],
+  },
+
+  // #116 — take the route back out of the block drawer.
+  "116-edit-plan": {
+    grep: "#116: an active cutting plan can be reopened from the block drawer",
+    edits: [
+      {
+        file: "src/components/SampleDetailsDrawer.tsx",
+        find: /          \{openCutGroups\.map\(\(group\) => \(/,
+        replace: "          {[].map((group: { id: number; count: number }) => (",
+      },
+    ],
+  },
+
+  // #115 — remove the reassignment control from the rack drawer.
+  "115-reassign": {
+    grep: "#115: a slide in staining can be moved to another agent",
+    edits: [
+      {
+        file: "src/components/StackDetailsDrawer.tsx",
+        find: /                  \{!readOnly && !selectingSlides && \(\r?\n                    <select\r?\n                      aria-label=\{`Reassign /,
+        replace:
+          "                  {false && !selectingSlides && (\n                    <select\n                      aria-label={`Reassign ",
+      },
+    ],
+  },
+
+  // #120 — go back to a plain substring test against the stored code.
+  "120-search": {
+    grep: "#120: the Extras search finds a block by its short code",
+    edits: [
+      {
+        file: "src/lib/utils.ts",
+        find: /    \.flatMap\(\(word\) => \[word, \.\.\.sampleCodeVariants\(word\)\]\)\r?\n/,
+        replace: "",
+      },
+      {
+        file: "src/lib/utils.ts",
+        find: /    return sampleCodeVariants\(term\)\.some\(\(variant\) => hay\.includes\(variant\.toLowerCase\(\)\)\);/,
+        replace: "    return false;",
+      },
+    ],
+  },
+
   // #92 — stamp the settings seed as fresh, so staleTime suppresses the read.
   "92-settings": {
     grep: "#92: cutting defaults are configurable and take effect",

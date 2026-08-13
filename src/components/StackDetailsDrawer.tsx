@@ -1,7 +1,7 @@
 import { CheckCircle2, ListChecks, Layers, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useActions } from "../hooks/useActions";
-import { useStackSlides } from "../hooks/useData";
+import { useAssayCatalog, useStackSlides } from "../hooks/useData";
 import { syncAssayStackWorkflowStep } from "../lib/db";
 import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
@@ -41,8 +41,10 @@ export function StackDetailsDrawer({
     moveSlideStacks,
     removeSlideStacks,
     removeSlides,
+    reassignSlide,
   } = useActions();
   const { data: slides = [] } = useStackSlides(stack.id);
+  const { data: catalog = [] } = useAssayCatalog();
   // A viewer reads the rack and its protocol progress; it cannot drive them (#72).
   const readOnly = useReadOnly();
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +207,56 @@ export function StackDetailsDrawer({
                     </span>
                   </span>
                   <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>
+                  {/* Reassign, even from here (#115). A slide can be put on the
+                      wrong agent, or turn out not to be needed, and until now
+                      the only options after it reached staining were to leave it
+                      wrong or remove it. Moving it re-homes it into the open
+                      rack for the new agent and retires this one if it was the
+                      last slide in it. */}
+                  {!readOnly && !selectingSlides && (
+                    <select
+                      aria-label={`Reassign ${displayCode(slide.slide_code)}`}
+                      value=""
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (!next) return;
+                        event.target.value = "";
+                        if (next === "extra") {
+                          void run(() => reassignSlide(slide.id, { extra: true }));
+                          return;
+                        }
+                        const [assayType, ...nameParts] = next.split(":");
+                        void run(() =>
+                          reassignSlide(slide.id, {
+                            assayType: assayType as "stain" | "ihc",
+                            assayName: nameParts.join(":"),
+                          }),
+                        );
+                      }}
+                      className="shrink-0 rounded border border-line bg-panel px-1 py-0.5 text-[10px] text-ink-soft outline-none focus:border-brand"
+                    >
+                      <option value="">Move…</option>
+                      <option value="extra">Back to extras</option>
+                      <optgroup label="Stains">
+                        {catalog
+                          .filter((entry) => entry.assay_type === "stain")
+                          .map((entry) => (
+                            <option key={`stain-${entry.name}`} value={`stain:${entry.name}`}>
+                              {entry.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                      <optgroup label="IHC">
+                        {catalog
+                          .filter((entry) => entry.assay_type === "ihc")
+                          .map((entry) => (
+                            <option key={`ihc-${entry.name}`} value={`ihc:${entry.name}`}>
+                              {entry.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                    </select>
+                  )}
                 </div>
               );
             })}

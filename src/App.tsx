@@ -504,6 +504,15 @@ export default function App() {
       sample={selectedSample}
       selectedSamples={samples.filter((sample) => selectedSampleIds.includes(sample.id))}
       onRequestProcessing={setPendingBatchSampleIds}
+      // Swap the drawer over to the cut group so its plan can be edited (#116).
+      // The block selection is cleared first: the drawer chain picks the sample
+      // ahead of the section, so leaving it set would keep showing the block.
+      onOpenSection={(sectionId) => {
+        setSelectedSampleId(null);
+        setSelectedSampleIds([]);
+        setSelectedSectionIds([]);
+        setSelectedSectionId(sectionId);
+      }}
       width={drawerWidth}
       onClose={() => setSelectedSampleId(null)}
     />
@@ -752,13 +761,10 @@ export default function App() {
             </div>
           ) : view === "logs" ? (
             <div className="min-w-0 flex-1 overflow-hidden p-3">
-              <LogsView
-                key={`logs-${activeUser?.id ?? "none"}`}
-                onRequestStain={(code) => {
-                  setRequestStainCode(code);
-                  setShowRequestStain(true);
-                }}
-              />
+              {/* No onRequestStain: on the workstation the Logs now ADD the
+                  stain directly (#114). The sync request dialog is the viewer's
+                  route, reached from the header. */}
+              <LogsView key={`logs-${activeUser?.id ?? "none"}`} />
             </div>
           ) : (
           <>

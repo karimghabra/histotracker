@@ -3406,6 +3406,75 @@ export async function updateSlideAssignment(
   );
 }
 
+/**
+ * Move ONE slide to a different agent, or back to being an extra (#115).
+ *
+ * `updateSlideAssignment` cannot do this once a slide has reached staining: it
+ * rewrites the assay columns and resets `current_stage`, but leaves `stack_id`
+ * pointing at the rack the slide is physically in. The slide would claim to be
+ * CD31 while still sitting in the H&E rack, and the old rack would keep counting
+ * it. Re-homing is the whole job, so it lives in its own function.
+ *
+ * Rules, all of them consequences of the rack model:
+ *  · The slide leaves its current rack first, and that rack is retired if the
+ *    slide was the last one in it (`closeSlideStackIfEmpty`, #83) — an empty
+ *    rack on the board is a rack somebody will go looking for.
+ *  · A new agent joins the OPEN loading rack for that agent, created if there
+ *    is none. `getOpenStainRack` refuses a rack whose protocol has started
+ *    (#81), so a reassigned slide can never be dropped into a batch that has
+ *    already been through the reagents.
+ *  · Back to extras means back to the inventory: no agent, no rack, and
+ *    `current_stage = 'extra'`, which is exactly where an uncommitted cut slide
+ *    starts life.
+ *
+ * Timestamps already earned are left alone. A slide that was stained as H&E and
+ * is being re-cut as CD31 keeps its stained-at stamp, because that is what
+ * happened to the physical glass — the record is not rewritten to suit the new
+ * plan.
+ */
+export async function reassignSlide(
+  slideId: number,
+  target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
+): Promise<void> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ stack_id: number | null; current_stage: string }>>(
+    `SELECT stack_id, current_stage FROM slides WHERE id = ?`,
+    [slideId],
+  );
+  const slide = rows[0];
+  if (!slide) throw new Error("That slide no longer exists.");
+  if (slide.current_stage === "removed") {
+    throw new Error("That slide was removed — restore it before reassigning it.");
+  }
+  const previousStackId = slide.stack_id;
+
+  if ("extra" in target) {
+    await db.execute(
+      `UPDATE slides
+          SET purpose = 'extra', assay_type = '', assay_name = '', stain_name = '',
+              assignment_saved = 1, stack_id = NULL, current_stage = 'extra'
+        WHERE id = ?`,
+      [slideId],
+    );
+  } else {
+    const assayName = target.assayName.trim();
+    if (!assayName) throw new Error("Choose a stain or IHC agent for this slide.");
+    const openRack = await getOpenStainRack(target.assayType, assayName);
+    const stackId = openRack?.id ?? (await getOrCreateStainRack(target.assayType, assayName));
+    await db.execute(
+      `UPDATE slides
+          SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+              assignment_saved = 1, slice_count = 2, control_agent = 'IgG',
+              stack_id = ?, current_stage = 'stain_requested',
+              stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
+        WHERE id = ?`,
+      [target.assayType, assayName, assayName, stackId, nowTimestamp(), slideId],
+    );
+  }
+
+  if (previousStackId != null) await closeSlideStackIfEmpty(previousStackId);
+}
+
 /** Record imaging for one assay slide and derive the parent section's image status. */
 export async function setSlidePicturesTaken(slideId: number, complete: boolean): Promise<void> {
   const db = await getDb();

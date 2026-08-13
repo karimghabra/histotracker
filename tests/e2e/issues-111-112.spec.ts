@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
 
 /**
  * #111 (Needs Sectioning filter + sort) and #112 (the needs-cut flag must clear
@@ -153,11 +154,12 @@ test("#112: a cut clears the request it fulfilled", async ({ page }) => {
   await addSample(page, "request cleared");
   await embed(page, "EE-1", "Batch 1");
 
-  // Ask for an agent → outstanding, and the block is flagged.
-  await page.getByText("EE-1", { exact: true }).first().click();
+  // Ask for an agent → outstanding, and the block is flagged. From the Logs:
+  // #113 took the control out of the Embedded Inventory drawer, but the drawer
+  // still LISTS what is outstanding, which is what this test is about.
+  await addStainFromLogsAndReturn(page, "EE-1", "stain::H&E");
+  await openBlockDrawer(page, "EE-1");
   const panel = drawer(page);
-  await panel.locator("select").first().selectOption("stain::H&E");
-  await panel.getByRole("button", { name: "Add", exact: true }).click();
   await expect(panel.getByText("Requested")).toBeVisible({ timeout: 15000 });
   await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(1);
 
@@ -184,10 +186,9 @@ test("#112: an outstanding stain request can be withdrawn by hand", async ({ pag
   await addSample(page, "withdraw me");
   await embed(page, "EE-1", "Batch 1");
 
-  await page.getByText("EE-1", { exact: true }).first().click();
+  await addStainFromLogsAndReturn(page, "EE-1", "stain::H&E");
+  await openBlockDrawer(page, "EE-1");
   const panel = drawer(page);
-  await panel.locator("select").first().selectOption("stain::H&E");
-  await panel.getByRole("button", { name: "Add", exact: true }).click();
   await expect(panel.getByText("Requested")).toBeVisible({ timeout: 15000 });
   await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(1);
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Archive, Search, Star } from "lucide-react";
 import type { Slide } from "../lib/types";
-import { displayCode } from "../lib/utils";
+import { displayCode, matchesSearch } from "../lib/utils";
 
 export interface ExtraSlideGroup {
   sampleId: number;
@@ -45,12 +45,17 @@ export function ExtraSlideInventory({
   const [search, setSearch] = useState("");
   const groups = useMemo(() => groupExtraSlides(slides), [slides]);
   const visible = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return groups;
+    // Padding-insensitive and multi-term (#120). The old test was a plain
+    // substring against the STORED code, so "OG-11" could not find "OG-0011" —
+    // and a database in daily use holds both spellings (#87).
+    if (!search.trim()) return groups;
     return groups.filter((group) =>
-      [group.parentCode, group.sampleDescription, group.projectCode]
-        .some((value) => value.toLowerCase().includes(query)) ||
-      group.slides.some((slide) => slide.slide_code.toLowerCase().includes(query)),
+      matchesSearch(search, [
+        group.parentCode,
+        group.sampleDescription,
+        group.projectCode,
+        ...group.slides.map((slide) => slide.slide_code),
+      ]),
     );
   }, [groups, search]);
 

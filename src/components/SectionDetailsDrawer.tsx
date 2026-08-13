@@ -130,7 +130,17 @@ export function SectionDetailsDrawer({
   const [savingAll, setSavingAll] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const suggestions = useMemo(() => stainSuggestions(section), [section]);
-  const showAssignments = ["sectioned", "assignment_required"].includes(section.current_stage);
+  // `needs_sectioning` included (#116): a group that is queued but not yet cut
+  // IS the cutting plan, and editing it is the whole of "editable active
+  // sectioning plans". Excluding it meant the plan was fixed the moment it
+  // was sent — the only remedy was to remove the group and start again.
+  const showAssignments =
+    ["needs_sectioning", "sectioned", "assignment_required"].includes(section.current_stage) &&
+    !readOnly;
+  // The editor and the read-only "Assay slides" list say the same thing — the
+  // editor just says more — so they are alternatives, never both (each slide
+  // would otherwise be named twice). A viewer cannot edit, so it gets the list.
+  const showAssayList = !showAssignments;
   const allAssigned = slides.length > 0 && slides.every((slide) => slide.assignment_saved === 1);
   const hasAssaySlides = slides.some((slide) => slide.purpose === "stain");
   const assaySlides = slides.filter((slide) => slide.purpose === "stain");
@@ -298,7 +308,7 @@ export function SectionDetailsDrawer({
           </section>
         )}
 
-        {!showAssignments && assaySlides.length > 0 && (
+        {showAssayList && assaySlides.length > 0 && (
           <section className="mb-5">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-faint">
               Assay slides

@@ -81,8 +81,8 @@ function column(page: Page, title: string) {
 }
 
 /** Tick a block's checkbox in the Embedded Inventory (its dense card). */
-async function select(page: Page, code: string) {
-  await column(page, "Embedded Inventory")
+async function select(page: Page, code: string, queue = "Embedded Inventory") {
+  await column(page, queue)
     .getByRole("checkbox", { name: `Select ${code}` })
     .check();
 }
@@ -91,19 +91,21 @@ async function select(page: Page, code: string) {
 // #109 — "selecting multiple samples, then using the drop down to request a
 // stain only requests one of the selected samples."
 // ---------------------------------------------------------------------------
+// Driven in Pre-processing, not the Embedded Inventory: #113 removed the
+// control from the embedded drawer, where a request could quietly consume an
+// extra cut for something else. The multi-target behaviour this issue is about
+// is unchanged — the control still acts on the WHOLE selection wherever it is
+// shown — so the test follows it to a stage that still has it.
 test("#109: adding a stain applies to every selected block", async ({ page }) => {
   await signInAndProject(page);
   for (const description of ["first block", "second block", "third block"]) {
     await addSample(page, description);
   }
-  await embed(page, "EE-1", "Batch 1");
-  await embed(page, "EE-2", "Batch 2");
-  await embed(page, "EE-3", "Batch 3");
 
-  // Select all three in the Embedded Inventory.
-  await select(page, "EE-1");
-  await select(page, "EE-2");
-  await select(page, "EE-3");
+  // Select all three.
+  await select(page, "EE-1", "Pre-processing");
+  await select(page, "EE-2", "Pre-processing");
+  await select(page, "EE-3", "Pre-processing");
 
   const panel = drawer(page);
   await expect(panel).toBeVisible();
@@ -113,10 +115,8 @@ test("#109: adding a stain applies to every selected block", async ({ page }) =>
   await panel.locator("select").first().selectOption("stain::H&E");
   await panel.getByRole("button", { name: "Add", exact: true }).click();
 
-  // All three, not one: the flash counts them and every card is flagged.
+  // All three, not one — the flash counts them.
   await expect(panel.getByText(/3 flagged on the block/)).toBeVisible({ timeout: 15000 });
-  const inventory = column(page, "Embedded Inventory");
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(3);
 });
 
 // ---------------------------------------------------------------------------

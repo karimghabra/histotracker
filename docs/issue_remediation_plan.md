@@ -375,6 +375,115 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #113–#120 — what the Logs claim, and where a slide can go — status as of 0.12.0
+
+### The one root cause behind #117, #118 and #119
+
+Three separate reports, one model error. `samplePhase` returned a **single**
+value, and derived it from *"has this timestamp ever been set"* rather than from
+where the block and its slides actually are. Every symptom follows:
+
+- **#118 — a block read `Sectioned · 0/1` before it had been cut.** Slides are
+  created when the cutting *plan* is saved, so the row existed while the block
+  was still queued in Needs Sectioning. `isCut()` now gates on the slide having
+  *left* that queue (`section_stage !== 'needs_sectioning'`, the same predicate
+  #95 established for the `cut` timeline event), and `analyzedProgress` counts
+  only cut slides — so the denominator no longer includes glass that does not
+  exist.
+- **#117 — the Staining / IHC filter returned nothing.** It required
+  `stage_stained_at`. A slide sitting *in* the staining column has by definition
+  not been stained yet, so the filter excluded precisely the population it was
+  named for. Phases are now read off the slide's **current queue**
+  (`SECTION_STAGE_TO_QUEUE`), which is what the filter names mean.
+- **#119 — filters are inventories, not a pipeline position.** A block in
+  Embedded Inventory whose slides are in staining is genuinely in both places;
+  furthest-wins made it vanish from one. `samplePhases` returns a `Set` and the
+  filter is a set intersection. The Stage *column* still shows one value —
+  `furthestPhase` — because a column needs a single string.
+
+The set is also what makes the empty case honest: if a block has no live cut
+slides it falls back to embedded-or-earlier, rather than inheriting a phase from
+a timestamp left over from something that was later removed.
+
+### Stains
+
+- **#114 — "Add a stain" from the Logs opened the sync-request dialog.** That is
+  the flow a *viewer* uses to ask the workstation for something; on the
+  workstation it filed a request with itself, which is why nothing appeared to
+  happen. The Logs row now calls `requestStainForSamples` directly — the same
+  entry point the drawer uses, so it takes a free extra when there is one and
+  otherwise leaves the block flagged as needing a cut (#110).
+- **#113 — no "Add a Stain" in the Embedded Inventory.** Gated on
+  `!isEmbedded`. At that stage there is no glass to stain, so the control could
+  only consume a free extra from some *earlier* cut — which reads in the log as
+  "this block was stained" when an unrelated slide was used. The action available
+  at that stage is a cutting plan.
+- **#115 — a slide's agent can be changed, or the slide sent back to extras.**
+  `reassignSlide` moves the slide out of its rack and into the one belonging to
+  the new agent (`getOpenStainRack ?? getOrCreateStainRack`), then retires the
+  rack it emptied via `closeSlideStackIfEmpty` — closed, never deleted, per #83.
+  A `removed` slide is refused. **Stamps already earned are kept**: a slide
+  stained as H&E and re-cut as CD31 keeps its stained-at date, because that is
+  what physically happened to the glass, and this is a posterity log.
+
+### #116 — a queued cutting plan is editable
+
+`showAssignments` in the section drawer excluded `needs_sectioning`, so the one
+window in which a plan can still be changed for free — sent, not yet cut — was
+the one window with no editor. Widened, and the block's own panel in the Embedded
+Inventory now lists its open groups (`Awaiting cut · N slides / Edit plan`), so
+the plan is reachable from the block as well as from the card.
+
+### #120 — the Extras search
+
+Rebuilt on a shared `matchesSearch(query, parts)` in `src/lib/utils.ts`, which
+the Logs search now uses too. Terms match in any order, and each term is compared
+against both the raw text and its `sampleCodeVariants` — so `OG-11` finds
+`OG-0011` and `OG-0011` finds `OG-11`, which matters because #87 made the padding
+render-time cosmetic while the DB still stores the padded form.
+
+### What #113 moved, and what followed it
+
+Removing the embedded drawer's Add-a-Stain is not a cosmetic deletion: a block
+stays `embedded` for its whole life (that is the point of #119), so the control
+was gone for *every* block, and with it the only board-side way to raise an
+outstanding stain request. The Logs control (#114) is the surviving entry point,
+and it is the same data-layer call, so every behaviour built on requests —
+the needs-cut flag (#110), the Send-for-Cutting prefill (#41), two requests for
+the same agent queueing two slides (#62/#66), the cut clearing the request it
+fulfilled (#112), the exhausted-block refusal (#70) — is unchanged.
+
+Nine e2e tests drove those behaviours through the removed control and were
+re-pointed at the Logs, via one shared helper (`tests/helpers/stains.ts`) so the
+next move costs one edit rather than nine. Two things had to change with them:
+
+- **#109 (a stain applies to the whole selection)** now runs in Pre-processing.
+  The multi-target control still exists wherever the drawer shows it; the
+  Embedded Inventory is simply no longer one of those places. Bulk stain-adding
+  across many *embedded* blocks has no UI home as a result — the Logs control is
+  per-row. Worth a decision if it turns out to be missed at the bench.
+- **#70's refusal** was asserted against the sync request dialog, which on a
+  workstation is exactly what #114 says should not appear. It is now asserted on
+  the Logs flash, which is why that flash is a `role="status"`.
+
+Two more things fell out of the section drawer being made editable at
+`needs_sectioning`: the read-only "Assay slides" list and the editor were both
+rendering, naming every slide twice, and a viewer was being handed an editor.
+They are now alternatives — editor when writable, list when not.
+
+*Tests:* one new harness gate (`issue(115)`, port of `reassignSlide`), 4 unit
+tests for `matchesSearch`, and 7 e2e tests in `tests/e2e/issues-113-120.spec.ts`.
+All eight revert-verified. Note `119-inventory` is pointed at the **#117** test,
+not the #118/#119 one: in the latter nothing has been cut, so the block's only
+phase is `embedded` and set-intersection and furthest-wins agree — the assertion
+cannot tell them apart. The #117 test is where they genuinely disagree.
+
+*Compatibility:* no schema change, no migration. Every fix is a read-path or
+UI change except `reassignSlide`, which writes only columns that have existed
+since 0.4.x.
+
+---
+
 ## #111–#112 — the needs-cut flag, Needs Sectioning filters — status as of 0.11.1
 
 - **#112 — the flag survived the cut that should have cleared it · ✅ fixed.**

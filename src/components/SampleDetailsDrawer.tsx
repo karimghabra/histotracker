@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Archive, CheckCircle2, Pencil, Scissors, Trash2, X } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import {
@@ -21,12 +21,15 @@ export function SampleDetailsDrawer({
   sample,
   selectedSamples = [sample],
   onRequestProcessing,
+  onOpenSection,
   width = 320,
   onClose,
 }: {
   sample: Sample;
   selectedSamples?: Sample[];
   onRequestProcessing: (sampleIds: number[]) => void;
+  /** Open a cut group that already exists, so its plan can be edited (#116). */
+  onOpenSection?: (sectionId: number) => void;
   width?: number;
   onClose: () => void;
 }) {
@@ -78,6 +81,17 @@ export function SampleDetailsDrawer({
   // Agents asked for that no cut has produced yet (#100) — intake choices and
   // properly-submitted requests both land here.
   const pendingAgents = parsePreselectedStains(sample.pending_stains);
+  // Cut groups this block already has that are still QUEUED (#116). Derived
+  // from the slides the drawer already loads — a slide carries its group's id
+  // and stage — so no extra query.
+  const openCutGroups = useMemo(() => {
+    const bySection = new Map<number, number>();
+    for (const slide of sampleSlides) {
+      if (slide.section_stage !== "needs_sectioning") continue;
+      bySection.set(slide.section_request_id, (bySection.get(slide.section_request_id) ?? 0) + 1);
+    }
+    return [...bySection.entries()].map(([id, count]) => ({ id, count }));
+  }, [sampleSlides]);
   const isEmbedded = sample.current_stage === "embedded";
   const selectedGroup = selectedSamples.length > 0 ? selectedSamples : [sample];
   // What Delete acts on: the multi-selection if there is one, else this block
@@ -281,8 +295,32 @@ export function SampleDetailsDrawer({
               Stains preselected ({pendingStainNames(sample.pending_stains)}) — the cut is prefilled and ready.
             </p>
           )}
+          {/* A plan already sent for cutting is still editable until somebody
+              actually cuts it (#116). Send for Cutting always starts a NEW
+              group, so without this the only way back to a queued one was to
+              find its card on the board and know that was the same thing. */}
+          {openCutGroups.map((group) => (
+            <button
+              key={group.id}
+              type="button"
+              disabled={!onOpenSection}
+              onClick={() => onOpenSection?.(group.id)}
+              className="mt-1 flex w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-2 py-1.5 text-left text-[11px] text-ink-soft transition hover:border-brand/50 hover:bg-brand/5 disabled:pointer-events-none disabled:opacity-60"
+            >
+              <span>
+                Awaiting cut · {group.count} slide{group.count === 1 ? "" : "s"}
+              </span>
+              <span className="shrink-0 font-medium text-brand">Edit plan</span>
+            </button>
+          ))}
         </div>
 
+        {/* No stain-adding in the Embedded Inventory (#113). The control pulls
+            from a free extra when there is one, which is invisible from here and
+            reads as "the block was stained" when in fact an unrelated slide was
+            consumed. At this stage the only honest action is a cutting plan;
+            agents are chosen against real slides in the Extras inventory. */}
+        {!isEmbedded && (
         <div className="mb-4">
           {/* The heading counts the blocks it will act on (#109). The drawer has
               always been multi-select — the checklist, Start Run, Delete and Mark
@@ -358,6 +396,7 @@ export function SampleDetailsDrawer({
             </p>
           )}
         </div>
+        )}
         </>
         )}
 

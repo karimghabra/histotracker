@@ -531,6 +531,36 @@ function makeApi(db) {
   }
   // Port of removeSlide() — db.ts. NOTHING IS DELETED (#83): the row stays, is
   // parked at current_stage='removed', detached from its rack, and the reason
+  // Port of reassignSlide() — db.ts (#115). Moving a slide to another agent has
+  // to RE-HOME it: leaving stack_id pointing at the old rack would have the
+  // slide claiming one agent while sitting in another's rack.
+  function reassignSlide(slideId, target) {
+    const slide = get(`SELECT stack_id, current_stage FROM slides WHERE id = ?`, [slideId]);
+    if (!slide) throw new Error("NO_SLIDE");
+    if (slide.current_stage === "removed") throw new Error("SLIDE_REMOVED");
+    const previousStackId = slide.stack_id;
+    if (target.extra) {
+      run(`UPDATE slides
+              SET purpose = 'extra', assay_type = '', assay_name = '', stain_name = '',
+                  assignment_saved = 1, stack_id = NULL, current_stage = 'extra'
+            WHERE id = ?`, [slideId]);
+    } else {
+      let rack = openStainRack(target.assayType, target.assayName);
+      const stackId = rack ? rack.id : Number(run(
+        `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+         VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+        [target.assayType, target.assayName, now()]).lastInsertRowid);
+      run(`UPDATE slides
+              SET purpose = 'stain', assay_type = ?, assay_name = ?, stain_name = ?,
+                  assignment_saved = 1, slice_count = 2, control_agent = 'IgG',
+                  stack_id = ?, current_stage = 'stain_requested',
+                  stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
+            WHERE id = ?`,
+          [target.assayType, target.assayName, target.assayName, stackId, now(), slideId]);
+    }
+    if (previousStackId != null) closeSlideStackIfEmpty(previousStackId);
+  }
+
   // goes on the sample timeline. The letter mark is authoritative, so the letter
   // stays burned without this path compensating.
   function removeSlide(slideId, reason) {
@@ -950,7 +980,7 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     tickSectionStainedCheckbox,
-    removeSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
+    removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
@@ -1622,6 +1652,55 @@ issue(112, "a cut clears the request it fulfils even with no assay type", () => 
 
   eq(api.get(`SELECT preselected_stains AS ps FROM samples WHERE id = ?`, [id]).ps, "",
      "the cut clears the request it fulfilled");
+});
+
+// #115 — "user should be able to reassign stains from one to another, even
+// after the slides have already arrived in the staining stage."
+//
+// The hard part is not the assay columns, it is the RACK. A slide that changes
+// agent has to leave the rack it is physically in and join the one for its new
+// agent, and the rack it left has to be retired if it is now empty — otherwise
+// the board keeps a rack that nothing is in and the slide claims an agent it is
+// not sitting with.
+issue(115, "a slide can be moved to another agent, or back to extras", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "reassign me");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    { duplicates: 1, stains: "" },
+  ]);
+  api.startAssayWork(section);
+
+  const slide = api.get(
+    `SELECT id, stack_id FROM slides WHERE section_request_id = ? AND assay_name = 'H&E'`,
+    [section]);
+  assert(slide?.stack_id != null, "the H&E slide is in a rack to begin with");
+  const originalRack = slide.stack_id;
+
+  // --- move it to a different agent ---------------------------------------
+  api.reassignSlide(slide.id, { assayType: "ihc", assayName: "CD31" });
+  const moved = api.get(
+    `SELECT assay_type AS t, assay_name AS n, stack_id AS s, current_stage AS st
+       FROM slides WHERE id = ?`, [slide.id]);
+  eq(moved.n, "CD31", "the slide carries the new agent");
+  eq(moved.t, "ihc", "…with its type");
+  assert(moved.s !== originalRack, "and it has LEFT the old rack");
+  eq(api.get(`SELECT assay_name AS n FROM slide_stacks WHERE id = ?`, [moved.s]).n, "CD31",
+     "the rack it joined is the one for its new agent");
+  eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [originalRack]).c != null, true,
+     "the rack it emptied is retired rather than left on the board");
+
+  // --- and back to extras --------------------------------------------------
+  api.reassignSlide(slide.id, { extra: true });
+  const extra = api.get(
+    `SELECT purpose AS p, assay_name AS n, stack_id AS s, current_stage AS st
+       FROM slides WHERE id = ?`, [slide.id]);
+  eq(extra.p, "extra", "it is an extra again");
+  eq(extra.n, "", "with no agent");
+  eq(extra.s, null, "and no rack");
+  eq(extra.st, "extra", "…sitting in the extras inventory, where an uncommitted slide lives");
 });
 
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
@@ -2804,10 +2883,20 @@ invariant("the Logs view shows removed slides but excludes them from progress", 
   const logs = readFileSync(join(HERE, "..", "src", "components", "LogsView.tsx"), "utf8");
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   assert(/function isRemoved/.test(logs), "LogsView needs one shared isRemoved predicate");
-  assert(/function analyzedProgress[\s\S]{0,240}!isRemoved/.test(logs),
+  // Scoped to each function's BODY, not a fixed character window. The window
+  // version broke the moment a comment grew inside the function — the predicate
+  // was still there, just past character 240 — which is a test failing for a
+  // reason that has nothing to do with the behaviour it guards.
+  const fnBody = (name) => {
+    const start = logs.indexOf("function " + name + "(");
+    if (start < 0) return "";
+    const end = logs.indexOf("\n}", start);
+    return end < 0 ? logs.slice(start) : logs.slice(start, end);
+  };
+  assert(fnBody('analyzedProgress').includes('!isRemoved'),
     "analyzedProgress must drop removed slides, or a sample strands at 3/4 forever");
-  assert(/function samplePhase[\s\S]{0,240}!isRemoved/.test(logs),
-    "samplePhase must drop removed slides, or the sample stays 'Sectioned' forever");
+  assert(fnBody('samplePhases').includes('!isRemoved'),
+    "samplePhases must drop removed slides, or the sample stays 'Sectioned' forever");
   assert(logs.includes("Removed"), "the Logs row needs a visible Removed flag");
   // Scoped to the function BODY (up to the next top-level export), not a fixed
   // character window — a window silently ran into the next function and made

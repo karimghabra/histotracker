@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
 
 // Real end-to-end drive of the lab workflow in the actual app, used to verify
 // the sectioning/processing issues (#35, #36, #40, #41, #42, #37) against the
@@ -201,15 +202,13 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   await seedSample(page);
   await embedBlock(page);
 
-  // Request a stain on the embedded block (no extras exist yet → flags the block).
-  await page.getByText("EE-1", { exact: true }).first().click();
-  const agentSelect = page
-    .locator("select")
-    .filter({ has: page.locator("option", { hasText: "Choose an agent" }) });
-  await agentSelect.selectOption({ index: 1 });
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  // Request a stain on the embedded block (no extras exist yet → flags the
+  // block). From the Logs: #113 removed the Embedded Inventory control, and
+  // #114 made this one add outright instead of filing a sync request.
+  await addStainFromLogsAndReturn(page, "EE-1", "stain::H&E");
 
   // The drawer confirms the block now carries a preselected stain.
+  await openBlockDrawer(page, "EE-1");
   await expect(page.getByText(/preselected/i).first()).toBeVisible();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
@@ -407,11 +406,12 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Open the grouped Needs Sectioning card → the drawer shows BOTH assay slides,
-  // not just the first cut group's one slide.
+  // not just the first cut group's one slide. A queued group is still editable
+  // (#116), so on the workstation they appear as editor rows rather than the
+  // read-only list a viewer sees.
   await page.getByText("3 slides").first().click();
-  await expect(page.getByText("Assay slides")).toBeVisible();
-  await expect(page.getByText("EE-1-A", { exact: true })).toBeVisible();
-  await expect(page.getByText("EE-1-B", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Purpose for EE-1-A")).toBeVisible();
+  await expect(page.getByLabel("Purpose for EE-1-B")).toBeVisible();
 });
 
 test("undo after the staining scatter returns to Staining, not Needs Sectioning (#56)", async ({ page }) => {

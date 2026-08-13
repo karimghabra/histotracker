@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { addStainFromLogsAndReturn } from "../helpers/stains";
 
 // Stain-request cluster (#41 / #62 / #66): the "needs cut" flag on an embedded
 // block and the Send-for-Cutting prefill are driven by an OUTSTANDING-requests
@@ -67,11 +68,20 @@ async function embed(page: Page, code: string) {
   await dragOnto(page, code, "Embedded Inventory");
 }
 
-async function requestStain(page: Page, label: string) {
-  const select = page.locator("select").filter({ has: page.locator("option", { hasText: "Choose an agent" }) });
-  await select.selectOption({ label });
-  await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.waitForTimeout(300);
+// The request is made from the Logs now, not the block drawer — #113 removed
+// the Embedded Inventory control and #114 made the Logs one add directly. The
+// behaviour asserted below is unchanged; only the button that starts it moved.
+async function requestStain(page: Page, value: string) {
+  await addStainFromLogsAndReturn(page, "EE-1", value);
+  await reopenBlock(page);
+}
+
+/** The trip through the Logs may drop the board selection; put it back. */
+async function reopenBlock(page: Page, code = "EE-1") {
+  const send = page.getByRole("button", { name: /Send for Cutting/ }).first();
+  if (await send.isVisible().catch(() => false)) return;
+  await page.getByText(code, { exact: true }).first().click();
+  await expect(send).toBeVisible({ timeout: 15000 });
 }
 
 async function cutRows(page: Page): Promise<string[]> {
@@ -87,8 +97,8 @@ test("requesting the same stain twice queues two slides (#62/#66)", async ({ pag
   await embed(page, "EE-1");
   await page.getByText("EE-1", { exact: true }).first().click();
 
-  await requestStain(page, "H&E (stain)");
-  await requestStain(page, "H&E (stain)");
+  await requestStain(page, "stain::H&E");
+  await requestStain(page, "stain::H&E");
 
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
@@ -103,7 +113,7 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   await page.getByText("EE-1", { exact: true }).first().click();
 
   // Request H&E → no extras → flags the block.
-  await requestStain(page, "H&E (stain)");
+  await requestStain(page, "stain::H&E");
   await expect(page.getByText(/Stains preselected/i)).toBeVisible();
 
   // Cut ONLY the H&E slide (remove the extra rows) so no extras remain.
@@ -128,7 +138,7 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
 
   // Re-request H&E: no extras exist, so it must flag the block AGAIN and the
   // Send-for-Cutting dialog must prefill with H&E (the old model hid this).
-  await requestStain(page, "H&E (stain)");
+  await requestStain(page, "stain::H&E");
   await expect(page.getByText(/Stains preselected/i)).toBeVisible();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/Prefilled from/i)).toBeVisible();

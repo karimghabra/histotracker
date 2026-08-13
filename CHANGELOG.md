@@ -1,6 +1,55 @@
 # Changelog
 
-## 0.11.1 - unreleased
+## 0.12.0 - unreleased
+
+No schema change.
+
+**The Logs told you the wrong thing in three ways, all from one cause (#117,
+#118, #119).** A sample's stage was a single value derived from "has this
+timestamp ever been set". It is now a **set**, derived from where the block and
+its slides actually are:
+
+- **A queued block is not Sectioned.** Slides are created when the cutting plan
+  is made, so a block read *Sectioned · 0/1* before anyone had been near a
+  microtome. Sectioned now requires the slides to have been cut, and the analyzed
+  fraction no longer counts slides that do not exist yet.
+- **The Staining / IHC filter finds things.** It required a *stained* timestamp,
+  so a slide sitting in the staining column that had not been stained yet matched
+  nothing and the filter came back empty.
+- **Filters behave like inventories.** A block in Embedded Inventory whose slides
+  are in staining is in both places, and now appears under both. Picking one made
+  it vanish from the other.
+
+**Stains:**
+
+- **Adding a stain from the Logs adds it (#114).** It used to open the *sync
+  request* dialog — the flow a viewer uses to ask the workstation for something —
+  so on the workstation it filed a request with itself. It now takes a free extra
+  if there is one, or leaves the block flagged as needing a cut.
+- **No Add a Stain in the Embedded Inventory (#113).** The control silently
+  consumed a free extra, which reads as "the block was stained" when an unrelated
+  slide was used. At that stage the only action is a cutting plan; agents are
+  chosen against real slides in the Extras inventory.
+  *Where it went:* asking for a stain on an embedded block is now done from the
+  **Logs**, which is the same operation with the same consequences — a free extra
+  is taken if one exists, otherwise the block is flagged as needing a cut, and an
+  exhausted block still refuses. The drawer keeps the part that only reads: the
+  live Stains / IHC list, and Withdraw for an outstanding request.
+- **Slides can be reassigned (#115)** — onto a different agent, or back to
+  extras, from the rack drawer, even after they have reached staining. The slide
+  leaves its rack for the one belonging to its new agent, and the rack it emptied
+  is retired. Stamps already earned are kept: a slide stained as H&E and re-cut
+  as CD31 keeps its stained-at date, because that is what happened to the glass.
+
+**Cutting plans are editable while they are still queued (#116).** A group that
+has been sent for cutting but not yet cut can be edited — reachable from the
+block's own panel in the Embedded Inventory, as well as from its card.
+
+**The Extras search finds things (#120).** `OG-11` now finds `OG-0011`, in
+either direction, and several terms match in any order. The Logs search uses the
+same matcher.
+
+## 0.11.1 - 2026-08-12
 
 No schema change. **Opening this build repairs lingering flags in your existing
 database** — see below.

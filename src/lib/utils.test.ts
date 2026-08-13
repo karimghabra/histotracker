@@ -6,6 +6,7 @@ import {
   displayCode,
   duplicateLabel,
   formatSampleCode,
+  matchesSearch,
   parseSampleCode,
   sampleCodeVariants,
   slideCutAt,
@@ -167,5 +168,33 @@ describe("slideCutAt (#95)", () => {
 
   it("still falls back to created_at for slides that never had a stamp", () => {
     expect(slideCutAt({ ...base, section_stage: "stained" })).toBe("2026-07-20 09:00");
+  });
+});
+
+describe("matchesSearch (#120)", () => {
+  const block = ["OG-0011", "left femur", "OG", "Safranin O"];
+
+  it("finds a padded code from the short spelling, and the reverse", () => {
+    // The reported failure: typing OG-11 returned nothing for OG-0011.
+    expect(matchesSearch("OG-11", block)).toBe(true);
+    expect(matchesSearch("OG-0011", ["OG-11", "left femur"])).toBe(true);
+  });
+
+  it("requires every term, in any order", () => {
+    expect(matchesSearch("safranin femur", block)).toBe(true);
+    expect(matchesSearch("femur safranin", block)).toBe(true);
+    expect(matchesSearch("femur cd31", block)).toBe(false);
+  });
+
+  it("matches a term against any one field, not the joined string", () => {
+    // "OG-11 femur" only appears adjacent if you happen to join in that order;
+    // a substring test over the joined haystack got this wrong.
+    expect(matchesSearch("OG-11 femur", block)).toBe(true);
+  });
+
+  it("an empty query matches everything, and blanks are ignored", () => {
+    expect(matchesSearch("", block)).toBe(true);
+    expect(matchesSearch("   ", block)).toBe(true);
+    expect(matchesSearch("femur", [null, undefined, "", "left femur"])).toBe(true);
   });
 });

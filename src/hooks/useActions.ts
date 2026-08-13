@@ -9,6 +9,7 @@ import {
   removeSectionRequest,
   removeSamples as removeSamplesDb,
   removeSlide,
+  reassignSlide as reassignSlideDb,
   closeSlideStack,
   closeSlideStackIfEmpty,
   removeSectionRequestIfEmpty,
@@ -533,6 +534,19 @@ export function useActions() {
     [commit],
   );
 
+  /** Move a slide to a different agent, or back to extras (#115). */
+  const reassignSlide = useCallback(
+    (
+      slideId: number,
+      target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
+    ) =>
+      commit(
+        "extra" in target ? "Return slide to extras" : `Reassign slide → ${target.assayName}`,
+        () => reassignSlideDb(slideId, target),
+      ),
+    [commit],
+  );
+
   const setSlidePicturesTaken = useCallback(
     async (slideId: number, complete: boolean) => {
       const before = await getSlide(slideId);
@@ -770,6 +784,7 @@ export function useActions() {
     assignExtraSlide,
     requestStain,
     requestStainForSamples,
+    reassignSlide,
     withdrawStainRequest,
     setSlidePicturesTaken,
     completeSectionImaging,

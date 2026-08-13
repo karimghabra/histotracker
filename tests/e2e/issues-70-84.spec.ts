@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage, setTheme } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { addStainFromLogs } from "../helpers/stains";
 
 // Drives the real app in Chromium for the 0.6.x issue wave (#75, #78, #81, #82,
 // #84). The staining-rack case (#81) is the important one: it reproduces the
@@ -285,21 +286,16 @@ test("#70: the request dialog refuses an exhausted block", async ({ page }) => {
   await page.getByRole("button", { name: /Mark Exhausted/ }).click();
   await expect(page.locator("aside").getByText("EE-1")).toHaveCount(0, { timeout: 15000 });
 
-  // On the workstation the request dialog is reached from the Logs view (#64).
-  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
-  await page.getByRole("button", { name: /Request stain for EE-1/ }).click();
-  await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
+  // On the workstation the ask is made from the Logs row (#114 — it used to open
+  // the sync request dialog, which is a viewer's flow). The refusal has to
+  // survive the move: an exhausted block has nothing left to cut, so the add
+  // must fail LOUDLY rather than appear to succeed.
+  const flash = await addStainFromLogs(page, "EE-1", "stain::H&E");
+  expect(flash).toMatch(/cannot be cut again|exhausted/i);
 
-  const sampleSelect = page.getByLabel("Sample");
-  await expect(sampleSelect.locator("option", { hasText: "EE-1 — exhausted" })).toHaveCount(1);
-  await expect(page.getByRole("alert")).toContainText(/exhausted/i);
-
-  await page.getByLabel("Requested stain / IHC").selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send request/ }).click();
-  // Refused: the dialog stays open and explains why.
-  await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
-  await expect(page.getByText(/cannot be cut again/i).first()).toBeVisible();
+  // Nothing was created by the refusal: the block is not flagged for a cut.
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+  await expect(page.getByText("⚑ needs cut")).toHaveCount(0);
 });
 
 // #75 — the ordering only goes wrong once a sample has MORE THAN ONE cut group.

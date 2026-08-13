@@ -12,6 +12,12 @@ export default defineConfig({
   // The app re-renders on background timers (auto-advance/sync), so a few
   // interactions are timing-sensitive; retry rather than chase per-frame waits.
   retries: 2,
+  // 30s (the default) was already tight for the specs that walk a block all the
+  // way from intake to Embedded Inventory — a dozen drags, each with a settle.
+  // Asking for a stain now costs a trip through the Logs (#113/#114 moved the
+  // control there), which tipped several of them over. This only lengthens the
+  // ceiling; a passing test is unaffected.
+  timeout: 60_000,
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
   use: {
     baseURL: `http://localhost:${PORT}`,

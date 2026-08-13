@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
 
 /**
  * The right-hand drawer round (#98, #99, #100, #101) plus the Logs' Short/Long
@@ -138,9 +139,10 @@ test("#100/#101: the Stains list is live, one line each, with slide state", asyn
   await page.getByText("EE-1", { exact: true }).first().click();
   const panel = drawer(page);
 
-  // #100 — the control says Add, not Request.
-  await expect(panel.getByRole("heading", { name: "Add a Stain" })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+  // #100 — the control says Add, not Request. It lives in the Logs now: #113
+  // took it out of the Embedded Inventory drawer, where it could only consume an
+  // extra cut for something else.
+  await expect(panel.getByRole("heading", { name: "Add a Stain" })).toHaveCount(0);
 
   // Nothing asked for yet, so no list.
   await expect(panel.getByRole("heading", { name: "Stains / IHC" })).toHaveCount(0);
@@ -149,14 +151,12 @@ test("#100/#101: the Stains list is live, one line each, with slide state", asyn
   // the old panel showed a frozen intake string and never changed at all.
   // Named outright, not picked by index: "CD3" is a substring of "CD31", which
   // makes any hasText row filter ambiguous.
-  const select = panel.locator("select").first();
   const firstName = "H&E";
   const secondName = "Ki-67";
-  await select.selectOption(`stain::${firstName}`);
-  await panel.getByRole("button", { name: "Add", exact: true }).click();
+  await addStainFromLogsAndReturn(page, "EE-1", `stain::${firstName}`);
+  await addStainFromLogsAndReturn(page, "EE-1", `ihc::${secondName}`);
+  await openBlockDrawer(page, "EE-1");
   await expect(panel.getByRole("heading", { name: "Stains / IHC" })).toBeVisible();
-  await select.selectOption(`ihc::${secondName}`);
-  await panel.getByRole("button", { name: "Add", exact: true }).click();
 
   const list = panel.locator("ul").filter({ hasText: firstName });
   await expect(list.locator("li")).toHaveCount(2);

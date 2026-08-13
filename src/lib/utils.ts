@@ -216,6 +216,38 @@ export function slideCutAt(slide: {
   return slide.stage_cut_at || slide.created_at || "";
 }
 
+/**
+ * Does a record match a free-text query? (#120)
+ *
+ * Two rules, both learned from what people actually type at the bench:
+ *
+ *  · **Codes match whatever their padding.** New codes are minted unpadded
+ *    ("OG-11") while older rows keep "OG-0011" (#87), and a database in daily
+ *    use holds both — so a search for one has to find the other, in either
+ *    direction. Every code-shaped term is expanded through
+ *    {@link sampleCodeVariants}, and every code-shaped word in the haystack is
+ *    expanded the same way.
+ *  · **All terms must match, in any order.** "OG-11 safranin" should find the
+ *    one block, not everything mentioning either. A single substring test over
+ *    a joined string cannot do that: it only matches if the words appear
+ *    adjacent and in that order.
+ */
+export function matchesSearch(query: string, parts: Array<string | null | undefined>): boolean {
+  const terms = (query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const words = parts
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .flatMap((part) => [part, ...part.split(/\s+/)])
+    .flatMap((word) => [word, ...sampleCodeVariants(word)])
+    .map((word) => word.toLowerCase());
+  const hay = words.join(" ");
+  return terms.every((term) => {
+    if (hay.includes(term)) return true;
+    // The term itself may be the other spelling of a code.
+    return sampleCodeVariants(term).some((variant) => hay.includes(variant.toLowerCase()));
+  });
+}
+
 export function composeDescription(shared: string, own: string): string {
   const s = (shared ?? "").trim();
   const o = (own ?? "").trim();

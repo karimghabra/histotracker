@@ -26,25 +26,27 @@ async function boot(page: Page) {
   await expect(page.getByText("EE-1")).toBeVisible();
 }
 
-test("request a stain from the Logs view with the sample pre-filled (#64)", async ({ page }) => {
+test("ask for a stain from the Logs view with the sample pre-filled (#64/#114)", async ({
+  page,
+}) => {
   await boot(page);
 
   // Go to Logs and expand the sample row.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
-  // The row exposes a one-click "Request stain for EE-1" — no typing.
-  await page.getByRole("button", { name: /Request stain for EE-1/ }).click();
-  await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
+  // #64's property, under #114's mechanism: the control is already scoped to the
+  // row's sample — its label names the block, there is no sample chooser to fill
+  // in, and no code to type. The label carries the DISPLAY form (#87) while the
+  // stored code is still the padded "EE-0001".
+  const add = page.getByLabel("Add a stain to EE-1");
+  await expect(add).toBeVisible();
+  await expect(page.getByLabel("Sample")).toHaveCount(0);
 
-  // The sample is already selected in the dialog. Assert on the SELECTED OPTION's
-  // text, not the select's value: the value is deliberately the stored code
-  // ("EE-0001") because it travels into the request payload, while the user sees
-  // the display form (#87).
-  await expect(page.getByLabel("Sample").locator("option:checked")).toHaveText("EE-1");
-
-  // Pick an agent and send.
-  await page.getByLabel("Requested stain / IHC").selectOption({ label: "H&E (stain)" });
-  await page.getByRole("button", { name: /Send request/ }).click();
-  await expect(page.getByText(/Requested H&E for EE-1/)).toBeVisible();
+  // #114: it adds, rather than filing a sync request with this same workstation.
+  await expect(page.getByRole("button", { name: /Request stain for EE-1/ })).toHaveCount(0);
+  await add.selectOption("stain::H&E");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Request a stain" })).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText(/H&E/, { timeout: 15000 });
 });
