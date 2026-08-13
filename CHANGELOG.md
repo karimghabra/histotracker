@@ -1,6 +1,38 @@
 # Changelog
 
-## 0.13.0 - unreleased
+## 0.13.1 - unreleased
+
+No schema change. Five defects, all found by a **second stress harness**
+(`tests/stress2/`, `docs/stress_test_v2.md`) built from what the first one got
+wrong — most importantly that it had reported a stain date as "preserved" when it
+had been overwritten, because timestamps are stored to the minute and both values
+landed in the same one. v2 plants dates the code cannot produce, re-derives every
+finding a second way before recording it, and walks a seeded random path through
+the workflow instead of following hand-written happy paths.
+
+- **A stain request could take an extra out of a cutting plan that had not been
+  cut.** The Extras inventory has always known that a slide is a *plan* until its
+  group leaves the queue; the code that picks a free extra did not. So a block
+  with a saved-but-unsent plan answered "pulled from an extra" and put glass
+  nobody had cut into Staining — where one rack tick recorded it as stained,
+  with no cut date. Same family as #118: the plan is not the cut.
+- **A planned slide could be assigned to an agent.** It is a line in a plan, not
+  a piece of glass, and it cannot go on a stainer. Change the cutting plan
+  instead, which has been editable since #116.
+- **Removing a slide left its rack on the board, empty.** The panels you actually
+  use tidied up after themselves, so this was invisible — but the tidying lived
+  in the caller rather than in the removal, which is the fragility that let #73
+  ship broken once already. It now happens where the removal happens.
+- **Double-clicking "add a slide" showed a database error.** Two clicks race for
+  the same slide letter; the database refused the duplicate — the record was
+  never at risk — but the second click reported `UNIQUE constraint failed`. It
+  now takes the next letter and adds a second slide, which is what the two
+  clicks asked for.
+- **Images could be recorded for a slide that had been removed**, from a panel
+  left open when it went. Refused now. Removing an already-removed slide also
+  wrote a second removal to the timeline for one piece of glass; that is a no-op.
+
+## 0.13.0 - 2026-08-13
 
 **Schema change (migration 0024) — every instance must be on this build.** Two
 additive columns on `slides`; older builds ignore them and older backups gain

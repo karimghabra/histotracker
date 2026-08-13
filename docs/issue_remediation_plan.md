@@ -375,6 +375,56 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## 0.13.1 — what a second stress harness found
+
+Full write-up: `docs/stress_test_v2.md`. No schema change.
+
+The point of v2 was not more coverage but a different *method*, because writing
+v1 exposed two things about v1 itself:
+
+- it had reported a stain date as **preserved when it had been overwritten**, as
+  both values landed in the same minute (`nowTimestamp()` stores minutes), so
+  every same-run timestamp comparison in it was structurally blind; and
+- its fifteen invariants had **never fired once**, leaving no way to tell a
+  correct app from a blind probe.
+
+So v2 plants 2019 sentinels rather than comparing same-minute values, re-derives
+every finding a second way before recording it, walks a **seeded random path**
+over legal actions checking all 19 invariants after every step, and includes a
+self-check that plants a violation of each invariant and insists the catalogue
+notices. That self-check earned its keep immediately by catching an untested
+probe of my own.
+
+**Five defects, none reachable by v1's method:**
+
+1. **`requestStainForSample` pulled an extra from a group still in the queue.**
+   Its extras query filtered on the slide but not the group's stage;
+   `listExtraSlides` has carried that filter since #12. The two disagreed about
+   which extras exist, so a saved-but-unsent cutting plan could put uncut glass
+   into a staining rack, where a tick recorded it as stained. Found by the fuzzer
+   as `stained-implies-cut` at step 87, then reproduced deterministically.
+2. **`reassignSlide` accepted an uncut slide**, putting a line in a plan onto a
+   stainer. Now refused, pointing at the plan (#116).
+3. **`removeSlide` left the emptied rack open.** The UI compensated in
+   `useActions`, i.e. at the call site — the exact fragility this file warns
+   about in `nextSlideLetter`. Moved into the removal.
+4. **A double click surfaced `UNIQUE constraint failed: slides.slide_code`.**
+   Letter allocation is a read-then-write across `await`, so two overlapping
+   calls take the same letter. Pre-checking does not help — both callers pass the
+   check before either inserts — so the insert is retried against the index,
+   which is the only real arbiter.
+5. **Images could be recorded for a removed slide** from a stale panel, and a
+   repeated removal wrote a second removal event for one piece of glass.
+
+**Two harness gates were relying on defect 1** — one said so in its own comment.
+Their fixtures now cut the group first, which is what a bench does anyway.
+
+*Coverage:* 14 seeds × 300–400 steps ≈ 5 000 randomized actions, clean after the
+fixes; 4 new gates (89 total); v1's 21 stress tests, 101 e2e, 74 unit and the
+legacy upgrade all still pass.
+
+---
+
 ## 0.13.0 — the record must match the work that was done
 
 Not from a report: from a deep stress test of 0.12.0

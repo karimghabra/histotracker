@@ -3346,8 +3346,19 @@ export async function requestStainForSample(input: {
   // the outstanding multiset. Only when no extra is free does the request rest
   // on the block as an outstanding cut request.
   const extras = await db.select<Array<{ id: number }>>(
+    // The section-stage filter is the same rule `listExtraSlides` applies (#12):
+    // a slide saved as an extra is a PLAN until its group leaves the queue, and
+    // the plan is not the cut (#95/#118).
+    //
+    // This query had no such filter, so the two disagreed about which extras
+    // exist — the inventory correctly hid them, and this happily pulled one into
+    // a staining rack. A block with a saved-but-unsent cutting plan would answer
+    // "pulled from an extra" and put glass nobody had cut into Staining, where a
+    // rack tick then recorded it as stained with no cut date. Found by the v2
+    // fuzzer; the guard belongs here, at the one place that takes an extra.
     `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+        AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
       ORDER BY sl.id LIMIT 1`,
     [input.sampleId],
   );
@@ -3628,9 +3639,11 @@ export async function reassignSlide(
       slide_code: string;
       assay_name: string | null;
       sample_id: number;
+      stage_cut_at: string | null;
     }>
   >(
-    `SELECT sl.stack_id, sl.current_stage, sl.slide_code, sl.assay_name, sr.sample_id
+    `SELECT sl.stack_id, sl.current_stage, sl.slide_code, sl.assay_name, sr.sample_id,
+            sl.stage_cut_at
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ?`,
     [slideId],
@@ -3639,6 +3652,15 @@ export async function reassignSlide(
   if (!slide) throw new Error("That slide no longer exists.");
   if (slide.current_stage === "removed") {
     throw new Error("That slide was removed — restore it before reassigning it.");
+  }
+  // A slide that has not been cut is a line in a plan, not a piece of glass, and
+  // it cannot be put on a stainer. Without this a planned slide could be moved
+  // straight into a live rack and stained — recorded as stained with no cut date.
+  // Change the plan instead: a queued cut group is editable (#116).
+  if (!("extra" in target) && !slide.stage_cut_at) {
+    throw new Error(
+      "That slide has not been cut yet — change the cutting plan instead of assigning it to an agent.",
+    );
   }
   const previousStackId = slide.stack_id;
 
@@ -3724,62 +3746,90 @@ export async function addSlideToSection(
   const section = rows[0];
   if (!section) throw new Error("That cut group no longer exists.");
 
-  const letter = await nextSlideLetter(db, section.sample_id);
-  const code = slideCodeFor(section.parent_code, letter);
-  const ordinalRows = await db.select<Array<{ next: number }>>(
-    `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
-    [sectionId],
-  );
-  const ordinal = Number(ordinalRows[0]?.next ?? 1);
+  // Allocating a letter is a read-then-write across `await` boundaries, so two
+  // overlapping calls — a double click, which is what a user does when the app
+  // feels slow — can both read the same high-water mark and try the same code.
+  //
+  // Checking for a clash before inserting does NOT fix it: both callers pass the
+  // check before either inserts. The only reliable arbiter is the UNIQUE index
+  // on `slides.slide_code` itself, so the insert is attempted and a collision is
+  // retried with a freshly read letter. Without this the loser of the race saw
+  // `UNIQUE constraint failed: slides.slide_code` — the data was safe, the
+  // message was a database internal.
   const timestamp = nowTimestamp();
   // "Already cut" is read off the SIBLING slides, not the group's stage: the
   // group's stage moves on for other reasons, and the cut stamp is the thing
   // that says a blade touched the block (#95).
   const alreadyCut = Boolean(section.cut_at);
+  const assayName = "extra" in target ? "" : target.assayName.trim();
+  if (!("extra" in target) && !assayName) {
+    throw new Error("Choose a stain or IHC agent for this slide.");
+  }
 
-  let slideId: number;
-  if ("extra" in target) {
-    const result = await db.execute(
-      `INSERT INTO slides
-        (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved,
-         current_stage, stage_cut_at)
-       VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
-      [sectionId, ordinal, code, alreadyCut ? timestamp : null],
+  let slideId = 0;
+  let letter = 0;
+  let code = "";
+  for (let attempt = 0; ; attempt += 1) {
+    letter = await nextSlideLetter(db, section.sample_id);
+    code = slideCodeFor(section.parent_code, letter);
+    const ordinalRows = await db.select<Array<{ next: number }>>(
+      `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
+      [sectionId],
     );
-    if (result.lastInsertId == null) throw new Error("Could not add the slide.");
-    slideId = result.lastInsertId;
-  } else {
-    const assayName = target.assayName.trim();
-    if (!assayName) throw new Error("Choose a stain or IHC agent for this slide.");
-    let stackId: number | null = null;
-    if (alreadyCut) {
-      const openRack = await getOpenStainRack(target.assayType, assayName);
-      stackId = openRack?.id ?? (await getOrCreateStainRack(target.assayType, assayName));
+    const ordinal = Number(ordinalRows[0]?.next ?? 1);
+    try {
+      if ("extra" in target) {
+        const result = await db.execute(
+          `INSERT INTO slides
+            (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved,
+             current_stage, stage_cut_at)
+           VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
+          [sectionId, ordinal, code, alreadyCut ? timestamp : null],
+        );
+        if (result.lastInsertId == null) throw new Error("Could not add the slide.");
+        slideId = result.lastInsertId;
+      } else {
+        let stackId: number | null = null;
+        if (alreadyCut) {
+          const openRack = await getOpenStainRack(target.assayType, assayName);
+          stackId = openRack?.id ?? (await getOrCreateStainRack(target.assayType, assayName));
+        }
+        const result = await db.execute(
+          `INSERT INTO slides
+            (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
+             assay_type, assay_name, requested_assay_type, requested_assay_name,
+             assignment_saved, slice_count, control_agent,
+             current_stage, stack_id, stage_cut_at, stage_stain_requested_at)
+           VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, ?, ?, ?)`,
+          [
+            sectionId,
+            ordinal,
+            code,
+            assayName,
+            target.assayType,
+            assayName,
+            target.assayType,
+            assayName,
+            alreadyCut ? "stain_requested" : "assigned",
+            stackId,
+            alreadyCut ? timestamp : null,
+            alreadyCut ? timestamp : null,
+          ],
+        );
+        if (result.lastInsertId == null) throw new Error("Could not add the slide.");
+        slideId = result.lastInsertId;
+      }
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const raced = /UNIQUE constraint failed:\s*slides\.slide_code/i.test(message);
+      if (!raced || attempt >= 4) {
+        throw raced
+          ? new Error("Could not allocate a slide letter — try that again in a moment.")
+          : error;
+      }
+      // Someone else took this letter; read the mark again and try the next one.
     }
-    const result = await db.execute(
-      `INSERT INTO slides
-        (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
-         assay_type, assay_name, requested_assay_type, requested_assay_name,
-         assignment_saved, slice_count, control_agent,
-         current_stage, stack_id, stage_cut_at, stage_stain_requested_at)
-       VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, ?, ?, ?)`,
-      [
-        sectionId,
-        ordinal,
-        code,
-        assayName,
-        target.assayType,
-        assayName,
-        target.assayType,
-        assayName,
-        alreadyCut ? "stain_requested" : "assigned",
-        stackId,
-        alreadyCut ? timestamp : null,
-        alreadyCut ? timestamp : null,
-      ],
-    );
-    if (result.lastInsertId == null) throw new Error("Could not add the slide.");
-    slideId = result.lastInsertId;
   }
 
   await recordSlidesIssued(db, section.sample_id, letter);
@@ -3955,13 +4005,23 @@ export async function relabelSlideToSample(
 /** Record imaging for one assay slide and derive the parent section's image status. */
 export async function setSlidePicturesTaken(slideId: number, complete: boolean): Promise<void> {
   const db = await getDb();
-  const rows = await db.select<Array<{ section_request_id: number; purpose: SlidePurpose }>>(
-    `SELECT section_request_id, purpose FROM slides WHERE id = ?`,
+  const rows = await db.select<
+    Array<{ section_request_id: number; purpose: SlidePurpose; current_stage: string }>
+  >(
+    `SELECT section_request_id, purpose, current_stage FROM slides WHERE id = ?`,
     [slideId],
   );
   const slide = rows[0];
   if (!slide || slide.purpose !== "stain") {
     throw new Error("Only stain or IHC slides can be marked as imaged.");
+  }
+  // A removed slide is broken or lost. Recording photographs of it says pictures
+  // were taken of glass that no longer exists — and, because a removed slide has
+  // left its rack, it produces an imaging stamp with no imaging stage behind it.
+  // Reachable from any panel left open when the slide went (a stale drawer), so
+  // the guard belongs here rather than in the view that happened to be showing.
+  if (slide.current_stage === "removed") {
+    throw new Error("That slide was removed — its imaging can no longer be changed.");
   }
   const timestamp = nowTimestamp();
   await db.execute(
@@ -4017,17 +4077,26 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
 export async function removeSlide(id: number, reason: string): Promise<void> {
   const db = await getDb();
   const rows = await db.select<
-    Array<{ sample_id: number; section_request_id: number; slide_code: string }>
+    Array<{
+      sample_id: number;
+      section_request_id: number;
+      slide_code: string;
+      stack_id: number | null;
+      current_stage: string;
+    }>
   >(
-    `SELECT sr.sample_id, sr.id AS section_request_id, sl.slide_code FROM slides sl
-       JOIN section_requests sr ON sr.id = sl.section_request_id
+    `SELECT sr.sample_id, sr.id AS section_request_id, sl.slide_code, sl.stack_id,
+            sl.current_stage
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ?`,
     [id],
   );
   const row = rows[0];
-  // Already removed, or never existed — either way there is nothing to record,
-  // and re-stamping would put a second event on the timeline for one removal.
-  if (!row) return;
+  // Never existed, or already removed — either way there is nothing to record.
+  // The second half matters: a slide is soft-removed (#83), so the row is still
+  // here and a repeated call would happily write a SECOND removal event for one
+  // piece of glass. A stale panel or a double click does exactly that.
+  if (!row || row.current_stage === "removed") return;
   await recordSlidesIssued(db, row.sample_id, await nextSlideLetter(db, row.sample_id) - 1);
   // stack_id = NULL is what takes it out of the rack it was sitting in. Every
   // rack read joins on stack_id, so this alone removes it from the board side
@@ -4036,6 +4105,14 @@ export async function removeSlide(id: number, reason: string): Promise<void> {
     `UPDATE slides SET current_stage = 'removed', stack_id = NULL WHERE id = ?`,
     [id],
   );
+  // …and retire the rack HERE if that emptied it, rather than leaving each
+  // caller to remember. `useActions.removeSlides` already compensated, so the
+  // shipped UI was fine — but the compensation living at the call site is the
+  // exact fragility this file warns about in `nextSlideLetter`, and the v2
+  // fuzzer walked straight into it by calling this function directly: an open,
+  // empty rack promising work that no longer exists. Idempotent, so the caller
+  // doing it too is harmless.
+  if (row.stack_id != null) await closeSlideStackIfEmpty(row.stack_id);
   await db.execute(
     `INSERT INTO sample_timeline_events
       (sample_id, user_id, event_type, summary, details, created_at)

@@ -539,9 +539,13 @@ function makeApi(db) {
   // to RE-HOME it: leaving stack_id pointing at the old rack would have the
   // slide claiming one agent while sitting in another's rack.
   function reassignSlide(slideId, target) {
-    const slide = get(`SELECT stack_id, current_stage FROM slides WHERE id = ?`, [slideId]);
+    const slide = get(
+      `SELECT stack_id, current_stage, stage_cut_at FROM slides WHERE id = ?`, [slideId]);
     if (!slide) throw new Error("NO_SLIDE");
     if (slide.current_stage === "removed") throw new Error("SLIDE_REMOVED");
+    // A slide that has not been cut is a line in a plan, not glass, and cannot
+    // go on a stainer. Change the cutting plan instead (#116).
+    if (!target.extra && !slide.stage_cut_at) throw new Error("SLIDE_NOT_CUT");
     const previousStackId = slide.stack_id;
     if (target.extra) {
       run(`UPDATE slides
@@ -569,16 +573,23 @@ function makeApi(db) {
   // stays burned without this path compensating.
   function removeSlide(slideId, reason) {
     const owner = get(
-      `SELECT sr.sample_id AS sample, sr.id AS s, sl.slide_code AS code FROM slides sl
+      `SELECT sr.sample_id AS sample, sr.id AS s, sl.slide_code AS code,
+              sl.stack_id AS stack, sl.current_stage AS stage FROM slides sl
          JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sl.id = ?`, [slideId]);
-    if (!owner) return;
+    // Already removed counts as nothing to do: a slide is soft-removed (#83), so
+    // the row is still here and a repeat would write a SECOND removal event for
+    // one piece of glass.
+    if (!owner || owner.stage === 'removed') return;
     recordSlidesIssued(owner.sample, nextSlideLetter(owner.sample) - 1);
     run(`UPDATE slides SET current_stage = 'removed', stack_id = NULL WHERE id = ?`, [slideId]);
     run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
          VALUES (?, 'slide_removed', ?, ?, datetime('now'))`,
         [owner.sample, `Removed slide ${owner.code}`,
          JSON.stringify({ slide_id: slideId, slide_code: owner.code, reason: String(reason ?? '').trim() })]);
+    // Retire the rack HERE if that emptied it, rather than leaving each caller to
+    // remember — the per-call-site fragility this file warns about elsewhere.
+    if (owner.stack != null) closeSlideStackIfEmpty(owner.stack);
     syncSectionDuplicates(owner.s);
   }
   // Port of syncSectionDuplicates() — db.ts. The planned count has to follow the
@@ -816,8 +827,13 @@ function makeApi(db) {
   // to the multiset (duplicates allowed) so the block is flagged for a cut.
   function requestStainForSample(sampleId, assayType, assayName) {
     const extra = get(
+      // The section-stage filter is the rule listExtraSlides already applies
+      // (#12): a slide saved as an extra is a PLAN until its group leaves the
+      // queue, and the plan is not the cut (#95/#118). Without it this pulled
+      // uncut glass straight into a staining rack — found by the v2 fuzzer.
       `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+          AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
         ORDER BY sl.id LIMIT 1`, [sampleId]);
     if (extra) {
       // The extra enters staining immediately (#39): join the agent's rack.
@@ -2181,8 +2197,13 @@ issue(83, "removing a rack that holds a group's last slides retires the group to
   const { id } = api.addSample(p, "EE", "rack takes the lot");
   api.markEmbedded(id);
   const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  // The group has to LEAVE the queue before its extras are real glass (#12).
+  // This fixture used to request straight off a queued group, which only worked
+  // because requestStainForSample was missing that filter — the hole the v2
+  // fuzzer found. Cutting it first is what a bench does anyway.
+  api.startAssayWork(section);
 
-  // Both extras go into the H&E rack; the cut group stays at needs_sectioning.
+  // Both extras go into the H&E rack.
   api.requestStainForSample(id, "stain", "H&E");
   api.requestStainForSample(id, "stain", "H&E");
   const stack = api.get(`SELECT DISTINCT stack_id AS s FROM slides WHERE section_request_id = ?`,
@@ -2915,6 +2936,7 @@ invariant("a removed slide leaves every working view and stays in the record", (
   const { id } = api.addSample(p, "EE", "removal sweep");
   api.markEmbedded(id);
   const [section] = api.createSectionRequests(id, [{ duplicates: 3 }]);
+  api.startAssayWork(section); // the extras are only real once the group is cut (#12)
   api.requestStainForSample(id, "stain", "H&E"); // pulls one extra into a rack
 
   const victim = api.get(
@@ -3320,6 +3342,91 @@ invariant("a good ribbon can add one more slide to a cut that already happened",
   assert(after[after.length - 1].cut != null,
      "and it is cut, because the group it joined had already been cut");
   eq(api.nextSlideLetter(id), letterBefore + 1, "it consumed exactly one letter");
+});
+
+
+// ---------------------------------------------------------------------------
+// 0.13.1 — found by the v2 stress harness (docs/stress_test_v2.md).
+//
+// Not from a report and not from a hand-written scenario: a seeded random walk
+// over legal actions, checking every invariant after every step. These are the
+// states it reached that nobody thought to write down.
+// ---------------------------------------------------------------------------
+
+invariant("a stain request never pulls an extra from a group still in the queue", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "plan is not the cut");
+  api.markEmbedded(id);
+  // A SAVED cutting plan that has not been sent: the slide rows exist, but no
+  // blade has touched the block (#95/#118).
+  const [section] = api.createSectionRequests(id, [{ duplicates: 2 }]);
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s,
+     "needs_sectioning", "the group is queued, not cut");
+
+  api.requestStainForSample(id, "stain", "H&E");
+
+  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE stack_id IS NOT NULL`).n, 0,
+     "no uncut glass was put into a staining rack");
+  eq(api.get(`SELECT COUNT(*) AS n FROM slides WHERE stage_stained_at IS NOT NULL`).n, 0,
+     "…so nothing can be recorded as stained before it was cut");
+});
+
+invariant("a slide that has not been cut cannot be assigned to an agent", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "planned only");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+
+  let refused = false;
+  try {
+    api.reassignSlide(slide.id, { assayType: "stain", assayName: "PAS" });
+  } catch (e) {
+    refused = String(e.message).includes("SLIDE_NOT_CUT");
+  }
+  assert(refused, "a line in a plan is not glass and cannot go on a stainer");
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [slide.id]).s, null,
+     "and it is still in no rack");
+});
+
+invariant("removing a slide retires the rack it emptied", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "last one out");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`, [section]);
+  assert(slide.stack != null, "the slide starts in a rack");
+
+  // Called DIRECTLY, with no caller compensating — which is how the v2 fuzzer
+  // reached it, and how the next caller would.
+  api.removeSlide(slide.id, "broke");
+
+  eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [slide.stack]).c != null, true,
+     "the emptied rack is retired rather than left open and empty");
+});
+
+invariant("removing a slide twice records one removal", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "double click");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [{ duplicates: 1 }]);
+  const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
+
+  api.removeSlide(slide.id, "broke");
+  api.removeSlide(slide.id, "broke again");
+
+  eq(api.all(`SELECT 1 FROM sample_timeline_events WHERE event_type = 'slide_removed'`).length, 1,
+     "one piece of glass, one removal in the record");
 });
 
 // ---------------------------------------------------------------------------
