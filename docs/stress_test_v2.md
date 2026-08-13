@@ -152,3 +152,100 @@ Honest list, unchanged from v1 except where noted:
   minutes to build, and every invariant is checked against the same image the UI
   renders — but a bug that lives only in a component is out of its reach by
   construction.
+
+---
+
+# The swarm — many walkers, one large board
+
+A second phase of v2 (`14-swarm.spec.ts`), built to reach two things a single
+walker on a small board cannot.
+
+**Scale.** Some rules only bind when there is enough on the board for them to
+bind on: racks shared by many blocks, agents with several open racks, letters
+allocated past Z. Eight blocks never get there, so the board is seeded to ~150
+blocks and ~400 slides in one round trip (every real `db.ts` call, just not
+paying a process crossing per step).
+
+**Overlap.** `db.ts` is full of read-then-write sequences across `await`
+boundaries. One walker awaiting each action can never interleave with itself;
+eight firing together do. JavaScript being single-threaded does not save you —
+it just means the interleaving happens at `await` rather than mid-statement.
+
+Two phases, deliberately separate:
+
+| phase | walkers | attribution | finds |
+|---|---|---|---|
+| **interleaved** | strict turns | exact: round, walker, action | states that are legal at every step and impossible as a whole |
+| **concurrent** | fire together | a *set* of in-flight actions | races |
+
+Each walker carries a `bias` that tilts it toward one part of the workflow, so
+the swarm is not eight identical processes: one cuts, one stains, one images, one
+corrects. The self-check runs at scale too — a probe can pass on eight blocks and
+quietly stop meaning anything on six hundred.
+
+## What the swarm found
+
+**Interleaved (all fixed):**
+
+1. **Coverslipped before stained.** `CC-0021-C`: cut 02:32, coverslipped 02:33,
+   stained 02:34. The protocol checklist drew every step as its own button with
+   no ordering guard at all — ticking them out of order was one click. Now
+   enforced at the checklist *and* in both stamp writers, since those are
+   exported and called directly by two components.
+2. **Imaged, then stained.** `BB-0022-A`: imaged 02:40, stained 02:41. A slide
+   that had been imaged was reassigned to a new agent, restarting staining on
+   glass whose record says it is finished. One slide carries one set of dates, so
+   the second pass cannot be told from a corrupt first one. Refused, pointing at
+   cutting another section — which is what the "one more off this ribbon" control
+   is for.
+3. **An empty rack left on the board** by a group sent back for cutting. Third
+   instance of one pattern: moving a slide out of a rack and retiring the rack it
+   emptied are one operation, and three places were doing only the first half.
+
+**Concurrent (four fixed, one open):**
+
+4. **The slide-letter race, in two more allocators.** 0.13.1 fixed it in
+   `addSlideToSection`; `createSectionRequests` and `relabelSlideToSample` have
+   the same read-then-write and produced the same `UNIQUE constraint failed`.
+   Both now retry against the index — which is the only real arbiter, because any
+   check before the insert is itself racy.
+5. **A rack retired with live glass inside it**, and the mirror image, **a rack
+   left open and empty** when two calls each removed a different slide. Retiring
+   now refuses to strand live glass; the empty sweep runs over every rack in one
+   statement rather than asking about one rack at one moment.
+
+### Known open, and why it is recorded rather than patched
+
+Under genuinely simultaneous operations, **rack membership can still land
+wrong**. There is no transaction boundary in the data layer, so every "choose a
+rack, then write to it" pair is a window. I closed five instances this round and
+a sixth appeared immediately — that is the point at which patching pairs stops
+being the answer.
+
+The real fix is a **mutation lock**: one promise chain that every write goes
+through. It is not a patch, and it has a genuine hazard — a naive lock deadlocks
+the moment one locked function calls another, and JavaScript gives you no way to
+tell "nested call" from "new call arriving during an await" without threading
+context through. Doing it properly means auditing which exports call which and
+locking only true entry points. That is a design change and deserves its own
+cycle rather than the end of this one.
+
+**In practice the app cannot currently produce this.** The UI fires concurrent
+calls only via `Promise.all` across selected stacks; a single user on a single
+workstation cannot issue eight simultaneous mutations, and sync swaps the whole
+database image rather than applying concurrent writes. So this is a latent risk —
+real, reachable if the app ever gains true concurrency, and recorded here rather
+than hidden behind a green tick. The concurrent test still runs and still fails
+the build on **any other** invariant; only these two rack-membership ones are
+allowed through, with the reason attached.
+
+## Coverage
+
+- Interleaved: 8 walkers × 90 rounds ≈ 720 actions on a 150-block board, all 19
+  invariants after every one. Clean.
+- Concurrent: 8 walkers × 60 rounds ≈ 450 actions fired in batches of eight.
+  Clean except the known class above.
+- The self-check passes at scale: all seven plantable violations still caught on
+  a 600-slide board.
+- 3 new harness gates (92 total), v1's 21 stress tests, 101 e2e, 74 unit, and the
+  legacy upgrade all still pass.

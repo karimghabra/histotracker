@@ -1,6 +1,48 @@
 # Changelog
 
-## 0.13.1 - unreleased
+## 0.13.2 - unreleased
+
+No schema change. Six more defects, found by pointing **many random walkers at
+one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
+after every move. Full account in `docs/stress_test_v2.md`.
+
+The walkers run in two modes, because they answer different questions. Taking
+strict turns, they explore *sequences* on a board big enough for the rules to
+bind, and any break is attributable to one exact action. Firing together, they
+explore *overlap* — the surface where reading a value and writing it back are
+separated by an `await`.
+
+- **A slide could be coverslipped before it was stained.** The protocol
+  checklist drew every step as its own button with no ordering at all, so
+  ticking them out of order was a click away — and produced a slide whose record
+  said it was coverslipped on Tuesday and stained on Wednesday. The order is now
+  enforced, and un-ticking a step while a later one is done is refused too.
+- **A slide that had already been imaged could be sent back to a stainer**,
+  which restarted staining on glass whose record says it has been through. A
+  slide carries one set of dates, so the new staining landed *after* the imaging
+  that preceded it. Refused, pointing at the honest route: cut another section.
+- **Sending a group back for cutting left its old rack on the board, empty.**
+  Third instance of one pattern — moving a slide out of a rack and retiring the
+  rack it emptied are one operation, and three separate places were doing only
+  the first half.
+- **Cutting a block and refiling a slide could both fail with a database
+  error** when two of them overlapped, for the same slide-letter reason fixed in
+  0.13.1 for a third path. All three now retry.
+- **A rack could be retired while live glass was still in it**, and — the mirror
+  image — **left open and empty** when two calls each removed a different slide.
+  Retiring now refuses to strand live glass, and the empty sweep runs over every
+  rack in one statement rather than asking about one rack at one moment.
+
+**Known and not fixed:** under genuinely simultaneous operations, rack
+membership can still land wrong. There is no transaction boundary in the data
+layer, so every "choose a rack, then write to it" pair is a window; five
+instances were closed this round and a sixth appeared immediately, which is the
+point at which patching pairs stops being the answer. The real fix is a mutation
+lock, which is a design change rather than a patch. In practice the app never
+issues these operations simultaneously today — the swarm is harsher than any
+single user can be — so this is a latent risk, recorded rather than hidden.
+
+## 0.13.1 - 2026-08-13
 
 No schema change. Five defects, all found by a **second stress harness**
 (`tests/stress2/`, `docs/stress_test_v2.md`) built from what the first one got

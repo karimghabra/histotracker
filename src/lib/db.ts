@@ -1905,6 +1905,49 @@ export async function setChecklistItemComplete(
 ): Promise<void> {
   const db = await getDb();
   const timestamp = complete ? nowTimestamp() : null;
+
+  // A protocol is an ORDER, not a set of independent boxes. You stain, then you
+  // coverslip; a coverslip seals the section, so the reverse cannot happen. The
+  // checklist rendered every step as its own button with no guard at all, so
+  // ticking Coverslipped first was a click away — and it produced a slide whose
+  // record said it was coverslipped on Tuesday and stained on Wednesday.
+  //
+  // Found by the swarm: `CC-0021-C`, cut 02:32, coverslipped 02:33, stained
+  // 02:34. Nothing else in the app notices, because each stamp is written by its
+  // own step and no one compares them.
+  const position = await db.select<
+    Array<{ run_id: number; sort_order: number; label: string }>
+  >(
+    `SELECT checklist_run_id AS run_id, sort_order, label FROM checklist_items WHERE id = ?`,
+    [itemId],
+  );
+  const step = position[0];
+  if (step) {
+    if (complete) {
+      const earlier = await db.select<Array<{ label: string }>>(
+        `SELECT label FROM checklist_items
+          WHERE checklist_run_id = ? AND sort_order < ? AND is_required = 1 AND is_complete = 0
+          ORDER BY sort_order LIMIT 1`,
+        [step.run_id, step.sort_order],
+      );
+      if (earlier[0]) {
+        throw new Error(`Record "${earlier[0].label}" before "${step.label}".`);
+      }
+    } else {
+      // …and the same going backwards: un-ticking a step while a later one is
+      // done would leave the same impossible record by the other route.
+      const later = await db.select<Array<{ label: string }>>(
+        `SELECT label FROM checklist_items
+          WHERE checklist_run_id = ? AND sort_order > ? AND is_complete = 1
+          ORDER BY sort_order DESC LIMIT 1`,
+        [step.run_id, step.sort_order],
+      );
+      if (later[0]) {
+        throw new Error(`Undo "${later[0].label}" before un-recording "${step.label}".`);
+      }
+    }
+  }
+
   await db.execute(
     `UPDATE checklist_items
         SET is_complete = ?, completed_by = ?, completed_at = ?
@@ -1979,7 +2022,8 @@ export async function syncAssayWorkflowStep(
     if (stamp === null) return;
     await db.execute(
       `UPDATE slides SET ${columns.map((c) => `${c} = NULL`).join(", ")}
-        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?`,
+        WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?
+          ${keyColumn === "stage_stained_at" ? "AND stage_coverslipped_at IS NULL" : ""}`,
       [sectionRequestId, assayType, stamp],
     );
   };
@@ -2001,11 +2045,26 @@ export async function syncAssayWorkflowStep(
     );
   } else if (sortOrder === 1) {
     if (complete) {
+      // Same rule as the rack path: staining comes first, physically.
+      const unstained = await db.select<Array<{ slide_code: string }>>(
+        `SELECT slide_code FROM slides
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?
+            AND current_stage <> 'removed' AND stage_stained_at IS NULL
+          LIMIT 1`,
+        [sectionRequestId, assayType],
+      );
+      if (unstained[0]) {
+        throw new Error(
+          `${displayCode(unstained[0].slide_code)} has not been stained yet — record staining before coverslipping.`,
+        );
+      }
       await db.execute(
+        // Same atomic condition as the rack path.
         `UPDATE slides
             SET stage_refrax_at = COALESCE(stage_refrax_at, ?),
                 stage_coverslipped_at = COALESCE(stage_coverslipped_at, ?)
-          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?`,
+          WHERE section_request_id = ? AND purpose = 'stain' AND assay_type = ?
+            AND stage_stained_at IS NOT NULL`,
         [timestamp, timestamp, sectionRequestId, assayType],
       );
     } else {
@@ -2193,6 +2252,30 @@ async function recordSlidesIssued(db: Database, sampleId: number, lastLetter: nu
  * stain (0.3.3 preselected stains); otherwise the slides are saved extras.
  */
 export async function createSectionRequests(
+  sampleId: number,
+  groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>,
+): Promise<number[]> {
+  // Letter allocation is a read-then-write across `await`, so two cuts of the
+  // same block started together take the same letters and the second dies on
+  // UNIQUE(slide_code). The unwind below already guarantees a failed call leaves
+  // the database exactly as it found it, which is what makes retrying the whole
+  // call safe — and retrying is the only thing that works, because any check
+  // before the insert is itself racy. Found by the concurrent swarm.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await createSectionRequestsOnce(sampleId, groups);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/UNIQUE constraint failed:\s*slides\.slide_code/i.test(message) || attempt >= 4) {
+        throw /UNIQUE constraint failed:\s*slides\.slide_code/i.test(message)
+          ? new Error("Could not allocate slide letters — try that cut again in a moment.")
+          : error;
+      }
+    }
+  }
+}
+
+async function createSectionRequestsOnce(
   sampleId: number,
   groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>,
 ): Promise<number[]> {
@@ -2761,8 +2844,24 @@ export async function getSlideStack(id: number): Promise<SlideStack | null> {
 export async function closeSlideStack(id: number): Promise<void> {
   const db = await getDb();
   await db.execute(
-    `UPDATE slide_stacks SET closed_at = COALESCE(closed_at, ?) WHERE id = ?`,
-    [nowTimestamp(), id],
+    // Never retire a rack that still holds live glass.
+    //
+    // Callers use this after moving every slide out — a scatter, a merge — so
+    // the condition is normally satisfied and this behaves exactly as before.
+    // What it stops is the racing case: a slide landing in the rack between the
+    // caller reading its members and this statement running. Closing then would
+    // put live glass somewhere the board never draws, which is the worst
+    // outcome available and is what the concurrent swarm kept reaching.
+    //
+    // Analyzed and removed slides do NOT hold a rack open: a stack reaching
+    // `analyzed` is retired WITH its slides, which is the record, not a leak.
+    `UPDATE slide_stacks SET closed_at = COALESCE(closed_at, ?)
+      WHERE id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM slides
+           WHERE stack_id = ? AND current_stage NOT IN ('analyzed', 'removed')
+        )`,
+    [nowTimestamp(), id, id],
   );
 }
 
@@ -2784,6 +2883,60 @@ export async function closeSlideStackIfEmpty(id: number): Promise<boolean> {
       WHERE id = ? AND closed_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`,
     [nowTimestamp(), id, id],
+  );
+  // …and then sweep. Asking about ONE rack at ONE moment loses the race where
+  // two calls each empty a different slide out of the same rack: each looks,
+  // still sees the other's slide, declines to close — and both finish, leaving
+  // an empty rack on the board promising work that does not exist. The swarm
+  // reached this in six rounds.
+  //
+  // The sweep is a single statement over every rack, so it has no window of its
+  // own, and it is cheap: `slide_stacks` is small and this only runs when a
+  // slide has just moved. Every existing caller of this function gets it, which
+  // is deliberate — the alternative is remembering to sweep at each of them,
+  // and forgetting one is how this class of bug arrives in the first place.
+  await closeEmptyOpenStacks();
+  return result.rowsAffected > 0;
+}
+
+/** Retire every rack that has been left empty, whatever emptied it. */
+export async function closeEmptyOpenStacks(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `UPDATE slide_stacks
+        SET closed_at = ?
+      WHERE closed_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = slide_stacks.id)`,
+    [nowTimestamp()],
+  );
+  return result.rowsAffected;
+}
+
+/**
+ * The twin of {@link closeSlideStackIfEmpty}: a rack holding live glass is not
+ * retired, whatever happened a moment ago.
+ *
+ * Choosing a rack and putting a slide in it are separated by `await`, so a rack
+ * read as open can be retired by another call before the slide lands — and then
+ * the slide is inside something the board no longer draws, which is the worst
+ * outcome available. The concurrent swarm reached it: `DD-0004-B` alive in stack
+ * 53, closed 02:58.
+ *
+ * Rather than lock, this makes the outcome self-correcting: whoever finishes
+ * last leaves the rack in the state its contents demand. One statement, so no
+ * window of its own.
+ */
+export async function reopenSlideStackIfPopulated(id: number): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute(
+    `UPDATE slide_stacks
+        SET closed_at = NULL
+      WHERE id = ? AND closed_at IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM slides
+           WHERE stack_id = ? AND current_stage NOT IN ('analyzed', 'removed')
+        )`,
+    [id, id],
   );
   return result.rowsAffected > 0;
 }
@@ -2884,6 +3037,20 @@ async function attachSectionStainSlidesToRacks(sectionId: number): Promise<void>
         AND current_stage != 'removed'`,
     [sectionId],
   );
+  // Where these slides are coming FROM, captured before the move. A slide is not
+  // always arriving from nowhere: a group sent back to stain_requested pulls its
+  // slides out of whatever stack they were in, and if that empties a per-sample
+  // stack, the stack stays on the board promising work that no longer exists.
+  //
+  // Third instance of one pattern — `reassignSlide` and `removeSlide` had it too.
+  // Moving a slide out of a stack and retiring the stack it emptied are one
+  // operation; every place that does the first must do the second.
+  const vacated = await db.select<Array<{ stack_id: number }>>(
+    `SELECT DISTINCT stack_id FROM slides
+      WHERE section_request_id = ? AND purpose = 'stain' AND stack_id IS NOT NULL`,
+    [sectionId],
+  );
+
   for (const agent of agents) {
     const rackId = await getOrCreateStainRack(agent.assay_type, agent.assay_name);
     await db.execute(
@@ -2893,6 +3060,14 @@ async function attachSectionStainSlidesToRacks(sectionId: number): Promise<void>
       [rackId, sectionId, agent.assay_type, agent.assay_name],
     );
   }
+
+  for (const previous of vacated) await closeSlideStackIfEmpty(previous.stack_id);
+  const landed = await db.select<Array<{ stack_id: number }>>(
+    `SELECT DISTINCT stack_id FROM slides
+      WHERE section_request_id = ? AND purpose = 'stain' AND stack_id IS NOT NULL`,
+    [sectionId],
+  );
+  for (const rack of landed) await reopenSlideStackIfPopulated(rack.stack_id);
 }
 
 const STACK_STAGE_COLUMNS: Record<string, string> = {
@@ -3101,6 +3276,15 @@ export async function updateSlideStackStage(stackId: number, stageKey: string): 
       );
     }
     await closeSlideStack(stackId); // rack consumed
+    // The per-sample stacks these slides landed in may have been retired by a
+    // call that finished between our choosing them and our writing to them.
+    for (const member of members) {
+      const landed = await db.select<Array<{ stack_id: number | null }>>(
+        `SELECT stack_id FROM slides WHERE id = ?`,
+        [member.id],
+      );
+      if (landed[0]?.stack_id != null) await reopenSlideStackIfPopulated(landed[0].stack_id);
+    }
     return stackId;
   }
 
@@ -3189,8 +3373,12 @@ export async function syncAssayStackWorkflowStep(
     const stamp = rows[0]?.stamp ?? null;
     if (stamp === null) return;
     await db.execute(
+      // Never strand a later stamp: clearing the stain under a coverslip leaves
+      // the same impossible record by the other route, and the condition has to
+      // be in the statement for the same reason as above.
       `UPDATE slides SET ${columns.map((c) => `${c} = NULL`).join(", ")}
-        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?`,
+        WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ? AND ${keyColumn} = ?
+          ${keyColumn === "stage_stained_at" ? "AND stage_coverslipped_at IS NULL" : ""}`,
       [stackId, assayType, stamp],
     );
   };
@@ -3238,11 +3426,35 @@ export async function syncAssayStackWorkflowStep(
     );
   } else if (sortOrder === 1) {
     if (complete) {
+      // A coverslip seals the section, so it cannot precede the stain. The
+      // checklist guards the order too, but this function is exported and two
+      // components call it directly — the rule belongs where the stamp is
+      // written, not only where the box is ticked. The swarm reached exactly
+      // this: a slide cut 02:32, coverslipped 02:33, stained 02:34.
+      const unstained = await db.select<Array<{ slide_code: string }>>(
+        `SELECT slide_code FROM slides
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?
+            AND current_stage <> 'removed' AND stage_stained_at IS NULL
+          LIMIT 1`,
+        [stackId, assayType],
+      );
+      if (unstained[0]) {
+        throw new Error(
+          `${displayCode(unstained[0].slide_code)} has not been stained yet — record staining before coverslipping.`,
+        );
+      }
+      // `AND stage_stained_at IS NOT NULL` is the enforcement; the check above is
+      // only there to produce a sentence a human can read. A check and a write
+      // separated by an `await` is a window: the swarm slipped an untick into it
+      // and produced ten slides coverslipped before they were stained. Put the
+      // condition in the statement and the window closes, because SQLite decides
+      // per row at the moment of the write.
       await db.execute(
         `UPDATE slides
             SET stage_refrax_at = COALESCE(stage_refrax_at, ?),
                 stage_coverslipped_at = COALESCE(stage_coverslipped_at, ?)
-          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?`,
+          WHERE stack_id = ? AND purpose = 'stain' AND assay_type = ?
+            AND stage_stained_at IS NOT NULL`,
         [timestamp, timestamp, stackId, assayType],
       );
     } else {
@@ -3549,6 +3761,8 @@ export async function assignExtraSlideToAssay(input: {
     [stackId, input.assayType, assayName, assayName, timestamp, input.slideId],
   );
 
+  await reopenSlideStackIfPopulated(stackId);
+
   await db.execute(
     `INSERT INTO sample_timeline_events
       (sample_id, user_id, event_type, summary, created_at)
@@ -3640,10 +3854,11 @@ export async function reassignSlide(
       assay_name: string | null;
       sample_id: number;
       stage_cut_at: string | null;
+      stage_pictures_taken_at: string | null;
     }>
   >(
     `SELECT sl.stack_id, sl.current_stage, sl.slide_code, sl.assay_name, sr.sample_id,
-            sl.stage_cut_at
+            sl.stage_cut_at, sl.stage_pictures_taken_at
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ?`,
     [slideId],
@@ -3660,6 +3875,22 @@ export async function reassignSlide(
   if (!("extra" in target) && !slide.stage_cut_at) {
     throw new Error(
       "That slide has not been cut yet — change the cutting plan instead of assigning it to an agent.",
+    );
+  }
+  // A slide that has already been imaged has finished a cycle. Sending it back
+  // to a stainer starts a second one, and a slide carries ONE set of stamps — so
+  // the new staining lands after the imaging that preceded it, and the record
+  // reads "imaged, then stained", which is nonsense for a single pass. The swarm
+  // found exactly that: BB-0022-A, cut 02:39, imaged 02:40, stained 02:41.
+  //
+  // Refused rather than resolved by clearing the old stamps, because those
+  // record real work on real glass (#83), and rather than by keeping both,
+  // because there is nowhere to keep them. Cutting another section is the
+  // honest route and has been available since the "one more off this ribbon"
+  // control landed.
+  if (!("extra" in target) && slide.stage_pictures_taken_at) {
+    throw new Error(
+      "That slide has already been imaged — add another slide to its cut group instead of re-staining this one.",
     );
   }
   const previousStackId = slide.stack_id;
@@ -3712,6 +3943,15 @@ export async function reassignSlide(
   );
 
   if (previousStackId != null) await closeSlideStackIfEmpty(previousStackId);
+  // Whoever finishes last leaves the rack matching its contents (see
+  // reopenSlideStackIfPopulated).
+  if (!("extra" in target)) {
+    const landed = await db.select<Array<{ stack_id: number | null }>>(
+      `SELECT stack_id FROM slides WHERE id = ?`,
+      [slideId],
+    );
+    if (landed[0]?.stack_id != null) await reopenSlideStackIfPopulated(landed[0].stack_id);
+  }
 }
 
 /**
@@ -3948,18 +4188,37 @@ export async function relabelSlideToSample(
     groupId = created.lastInsertId;
   }
 
-  const letter = await nextSlideLetter(db, targetSampleId);
-  const newCode = slideCodeFor(target.sample_code, letter);
+  // Same allocation race as `addSlideToSection`: reading the high-water mark and
+  // writing the code are separated by `await`, so two overlapping refiles onto
+  // one block both take the same letter. The UNIQUE index arbitrates; retrying
+  // against it is the only thing that actually works, because any pre-check is
+  // itself racy. Found by the concurrent swarm, in this function and in
+  // `createSectionRequests`, after it had already been fixed in a third.
   const ordinalRows = await db.select<Array<{ next: number }>>(
     `SELECT COALESCE(MAX(slide_ordinal), 0) + 1 AS next FROM slides WHERE section_request_id = ?`,
     [groupId],
   );
   const timestamp = nowTimestamp();
-
-  await db.execute(
-    `UPDATE slides SET section_request_id = ?, slide_ordinal = ?, slide_code = ? WHERE id = ?`,
-    [groupId, Number(ordinalRows[0]?.next ?? 1), newCode, slideId],
-  );
+  let letter = 0;
+  let newCode = "";
+  for (let attempt = 0; ; attempt += 1) {
+    letter = await nextSlideLetter(db, targetSampleId);
+    newCode = slideCodeFor(target.sample_code, letter);
+    try {
+      await db.execute(
+        `UPDATE slides SET section_request_id = ?, slide_ordinal = ?, slide_code = ? WHERE id = ?`,
+        [groupId, Number(ordinalRows[0]?.next ?? 1), newCode, slideId],
+      );
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/UNIQUE constraint failed:\s*slides\.slide_code/i.test(message) || attempt >= 4) {
+        throw /UNIQUE constraint failed:\s*slides\.slide_code/i.test(message)
+          ? new Error("Could not allocate a slide letter — try that again in a moment.")
+          : error;
+      }
+    }
+  }
   await recordSlidesIssued(db, targetSampleId, letter);
   // The letter the slide vacated stays burned on the OLD block — nothing else
   // may ever be called that.

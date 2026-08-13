@@ -321,3 +321,161 @@ export async function embed(page: Page, sampleId: number): Promise<void> {
     if (!moved.ok && stage === "embedded") throw new Error(`could not embed: ${moved.error}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Scale
+// ---------------------------------------------------------------------------
+
+/**
+ * Run every invariant in ONE round trip.
+ *
+ * The per-invariant version costs 19 `page.evaluate` calls per check, which is
+ * fine for a spec that checks a handful of times and ruinous for a swarm that
+ * checks after every round of every walker. Same queries, same meaning, one
+ * crossing of the process boundary.
+ */
+export async function checkInvariantsFast(
+  page: Page,
+  findings: Finding[],
+  where: string,
+): Promise<number> {
+  const results = (await page.evaluate((invs) => {
+    const select = (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] })
+      .__SHIM_SELECT__;
+    return (invs as Array<{ id: string; query: string }>).map((inv) => {
+      try {
+        const rows = select(inv.query);
+        return { id: inv.id, rows: rows.slice(0, 4), n: rows.length };
+      } catch (e) {
+        return { id: inv.id, error: e instanceof Error ? e.message : String(e), n: -1 };
+      }
+    });
+  }, INVARIANTS.map((i) => ({ id: i.id, query: i.query })))) as Array<{
+    id: string;
+    rows?: unknown[];
+    n: number;
+    error?: string;
+  }>;
+
+  let broken = 0;
+  for (const result of results) {
+    if (result.n === 0) continue;
+    const inv = INVARIANTS.find((i) => i.id === result.id);
+    broken += 1;
+    findings.push({
+      where,
+      severity: "defect",
+      detail:
+        result.n < 0
+          ? `INVARIANT ${result.id} could not run: ${result.error}`
+          : `INVARIANT ${result.id} — ${inv?.claim}. ${result.n} violation(s): ${JSON.stringify(
+              result.rows,
+            )}`,
+      corroboration: inv?.because,
+    });
+  }
+  return broken;
+}
+
+/**
+ * Build a LARGE board in one round trip.
+ *
+ * Seeding 150 blocks a call at a time is ~1,300 crossings of the process
+ * boundary and most of the run's wall clock. The whole loop runs inside the
+ * page instead — still every real `db.ts` function, still every guard, just not
+ * paying for a round trip per step.
+ */
+export async function seedLarge(
+  page: Page,
+  opts: { projects: number; samplesPerProject: number; cutFraction?: number },
+): Promise<{ samples: number; slides: number; ms: number }> {
+  return (await page.evaluate(async (o) => {
+    const started = performance.now();
+    const mod = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
+    const codes = ["AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH"];
+    const agents: Array<[string, string]> = [
+      ["stain", "H&E"],
+      ["stain", "PAS"],
+      ["stain", "Alcian Blue"],
+      ["ihc", "CD31"],
+      ["ihc", "Ki-67"],
+    ];
+    const stages = [
+      "in_fixative",
+      "fixative_removed",
+      "in_ethanol",
+      "processing_started",
+      "processed",
+      "picked_up",
+      "needs_embedding",
+      "embedded",
+    ];
+
+    for (let p = 0; p < o.projects; p += 1) {
+      await mod.addProject({
+        code: codes[p % codes.length] + (p >= codes.length ? String(p) : ""),
+        name: `Project ${p + 1}`,
+        team_lead: "",
+        is_active: true,
+        lead_user_id: 0,
+      });
+    }
+    const projects = (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] })
+      .__SHIM_SELECT__("SELECT id, code FROM projects ORDER BY id") as Array<{
+      id: number;
+      code: string;
+    }>;
+
+    let n = 0;
+    for (const project of projects) {
+      for (let i = 0; i < o.samplesPerProject; i += 1) {
+        const id = (await mod.addSample(
+          {
+            project_id: project.id,
+            sample_description: `${project.code} block ${i + 1}`,
+            processing_type: i % 2 ? "Long" : "Short",
+            fixative_agent: "Z-Fix",
+            needs_decalcification: 0,
+            cut_notes: "",
+            slide_notes: "",
+            stains: "",
+            preselected_stains: [],
+            overall_notes: "",
+          },
+          project.code,
+        )) as number;
+        for (const stage of stages) await mod.updateSampleStage(id, stage);
+
+        // Most blocks get cut, so the board has real work at every stage rather
+        // than a thousand identical embedded blocks.
+        if (Math.random() < (o.cutFraction ?? 0.7)) {
+          const groups: unknown[] = [];
+          const count = 1 + (n % 3);
+          for (let g = 0; g <= count; g += 1) {
+            if ((n + g) % 3 === 0) {
+              groups.push({ duplicates: 1 + (g % 2), stains: "" });
+            } else {
+              const [type, name] = agents[(n + g) % agents.length];
+              groups.push({ duplicates: 1, stains: name, assay_type: type, assay_name: name });
+            }
+          }
+          const sections = (await mod.createSectionRequests(id, groups)) as number[];
+          // Send roughly half of them, so Needs Sectioning is populated too.
+          if (n % 2 === 0) {
+            for (const section of sections) {
+              await mod.updateSectionStage(section, "sectioned");
+              await mod.updateSectionStage(section, "stain_requested");
+            }
+          }
+        }
+        n += 1;
+      }
+    }
+
+    const select = (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] })
+      .__SHIM_SELECT__;
+    const samples = (select("SELECT COUNT(*) AS n FROM samples") as Array<{ n: number }>)[0].n;
+    const slides = (select("SELECT COUNT(*) AS n FROM slides") as Array<{ n: number }>)[0].n;
+    return { samples, slides, ms: Math.round(performance.now() - started) };
+  }, opts)) as { samples: number; slides: number; ms: number };
+}

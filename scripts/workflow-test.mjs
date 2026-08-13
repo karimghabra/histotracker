@@ -625,10 +625,32 @@ function makeApi(db) {
     for (const id of sectionIds) removeSectionRequestIfEmpty(id);
   }
   // Port of closeSlideStackIfEmpty() — db.ts. Racks close, they never drop.
+  // Sweeps every empty rack, not just this one: two calls each emptying a
+  // different slide out of one rack both look, both still see the other's
+  // slide, and neither closes it. One statement over all racks has no window.
+  function closeEmptyOpenStacks() {
+    run(`UPDATE slide_stacks SET closed_at = ?
+          WHERE closed_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = slide_stacks.id)`, [now()]);
+  }
+
+  // Port of closeSlideStack() — db.ts. Never retires a rack holding live glass:
+  // closing one would put that glass somewhere the board never draws.
+  function closeSlideStack(stackId) {
+    run(`UPDATE slide_stacks SET closed_at = COALESCE(closed_at, ?)
+          WHERE id = ?
+            AND NOT EXISTS (SELECT 1 FROM slides
+                             WHERE stack_id = ? AND current_stage NOT IN ('analyzed','removed'))`,
+        [now(), stackId, stackId]);
+  }
+
   function closeSlideStackIfEmpty(stackId) {
     run(`UPDATE slide_stacks SET closed_at = datetime('now')
           WHERE id = ? AND closed_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM slides WHERE stack_id = ?)`, [stackId, stackId]);
+    // …and sweep: two calls each emptying a different slide out of one rack both
+    // look, both still see the other's slide, and neither closes it.
+    closeEmptyOpenStacks();
   }
   // Ports of removeSlidesForStack() and removeSectionRequest() — db.ts. These
   // were NEVER mirrored before, which is exactly why #73 shipped green: the
@@ -1152,6 +1174,7 @@ function makeApi(db) {
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     completeStackImaging, relabelSlideToSample, addSlideToSection,
+    closeEmptyOpenStacks, closeSlideStack,
     tickSectionStainedCheckbox,
     removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
@@ -3427,6 +3450,78 @@ invariant("removing a slide twice records one removal", () => {
 
   eq(api.all(`SELECT 1 FROM sample_timeline_events WHERE event_type = 'slide_removed'`).length, 1,
      "one piece of glass, one removal in the record");
+});
+
+
+// ---------------------------------------------------------------------------
+// 0.13.2 — found by the SWARM: many walkers on a large board (docs/stress_test_v2.md).
+// ---------------------------------------------------------------------------
+
+invariant("a slide cannot be coverslipped before it has been stained", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "order matters");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`, [section]);
+
+  // Coverslip first, with nothing stained. A coverslip seals the section, so
+  // this cannot happen physically and must not be recordable.
+  api.run(`UPDATE slides SET stage_refrax_at = COALESCE(stage_refrax_at, ?),
+               stage_coverslipped_at = COALESCE(stage_coverslipped_at, ?)
+            WHERE stack_id = ? AND purpose = 'stain' AND assay_type = 'stain'
+              AND stage_stained_at IS NOT NULL`,
+          [now(), now(), slide.stack]);
+
+  eq(api.get(`SELECT stage_coverslipped_at AS c FROM slides WHERE id = ?`, [slide.id]).c, null,
+     "the coverslip stamp is refused while the slide is unstained");
+});
+
+invariant("no rack is left open and empty, whichever call emptied it", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "two slides out");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slides = api.all(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ? ORDER BY id`, [section]);
+  const rack = slides[0].stack;
+
+  // Empty the rack WITHOUT going through a path that closes it — the state two
+  // interleaved removals leave behind.
+  api.run(`UPDATE slides SET stack_id = NULL WHERE stack_id = ?`, [rack]);
+  eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [rack]).c, null,
+     "the rack is open and empty to begin with");
+
+  api.closeEmptyOpenStacks();
+
+  assert(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [rack]).c != null,
+     "the sweep retires it regardless of who emptied it");
+});
+
+invariant("a rack holding live glass is never retired", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "still in use");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`, [section]);
+
+  api.closeSlideStack(slide.stack);
+
+  eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [slide.stack]).c, null,
+     "closing is refused while a live slide is inside — it would vanish from the board");
 });
 
 // ---------------------------------------------------------------------------
