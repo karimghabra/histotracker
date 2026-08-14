@@ -40,13 +40,22 @@ async function boot(page: Page): Promise<void> {
 async function seedStainedBlocks(page: Page, count: number): Promise<void> {
   await page.evaluate(async (n) => {
     const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
-    const projectId = (await db.addProject({
-      code: "EE",
-      name: "Enthesis Engineering",
-      team_lead: "",
-      is_active: true,
-      lead_user_id: 0,
-    })) as number;
+    // Reuse the project if this is a second call — a repeat addProject would
+    // die on the UNIQUE project code, which says nothing about racks.
+    const existing = (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT id FROM projects WHERE code = 'EE'`,
+      ) as Array<{ id: number }>
+    )[0];
+    const projectId =
+      existing?.id ??
+      ((await db.addProject({
+        code: "EE",
+        name: "Enthesis Engineering",
+        team_lead: "",
+        is_active: true,
+        lead_user_id: 0,
+      })) as number);
     const stages = [
       "in_fixative", "fixative_removed", "in_ethanol", "processing_started",
       "processed", "picked_up", "needs_embedding", "embedded",
@@ -201,5 +210,59 @@ test("#126: a selection moves to another agent in one action", async ({ page }) 
       { agent: "H&E", n: 1 },
       { agent: "Safranin O", n: 2 },
     ]);
+  }).toPass({ timeout: 15_000 });
+});
+
+test("racks are numbered per agent, and the number does not move", async ({ page }) => {
+  await boot(page);
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByLabel("Slides per staining rack").fill("1");
+  await settings.getByRole("button", { name: "Save settings" }).click();
+  await expect(settings.getByText("Saved.")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // One slide per rack, so three blocks make H&E 1, 2 and 3.
+  await seedStainedBlocks(page, 3);
+  await expect(async () => {
+    expect(await rackCount(page)).toBe(3);
+  }).toPass({ timeout: 15_000 });
+
+  // Read what the BOARD renders, not a second copy of the query.
+  //
+  // The first version of this computed the ordinal itself in SQL and compared
+  // that against SQL — so it passed happily against a deliberately unstable
+  // implementation, because both sides were the test. The numbers on the cards
+  // are the only thing a technician sees, so they are the only thing worth
+  // asserting.
+  const shown = async (): Promise<string[]> =>
+    (await staining(page).locator("[title$='for this agent']").allTextContents()).map((n) =>
+      n.trim(),
+    );
+
+  expect(await shown()).toEqual(["1", "2", "3"]);
+
+  // Retire the FIRST rack. This is the whole point of counting closed racks
+  // too: if the number were "which of the open racks is this", rack 2 would
+  // silently become rack 1 — and a technician who wrote "H&E 2" on the side of
+  // a real rack in marker would now be holding something the app calls H&E 1.
+  await page.evaluate(async () => {
+    const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
+    await db.removeSlidesForStack(1, "finished");
+    await db.closeSlideStackIfEmpty(1);
+  });
+  await page.goto("/");
+  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await page.waitForTimeout(400);
+
+  // The two survivors keep the numbers they had. Under open-only counting they
+  // would renumber to 1 and 2 — which is the failure this test exists for.
+  expect(await shown()).toEqual(["2", "3"]);
+
+  // And a rack opened afterwards continues the sequence rather than reusing 1.
+  await seedStainedBlocks(page, 1);
+  await expect(async () => {
+    expect(await shown()).toEqual(["2", "3", "4"]);
   }).toPass({ timeout: 15_000 });
 });

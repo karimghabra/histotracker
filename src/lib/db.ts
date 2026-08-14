@@ -3212,7 +3212,25 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
             ), '') AS slide_summary,
             -- Plain, delimited agent list for filtering (issue #82). slide_summary
             -- is display text; parsing it back out would be brittle.
-            COALESCE(GROUP_CONCAT(DISTINCT NULLIF(sl.assay_name, '')), '') AS agent_names
+            COALESCE(GROUP_CONCAT(DISTINCT NULLIF(sl.assay_name, '')), '') AS agent_names,
+            -- Which H&E rack this is: the 1st, the 7th, the 30th.
+            --
+            -- Two racks for the same agent are two identical cards, and "the H&E
+            -- rack" stops identifying anything the moment there are two of them.
+            -- This replaces the amber "new rack" tag, which only said THAT there
+            -- was an earlier one, never which of them you were looking at.
+            --
+            -- Counted over EVERY rack for the agent, closed ones included, so the
+            -- number is fixed for the life of the rack. Counting only open racks
+            -- would renumber the survivors each time one finished — the rack a
+            -- technician wrote "H&E 2" on in marker would silently become H&E 1.
+            CASE WHEN ss.kind = 'stain' THEN (
+              SELECT COUNT(*) FROM slide_stacks earlier
+               WHERE earlier.kind = 'stain'
+                 AND earlier.assay_type = ss.assay_type
+                 AND earlier.assay_name = ss.assay_name
+                 AND earlier.id <= ss.id
+            ) END AS rack_ordinal
        FROM slide_stacks ss
        LEFT JOIN samples s ON s.id = ss.sample_id
        LEFT JOIN projects p ON p.id = s.project_id
@@ -5028,7 +5046,50 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
   // on every slide, so the backward one has to take it off, or a group dragged
   // out and back keeps a cut date for a cut that was retracted.
   if (stageKey === "needs_sectioning") {
-    await db.execute(`UPDATE slides SET stage_cut_at = NULL WHERE section_request_id = ?`, [id]);
+    // The slides come OUT OF THEIR RACKS as well.
+    //
+    // Clearing the cut date alone was not enough, and the explorer found why:
+    // the slide went back to "not cut" while still sitting in a live staining
+    // rack, so the next tick of that rack's protocol stained it — a slide
+    // stained on a day it had not yet been cut, which is the same corruption
+    // the guard above exists to prevent, reached one step later.
+    //
+    // Going back to Needs Sectioning means the glass does not exist yet, so it
+    // cannot be in a stainer. Everything the forward move (updateSectionStage →
+    // 'stain_requested') did to these slides is undone: the rack, the stage, and
+    // the request stamp.
+    const vacated = await db.select<Array<{ stack_id: number }>>(
+      `SELECT DISTINCT stack_id FROM slides
+        WHERE section_request_id = ? AND stack_id IS NOT NULL`,
+      [id],
+    );
+    await db.execute(
+      `UPDATE slides
+          SET stage_cut_at = NULL,
+              stack_id = NULL,
+              stage_stain_requested_at = NULL,
+              current_stage = CASE WHEN purpose = 'stain' THEN 'assigned' ELSE purpose END
+        WHERE section_request_id = ? AND current_stage <> 'removed'`,
+      [id],
+    );
+    // A removed slide lets go of the rack and KEEPS EVERY STAMP IT EARNED.
+    //
+    // Clearing its cut date too was the older half of this bug and it survived
+    // the first fix: a slide that was cut, stained, and then broken at the bench
+    // would come back reading "stained, never cut". That is not a retraction, it
+    // is the record of real work being rewritten — the one thing this
+    // application exists not to do (#83). The guard above cannot catch it
+    // either, because it only inspects LIVE slides, so a group whose only worked
+    // slide has since been removed reverts happily.
+    //
+    // The rack still has to let go: a retired slide left pointing at a rack
+    // makes the rack count glass that is gone.
+    await db.execute(
+      `UPDATE slides SET stack_id = NULL
+        WHERE section_request_id = ? AND current_stage = 'removed'`,
+      [id],
+    );
+    for (const row of vacated) await closeSlideStackIfEmpty(row.stack_id);
   }
 }
 

@@ -36,7 +36,15 @@ test("explorer: ten walkers, twenty-one moves, the screen checked throughout", a
   test.setTimeout(1_500_000);
   await boot(page);
 
-  const built = await seedLarge(page, { projects: 5, samplesPerProject: 26, cutFraction: 0.75 });
+  // The board is seeded from the SAME seed as the walk, so a failure re-runs
+  // from one number. It did not used to be, and the first failure this cost me
+  // was unreproducible for exactly that reason.
+  const built = await seedLarge(page, {
+    projects: 5,
+    samplesPerProject: 26,
+    cutFraction: 0.75,
+    seed: SEED,
+  });
   console.log(`seeded ${built.samples} blocks / ${built.slides} slides in ${built.ms}ms`);
   console.log(`seed=${SEED} walkers=${WALKERS} rounds=${ROUNDS}`);
 
@@ -54,6 +62,13 @@ test("explorer: ten walkers, twenty-one moves, the screen checked throughout", a
   const attempted = new Map<string, number>();
   const refused = new Map<string, number>();
   let performed = 0;
+  // What the walk actually did, so a broken invariant names the moves that led
+  // to it. Re-running from the seed was supposed to be enough, and is not: the
+  // app writes on a 60-second timer (autoAdvanceProcessingRuns), so two runs of
+  // the same seed drift apart by wall clock alone. The history is the only
+  // account that survives that.
+  const history: string[] = [];
+  let dumped = false;
 
   for (let round = 0; round < ROUNDS; round += 1) {
     for (let walker = 0; walker < WALKERS; walker += 1) {
@@ -64,6 +79,9 @@ test("explorer: ten walkers, twenty-one moves, the screen checked throughout", a
       attempted.set(move.label, (attempted.get(move.label) ?? 0) + 1);
       const outcome = await callMove(page, planned);
       performed += 1;
+      history.push(
+        `r${round}w${walker} ${move.label}(${JSON.stringify(planned.args).slice(0, 80)}) → ${outcome}`,
+      );
       if (outcome !== "ok") {
         // A refusal is not a bug — most of them are the guards doing their job.
         // They are counted so the run can be read afterwards, and so a move that
@@ -76,6 +94,27 @@ test("explorer: ten walkers, twenty-one moves, the screen checked throughout", a
     const broken = await checkInvariantsFast(page, findings, `round ${round}`);
     if (broken > 0) {
       console.log(`round ${round}: ${broken} invariant(s) broken`);
+      // The first break is the one worth explaining. A round is ten moves, and
+      // "somewhere in these ten" is not a lead — so dump the offending rows and
+      // the moves that produced them, once, while the state is still fresh.
+      if (!dumped) {
+        dumped = true;
+        const rows = await sql(
+          page,
+          `SELECT sl.id, sl.slide_code, sl.purpose, sl.current_stage, sl.stack_id,
+                  sl.assay_name, sl.stage_cut_at, sl.stage_stained_at,
+                  sl.stage_stain_requested_at,
+                  sr.id AS section_id, sr.current_stage AS section_stage,
+                  st.current_stage AS stack_stage, st.closed_at AS stack_closed
+             FROM slides sl
+             JOIN section_requests sr ON sr.id = sl.section_request_id
+             LEFT JOIN slide_stacks st ON st.id = sl.stack_id
+            WHERE sl.current_stage <> 'removed'
+              AND sl.stage_stained_at IS NOT NULL AND sl.stage_cut_at IS NULL`,
+        );
+        console.log(`\nFIRST BREAK at round ${round}\noffending rows: ${JSON.stringify(rows, null, 1)}`);
+        console.log(`the last 12 moves:\n${history.slice(-12).join("\n")}`);
+      }
     }
 
     if (round % VIEW_EVERY === VIEW_EVERY - 1) {

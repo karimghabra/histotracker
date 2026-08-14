@@ -33,9 +33,44 @@ const AGENTS: Array<[string, string]> = [
   ["ihc", "Ki-67"],
 ];
 
-const one = async <T>(page: Page, query: string, params: unknown[] = []): Promise<T | null> => {
+/**
+ * Pick one candidate row, using the WALKER's seeded generator.
+ *
+ * Every one of these queries used to end `ORDER BY RANDOM() LIMIT 1` —
+ * SQLite's generator, which no seed of ours reaches. So the seed chose which MOVE to make
+ * and never which row to make it on, and a run could not be reproduced from its
+ * seed at all. The harness advertised reproducibility it did not have, and the
+ * first real defect it found could not be re-run to trace it.
+ *
+ * Queries now end `ORDER BY <stable column>` and the choice is made here, off
+ * the same `random()` the walk is driven by.
+ */
+const one = async <T>(
+  page: Page,
+  query: string,
+  params: unknown[],
+  random: () => number,
+): Promise<T | null> => {
   const rows = await sql<T>(page, query, params);
-  return rows[0] ?? null;
+  if (rows.length === 0) return null;
+  return rows[Math.floor(random() * rows.length)] ?? null;
+};
+
+/** The same, for a handful of rows. */
+const some = async <T>(
+  page: Page,
+  query: string,
+  params: unknown[],
+  random: () => number,
+  count: number,
+): Promise<T[]> => {
+  const rows = await sql<T>(page, query, params);
+  const picked: T[] = [];
+  const pool = [...rows];
+  while (pool.length > 0 && picked.length < count) {
+    picked.push(...pool.splice(Math.floor(random() * pool.length), 1));
+  }
+  return picked;
 };
 
 export const MOVES: Move[] = [
@@ -46,8 +81,7 @@ export const MOVES: Move[] = [
       const row = await one<{ id: number }>(
         page,
         `SELECT id FROM samples WHERE current_stage = 'embedded' AND block_exhausted = 0
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       const [type, name] = AGENTS[Math.floor(random() * AGENTS.length)];
       return {
@@ -68,8 +102,7 @@ export const MOVES: Move[] = [
       const row = await one<{ id: number }>(
         page,
         `SELECT id FROM section_requests WHERE current_stage = 'needs_sectioning'
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       return {
         fn: "updateSectionStage",
@@ -79,12 +112,11 @@ export const MOVES: Move[] = [
   },
   {
     label: "revert a group backwards",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number }>(
         page,
         `SELECT id FROM section_requests
-          WHERE current_stage NOT IN ('needs_sectioning', 'removed') ORDER BY RANDOM() LIMIT 1`,
-      );
+          WHERE current_stage NOT IN ('needs_sectioning', 'removed') ORDER BY id`, [], random);
       if (!row) return null;
       // Going backwards is a real feature, and it is where downstream state gets
       // stranded if anything forgot to unwind.
@@ -99,8 +131,7 @@ export const MOVES: Move[] = [
         `SELECT DISTINCT st.id AS id, sl.assay_type AS assay_type
            FROM slide_stacks st JOIN slides sl ON sl.stack_id = st.id
           WHERE st.kind = 'stain' AND st.closed_at IS NULL AND sl.purpose = 'stain'
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       return {
         fn: "syncAssayStackWorkflowStep",
@@ -115,19 +146,17 @@ export const MOVES: Move[] = [
         page,
         `SELECT id FROM slides WHERE purpose = 'stain'
             AND current_stage IN ('ready_for_imaging', 'pictures_taken')
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       return { fn: "setSlidePicturesTaken", args: [row.id, random() < 0.8] };
     },
   },
   {
     label: "advance a stack",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number; current_stage: string }>(
         page,
-        `SELECT id, current_stage FROM slide_stacks WHERE closed_at IS NULL ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id, current_stage FROM slide_stacks WHERE closed_at IS NULL ORDER BY id`, [], random);
       if (!row) return null;
       const next: Record<string, string> = {
         stain_requested: "ready_for_imaging",
@@ -146,8 +175,7 @@ export const MOVES: Move[] = [
         page,
         `SELECT id FROM slides WHERE purpose = 'stain' AND current_stage <> 'removed'
             AND stage_cut_at IS NOT NULL AND stage_pictures_taken_at IS NULL
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       const [type, name] = AGENTS[Math.floor(random() * AGENTS.length)];
       return {
@@ -161,8 +189,7 @@ export const MOVES: Move[] = [
     plan: async (page, random) => {
       const row = await one<{ id: number }>(
         page,
-        `SELECT id FROM section_requests WHERE current_stage <> 'removed' ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id FROM section_requests WHERE current_stage <> 'removed' ORDER BY id`, [], random);
       if (!row) return null;
       const [type, name] = AGENTS[Math.floor(random() * AGENTS.length)];
       return {
@@ -173,30 +200,27 @@ export const MOVES: Move[] = [
   },
   {
     label: "refile onto another block",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number; sample_id: number }>(
         page,
         `SELECT sl.id AS id, sr.sample_id AS sample_id
            FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-          WHERE sl.current_stage <> 'removed' ORDER BY RANDOM() LIMIT 1`,
-      );
+          WHERE sl.current_stage <> 'removed' ORDER BY id`, [], random);
       if (!row) return null;
       const other = await one<{ id: number }>(
         page,
-        `SELECT id FROM samples WHERE id <> ? ORDER BY RANDOM() LIMIT 1`,
-        [row.sample_id],
-      );
+        `SELECT id FROM samples WHERE id <> ? ORDER BY id`,
+        [row.sample_id], random);
       if (!other) return null;
       return { fn: "relabelSlideToSample", args: [row.id, other.id, "explorer"] };
     },
   },
   {
     label: "remove a slide",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number }>(
         page,
-        `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY id`, [], random);
       if (!row) return null;
       return { fn: "removeSlide", args: [row.id, "explorer: broke"] };
     },
@@ -204,7 +228,8 @@ export const MOVES: Move[] = [
   {
     label: "ask for a stain",
     plan: async (page, random) => {
-      const row = await one<{ id: number }>(page, `SELECT id FROM samples ORDER BY RANDOM() LIMIT 1`);
+      const row = await one<{ id: number }>(
+        page, `SELECT id FROM samples ORDER BY id`, [], random);
       if (!row) return null;
       const [type, name] = AGENTS[Math.floor(random() * AGENTS.length)];
       return { fn: "requestStainForSample", args: [{ sampleId: row.id, assayType: type, assayName: name }] };
@@ -212,13 +237,12 @@ export const MOVES: Move[] = [
   },
   {
     label: "withdraw a stain request",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number; pending: string }>(
         page,
         `SELECT id, preselected_stains AS pending FROM samples
           WHERE TRIM(preselected_stains) <> '' AND preselected_stains <> '[]'
-          ORDER BY RANDOM() LIMIT 1`,
-      );
+          ORDER BY id`, [], random);
       if (!row) return null;
       try {
         const parsed = JSON.parse(row.pending) as Array<{ assay_type?: string; assay_name?: string }>;
@@ -244,9 +268,8 @@ export const MOVES: Move[] = [
       const row = await one<{ id: number }>(
         page,
         archive
-          ? `SELECT id FROM samples WHERE archived_at IS NULL ORDER BY RANDOM() LIMIT 1`
-          : `SELECT id FROM samples WHERE archived_at IS NOT NULL ORDER BY RANDOM() LIMIT 1`,
-      );
+          ? `SELECT id FROM samples WHERE archived_at IS NULL ORDER BY id`
+          : `SELECT id FROM samples WHERE archived_at IS NOT NULL ORDER BY id`, [], random);
       if (!row) return null;
       return { fn: "setSampleArchived", args: [row.id, archive] };
     },
@@ -254,7 +277,8 @@ export const MOVES: Move[] = [
   {
     label: "exhaust or un-exhaust a block",
     plan: async (page, random) => {
-      const row = await one<{ id: number }>(page, `SELECT id FROM samples ORDER BY RANDOM() LIMIT 1`);
+      const row = await one<{ id: number }>(
+        page, `SELECT id FROM samples ORDER BY id`, [], random);
       if (!row) return null;
       return { fn: "setBlockExhausted", args: [row.id, random() < 0.7] };
     },
@@ -264,8 +288,7 @@ export const MOVES: Move[] = [
     plan: async (page, random) => {
       const row = await one<{ id: number; code: string; name: string }>(
         page,
-        `SELECT id, code, name FROM projects ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id, code, name FROM projects ORDER BY id`, [], random);
       if (!row) return null;
       // A new two-letter code that nothing else is using; renaming rewrites every
       // sample and slide code the project owns (#106).
@@ -275,8 +298,7 @@ export const MOVES: Move[] = [
       const clash = await one<{ n: number }>(
         page,
         `SELECT COUNT(*) AS n FROM projects WHERE code = ? AND id <> ?`,
-        [code, row.id],
-      );
+        [code, row.id], random);
       if (Number(clash?.n ?? 0) > 0) return null;
       return {
         fn: "updateProject",
@@ -287,7 +309,8 @@ export const MOVES: Move[] = [
   {
     label: "deactivate or reactivate a project",
     plan: async (page, random) => {
-      const row = await one<{ id: number }>(page, `SELECT id FROM projects ORDER BY RANDOM() LIMIT 1`);
+      const row = await one<{ id: number }>(
+        page, `SELECT id FROM projects ORDER BY id`, [], random);
       if (!row) return null;
       return { fn: "setProjectActive", args: [row.id, random() < 0.5] };
     },
@@ -297,8 +320,7 @@ export const MOVES: Move[] = [
     plan: async (page, random) => {
       const row = await one<{ id: number }>(
         page,
-        `SELECT id FROM assay_catalog ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id FROM assay_catalog ORDER BY id`, [], random);
       if (!row) return null;
       // Racks and slides reference agents by NAME, so deactivating one that open
       // racks depend on is exactly the kind of change nothing downstream expects.
@@ -307,11 +329,10 @@ export const MOVES: Move[] = [
   },
   {
     label: "revert a block's stage",
-    plan: async (page) => {
+    plan: async (page, random) => {
       const row = await one<{ id: number }>(
         page,
-        `SELECT id FROM samples WHERE current_stage = 'embedded' ORDER BY RANDOM() LIMIT 1`,
-      );
+        `SELECT id FROM samples WHERE current_stage = 'embedded' ORDER BY id`, [], random);
       if (!row) return null;
       // Backwards, while its slides may be downstream in racks.
       return { fn: "revertToStage", args: [row.id, "needs_embedding"] };
@@ -320,7 +341,8 @@ export const MOVES: Move[] = [
   {
     label: "edit a description",
     plan: async (page, random) => {
-      const row = await one<{ id: number }>(page, `SELECT id FROM samples ORDER BY RANDOM() LIMIT 1`);
+      const row = await one<{ id: number }>(
+        page, `SELECT id FROM samples ORDER BY id`, [], random);
       if (!row) return null;
       const texts = ["re-labelled at the bench", "α-SMA · 切片 · 🧫", "  ", "x".repeat(400)];
       return {
@@ -332,9 +354,12 @@ export const MOVES: Move[] = [
   {
     label: "tag slides at a depth",
     plan: async (page, random) => {
-      const rows = await sql<{ id: number }>(
+      const rows = await some<{ id: number }>(
         page,
-        `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY RANDOM() LIMIT 3`,
+        `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY id`,
+        [],
+        random,
+        3,
       );
       if (rows.length === 0) return null;
       return {

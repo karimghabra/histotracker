@@ -151,7 +151,9 @@ export function StackDetailsDrawer({
           <h2 className="flex items-center gap-2 text-base font-semibold text-ink">
             <Layers size={16} className="shrink-0" />
             <span className="truncate">
-              {displayCode(stack.parent_code ?? "")}{stack.kind === "stain" ? " · stain rack" : ""}
+              {displayCode(stack.parent_code ?? "")}
+              {stack.kind === "stain" && stack.rack_ordinal != null ? ` ${stack.rack_ordinal}` : ""}
+              {stack.kind === "stain" ? " · stain rack" : ""}
             </span>
           </h2>
           <p className="truncate text-xs text-ink-faint">

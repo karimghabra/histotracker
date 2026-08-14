@@ -1026,21 +1026,6 @@ export function Board({
                                 stack={stack}
                                 selected={selectedStacks.has(stack.id)}
                                 onSelect={selectStack}
-                                // A rack that came after an existing one for the
-                                // same agent. `visibleStacks` is already in
-                                // creation order, so "is there an earlier one?"
-                                // is just a look backwards.
-                                laterRackFor={
-                                  stack.kind === "stain" &&
-                                  visibleStacks
-                                    .slice(0, visibleStacks.indexOf(stack))
-                                    .some(
-                                      (other) =>
-                                        other.kind === "stain" &&
-                                        other.assay_type === stack.assay_type &&
-                                        other.assay_name === stack.assay_name,
-                                    )
-                                }
                               />
                             ))
                           : groups.map((group) => (

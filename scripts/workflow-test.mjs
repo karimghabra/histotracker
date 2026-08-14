@@ -935,7 +935,23 @@ function makeApi(db) {
         throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already stained or imaged`);
       }
       run(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [sectionId]);
-      run(`UPDATE slides SET stage_cut_at = NULL WHERE section_request_id = ?`, [sectionId]);
+      // The slides leave their racks too. Clearing the cut date alone left a
+      // slide that is "not cut" sitting in a live stainer, and the next tick of
+      // that rack stained it — the exact corruption the guard above prevents,
+      // reached one step later. Found by the v3 explorer.
+      const vacated = all(
+        `SELECT DISTINCT stack_id AS stack FROM slides
+          WHERE section_request_id = ? AND stack_id IS NOT NULL`, [sectionId]);
+      run(`UPDATE slides
+              SET stage_cut_at = NULL, stack_id = NULL, stage_stain_requested_at = NULL,
+                  current_stage = CASE WHEN purpose = 'stain' THEN 'assigned' ELSE purpose END
+            WHERE section_request_id = ? AND current_stage <> 'removed'`, [sectionId]);
+      // A removed slide lets go of the rack and KEEPS its stamps: it is the
+      // record of glass that existed and was worked on, and clearing its cut
+      // date leaves it reading "stained, never cut".
+      run(`UPDATE slides SET stack_id = NULL
+            WHERE section_request_id = ? AND current_stage = 'removed'`, [sectionId]);
+      for (const row of vacated) closeSlideStackIfEmpty(row.stack);
       return;
     }
     run(`UPDATE section_requests SET current_stage = ? WHERE id = ?`, [stageKey, sectionId]);
@@ -3963,6 +3979,98 @@ invariant("a merge that would overflow the rack is refused", () => {
     refused = true;
   }
   assert(refused, "three slides do not go into a rack of two (#123)");
+});
+
+
+invariant("reverting a cut takes its slides out of the rack, not just off the date", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "revert while racked");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const before = api.get(
+    `SELECT id, stack_id AS stack, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`,
+    [section]);
+  assert(before.stack != null, "precondition: the slide is in a rack");
+  assert(before.cut != null, "precondition: it is cut");
+
+  // Nothing has been stained yet, so the revert is allowed.
+  api.revertSectionToStage(section, "needs_sectioning");
+
+  const after = api.get(
+    `SELECT stack_id AS stack, stage_cut_at AS cut FROM slides WHERE id = ?`, [before.id]);
+  eq(after.cut, null, "the cut date is cleared, as intended");
+  eq(after.stack, null,
+     "and the slide LEAVES the rack — a slide that is not cut cannot be in a stainer");
+});
+
+
+invariant("a retracted cut cannot then be stained by its old rack", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "retracted, then ticked");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slide = api.get(
+    `SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`, [section]);
+  const rack = slide.stack;
+
+  // Send it back to the queue — allowed, nothing has been stained.
+  api.revertSectionToStage(section, "needs_sectioning");
+
+  // Now tick the OLD rack's protocol, which is what a technician does when the
+  // rack is still on the bench. This is exactly the sequence the explorer walked
+  // into: the slide was no longer cut, but was still in the rack, so it got a
+  // staining date for a section nobody had taken.
+  api.tickStainedCheckbox(rack);
+
+  const after = api.get(
+    `SELECT stage_cut_at AS cut, stage_stained_at AS stained FROM slides WHERE id = ?`,
+    [slide.id]);
+  eq(after.stained, null, "the retracted slide is NOT stained by the rack it left");
+  eq(after.cut, null, "and it is still, correctly, uncut");
+});
+
+
+invariant("retracting a cut never rewrites a REMOVED slide's history", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "one broken, one not");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section);
+  const slides = api.all(
+    `SELECT id FROM slides WHERE section_request_id = ? ORDER BY id`, [section]);
+
+  // One slide is stained, then broken at the bench.
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, [now(), slides[0].id]);
+  api.removeSlide(slides[0].id, "dropped it");
+
+  // The group can still be sent back, because the guard looks at LIVE slides and
+  // the only worked one is gone. That is the right call — but the retraction
+  // must not touch the broken slide's record.
+  api.revertSectionToStage(section, "needs_sectioning");
+
+  const gone = api.get(
+    `SELECT stage_cut_at AS cut, stage_stained_at AS stained, stack_id AS stack
+       FROM slides WHERE id = ?`, [slides[0].id]);
+  assert(gone.cut != null, "the removed slide keeps the cut that really happened");
+  assert(gone.stained != null, "and the staining that really happened");
+  eq(gone.stack, null, "but it lets go of the rack — the rack must not count glass that is gone");
+
+  // …and the live slide IS retracted, as intended.
+  const live = api.get(
+    `SELECT stage_cut_at AS cut, stack_id AS stack FROM slides WHERE id = ?`, [slides[1].id]);
+  eq(live.cut, null, "the surviving slide goes back to uncut");
+  eq(live.stack, null, "and out of the rack");
 });
 
 // ---------------------------------------------------------------------------

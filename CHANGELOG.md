@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.14.2 - unreleased
+
+Two ways a retracted cut could rewrite history, both found by the explorer while
+verifying 0.14.1, and both producing the same impossible record: a slide stained
+on a day it had not yet been cut.
+
+- **Sending a cut group back to Needs Sectioning left its slides in their
+  staining rack.** The cut date was cleared, correctly, but the glass stayed in
+  the rack — so the next tick of that rack's protocol stained a slide the app
+  said was not cut. Reverting now takes the slides out of the rack, clears the
+  request stamp, and retires any rack it empties. Going back to the queue means
+  the sections do not exist yet, so they cannot be in a stainer.
+- **A retraction also wiped the cut date of REMOVED slides.** A slide that was
+  cut, stained, and then broken at the bench came back reading "stained, never
+  cut". That is not a retraction; it is the record of real work being rewritten,
+  which is the one thing this application exists not to do (#83). A removed slide
+  now keeps every stamp it earned and only lets go of the rack. This one is older
+  than 0.14 — the guard added in 0.13.3 could not see it, because it inspects
+  live slides, and here the only worked slide had been removed.
+
+Also in the harness, which had been claiming more than it delivered:
+
+- **The stress walk was never actually reproducible from its seed.** Every move
+  picked its target with SQL's `RANDOM()`, which no seed of ours reaches, and the
+  seeded board used `Math.random()`. So the seed chose which move to make and
+  never what to make it on — and the first real defect it found could not be
+  re-run to trace. Both are now driven by the walk's own generator.
+- The explorer dumps the offending rows and the last twelve moves on the first
+  broken invariant. "Somewhere in these ten moves" is not a lead.
+
 ## 0.14.1 - unreleased
 
 - **The per-slide "Move…" dropdown is gone from the rack panel.** It put a select
@@ -8,12 +38,16 @@
   the same ticked list that splits and removes: **Select slides**, then move them
   to another agent, split them into a new rack, or remove them. One selection,
   three things to do with it.
-- The **new rack** tag's tooltip was out of date. It said a second rack appears
-  because the earlier one has started its protocol, which was the whole story
-  before 0.14.0 and is now only half of it — since #123 a rack also stops taking
-  slides when it is *full*. The tag itself is derived, not stored: it means
-  "there is already an earlier rack for this agent in this column", and it clears
-  itself when that earlier rack moves on or the two are merged.
+- **Racks for the same agent are numbered, and the "new rack" tag is gone.** The
+  tag only said THAT an earlier rack existed — which the second card on the board
+  already says — and it could not tell two racks apart, which is the thing you
+  need to know when you are holding one. Each stain rack now carries its number
+  for that agent: H&E 1, H&E 2, H&E 3.
+
+  The number counts every rack ever run for the agent, retired ones included, so
+  it is fixed for the life of the rack. Counting only the open ones would
+  renumber the survivors each time a rack finished — and a rack somebody wrote
+  "H&E 2" on in marker would silently become H&E 1.
 
 ## 0.14.0 - unreleased
 
