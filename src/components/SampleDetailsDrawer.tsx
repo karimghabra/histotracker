@@ -275,7 +275,20 @@ export function SampleDetailsDrawer({
             )}
             <p className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
               {readOnlyNotice(reason, "Read-only viewer — cutting and stain requests are made on the workstation.")}
-              Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
+              {/* Viewers only. "Use Request stain in the header" is advice for
+                  somebody on a mirror who wants to ask the workstation for
+                  something; an unsigned user cannot raise a request either, and
+                  telling them to try would send them round a loop. The leading
+                  space is explicit because JSX will not put one between an
+                  expression and the text that follows it — without it this read
+                  "…on the workstation.Use Request stain…". */}
+              {reason === "viewer" && (
+                <>
+                  {" "}
+                  Use <span className="font-medium text-ink-soft">Request stain</span> in the header
+                  to ask for one.
+                </>
+              )}
             </p>
           </div>
         ) : (
