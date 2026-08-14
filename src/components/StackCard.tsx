@@ -78,7 +78,7 @@ export function StackCard({
         {laterRackFor && (
           <span
             className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800"
-            title="An earlier rack for this agent has already started its protocol, so it can no longer take new slides. These went into a fresh rack."
+            title="There is already an earlier rack for this agent. A rack stops taking slides once its protocol has started, or once it is full, so these went into a fresh one. The tag clears itself when the earlier rack moves on."
           >
             new rack
           </span>

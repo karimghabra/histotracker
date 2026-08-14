@@ -16,6 +16,7 @@ import {
   checkIntegrity,
   storedCode,
 } from "./lib";
+import { rackSlideCodes, reassignInRack } from "../helpers/rack";
 
 /**
  * Every per-slide action, at every stage a slide can be in.
@@ -112,12 +113,13 @@ test("matrix: purpose, reassignment, depth tags, removal and undo at every slide
   const staining = column(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
 
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  if ((await move.count()) === 0) {
-    findings.push({ where: "reassign", detail: "no Reassign control on a rack in Staining (#115)" });
+  // Reassignment is a SELECTION now, not a per-row dropdown (0.14.1) — tick the
+  // slides, choose the agent once.
+  const rackCodes = await rackSlideCodes(page);
+  if (rackCodes.length === 0) {
+    findings.push({ where: "reassign", detail: "no slides on a rack in Staining (#115)" });
   } else {
-    const label = (await move.first().getAttribute("aria-label")) ?? "";
-    const code = label.replace("Reassign ", "");
+    const code = rackCodes[0];
     const before = await sql<{ id: number; stack_id: number | null; assay_name: string | null }>(
       page,
       `SELECT id, stack_id, assay_name FROM slides WHERE slide_code = ?`,
@@ -128,7 +130,7 @@ test("matrix: purpose, reassignment, depth tags, removal and undo at every slide
     // NOTE: this select encodes the pair as `stain:PAS` (one colon), while the
     // cutting-plan dialog and the Logs control use `stain::PAS` (two). Same
     // meaning, three encodings — recorded as an observation, not a defect.
-    await move.first().selectOption("stain:PAS");
+    await reassignInRack(page, [code], "stain:PAS");
     await page.waitForTimeout(500);
     const afterMove = await sql<{ assay_name: string | null; stack_id: number | null; stage: string }>(
       page,
@@ -152,9 +154,9 @@ test("matrix: purpose, reassignment, depth tags, removal and undo at every slide
     // …and back to extras. The slide should leave staining entirely.
     await closeDrawer(page);
     await staining.locator("div[aria-selected]").first().click();
-    const back = drawer(page).getByRole("combobox", { name: `Reassign ${code}` });
-    if (await back.count()) {
-      await back.selectOption("extra");
+    const backCodes = await rackSlideCodes(page);
+    if (backCodes.includes(code)) {
+      await reassignInRack(page, [code], "extra");
       await page.waitForTimeout(500);
       const afterExtra = await sql<{ purpose: string; stage: string; stack_id: number | null }>(
         page,

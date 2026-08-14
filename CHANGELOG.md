@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.1 - unreleased
+
+- **The per-slide "Move…" dropdown is gone from the rack panel.** It put a select
+  box on every row — twenty-four of them on a full rack — for an action that is
+  occasional, and it could only ever move one slide. Reassigning now goes through
+  the same ticked list that splits and removes: **Select slides**, then move them
+  to another agent, split them into a new rack, or remove them. One selection,
+  three things to do with it.
+- The **new rack** tag's tooltip was out of date. It said a second rack appears
+  because the earlier one has started its protocol, which was the whole story
+  before 0.14.0 and is now only half of it — since #123 a rack also stops taking
+  slides when it is *full*. The tag itself is derived, not stored: it means
+  "there is already an earlier rack for this agent in this column", and it clears
+  itself when that earlier rack moves on or the two are merged.
+
 ## 0.14.0 - unreleased
 
 No schema change — the two new settings are rows in `app_settings`, which every

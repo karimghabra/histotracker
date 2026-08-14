@@ -15,6 +15,7 @@ import {
   checkIntegrity,
   storedCode,
 } from "./lib";
+import { rackSlideCodes, reassignInRack } from "../helpers/rack";
 
 /**
  * Bench reality: the things that actually happen to glass, and whether the
@@ -91,7 +92,7 @@ test("bench: a slide breaks in the rack, mid-protocol", async ({ page, consoleEr
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(500);
 
-  const select = drawer(page).getByRole("button", { name: /Select slides to remove/ });
+  const select = drawer(page).getByRole("button", { name: /Select slides/ });
   if (!(await select.count())) {
     findings.push({ where: "B1 breakage", detail: "DEFECT: no way to remove one slide from a rack" });
   } else {
@@ -162,11 +163,14 @@ test("bench: a slide is stained with the wrong agent", async ({ page, consoleErr
   // was REQUESTED as PAS and IS an H&E. Record it and see what survives.
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(500);
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  if (!(await move.count())) {
+  // Through the selection, since 0.14.1 dropped the per-row dropdown. The
+  // question this asks is unchanged: is there ANY way to correct the agent on a
+  // slide that has already been stained?
+  const correctable = await rackSlideCodes(page);
+  if (correctable.length === 0) {
     findings.push({ where: "B2 wrong stain", detail: "DEFECT: no way to correct the agent on a stained slide" });
   } else {
-    await move.first().selectOption("stain:H&E");
+    await reassignInRack(page, [correctable[0]], "stain:H&E");
     await page.waitForTimeout(700);
     const after = await sql<{ assay: string; stained: string | null; stack_id: number | null }>(
       page,

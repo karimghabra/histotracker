@@ -131,7 +131,7 @@ test("#124 + #126: a rack can be split, moved in bulk, and merged back", async (
   await expect(page.getByText("Assay slides").first()).toBeVisible();
 
   // ---- split ---------------------------------------------------------------
-  await page.getByRole("button", { name: "Select slides to remove" }).click();
+  await page.getByRole("button", { name: "Select slides" }).click();
   const checkboxes = drawer(page).locator('input[type="checkbox"][aria-label^="Select EE-"]');
   await checkboxes.first().check();
   await page.getByRole("button", { name: /Split 1 slide into a new rack/ }).click();
@@ -179,7 +179,7 @@ test("#126: a selection moves to another agent in one action", async ({ page }) 
   }).toPass({ timeout: 15_000 });
 
   await staining(page).locator("[aria-selected]").first().click();
-  await page.getByRole("button", { name: "Select slides to remove" }).click();
+  await page.getByRole("button", { name: "Select slides" }).click();
 
   const checkboxes = drawer(page).locator('input[type="checkbox"][aria-label^="Select EE-"]');
   await checkboxes.nth(0).check();

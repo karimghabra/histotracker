@@ -15,6 +15,7 @@ import {
   checkIntegrity,
   storedCode,
 } from "./lib";
+import { rackSlideCodes, reassignFirstInRack, reassignInRack } from "../helpers/rack";
 
 /**
  * How slides merge with EXISTING stacks.
@@ -198,10 +199,8 @@ test("merge: reassigning a slide into an agent that already has a rack", async (
 
   // -- C. reassign an untouched slide into an untouched rack → should JOIN ---
   expect(await openRack(page, "H&E")).toBe(true);
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  const movedLabel = (await move.first().getAttribute("aria-label")) ?? "";
-  const movedCode = movedLabel.replace("Reassign ", "");
-  await move.first().selectOption("stain:PAS");
+  // One selection, not a per-row dropdown (0.14.1).
+  const movedCode = (await reassignFirstInRack(page, "stain:PAS")) ?? "";
   await page.waitForTimeout(600);
   await closeDrawer(page);
 
@@ -241,10 +240,8 @@ test("merge: reassigning a slide into an agent that already has a rack", async (
 
   await cutAndSection(page, "RS-4", ["stain::Alcian Blue", "extra"]);
   expect(await openRack(page, "Alcian Blue")).toBe(true);
-  const move2 = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  const label2 = (await move2.first().getAttribute("aria-label")) ?? "";
-  const code2 = label2.replace("Reassign ", "");
-  await move2.first().selectOption("stain:PAS");
+  // One selection, not a per-row dropdown (0.14.1).
+  const code2 = (await reassignFirstInRack(page, "stain:PAS")) ?? "";
   await page.waitForTimeout(600);
   await closeDrawer(page);
 
@@ -302,15 +299,14 @@ test("merge: a stained slide moved into a fresh rack, and what that rack accepts
   await page.waitForTimeout(400);
 
   // Now move that STAINED slide into the untouched PAS rack.
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  const label = (await move.first().getAttribute("aria-label")) ?? "";
-  const code = label.replace("Reassign ", "");
+  // One selection, not a per-row dropdown (0.14.1).
+  const [code] = await rackSlideCodes(page);
   const stampBefore = await sql<{ stained: string | null }>(
     page,
     `SELECT stage_stained_at AS stained FROM slides WHERE slide_code = ?`,
     [storedCode(code)],
   );
-  await move.first().selectOption("stain:PAS");
+  await reassignInRack(page, [code], "stain:PAS");
   await page.waitForTimeout(600);
   await closeDrawer(page);
 
@@ -532,9 +528,8 @@ test("merge: what the bench SEES on a rack that mixes worked and unworked glass"
   expect(await openRack(page, "H&E")).toBe(true);
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(400);
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  const moved = ((await move.first().getAttribute("aria-label")) ?? "").replace("Reassign ", "");
-  await move.first().selectOption("stain:PAS");
+  // One selection, not a per-row dropdown (0.14.1).
+  const moved = (await reassignFirstInRack(page, "stain:PAS")) ?? "";
   await page.waitForTimeout(700);
   await closeDrawer(page);
 

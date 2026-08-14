@@ -120,7 +120,7 @@ test("0.14.0 — the changes", async ({ page }) => {
   await expect(page.getByText("Assay slides").first()).toBeVisible();
   await shot(page, "122-checklist-above-slides", drawer(page));
 
-  await page.getByRole("button", { name: "Select slides to remove" }).click();
+  await page.getByRole("button", { name: "Select slides" }).click();
   await drawer(page).locator('input[type="checkbox"][aria-label^="Select EE-"]').first().check();
   await shot(page, "124-126-split-and-bulk-move", drawer(page));
 

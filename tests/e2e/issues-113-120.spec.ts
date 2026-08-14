@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
+import { reassignFirstInRack } from "../helpers/rack";
 
 /**
  * #113–#120. The Logs cluster (#117/#118/#119) is one root cause: the phase was
@@ -266,7 +267,8 @@ test("#115: a slide in staining can be moved to another agent", async ({ page })
   await staining.getByText(agent).first().click();
 
   // Move the slide onto a different agent; it leaves this rack for that one.
-  await page.getByLabel(/^Reassign EE-1-/).first().selectOption("ihc:CD31");
+  // Through the selection, since 0.14.1 dropped the per-row dropdown.
+  await reassignFirstInRack(page, "ihc:CD31");
   await expect(staining.getByText("CD31").first()).toBeVisible({ timeout: 15000 });
   await expect(staining.getByText(agent)).toHaveCount(0);
 });
