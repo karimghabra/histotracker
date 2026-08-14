@@ -15,7 +15,7 @@ import { useActions } from "../hooks/useActions";
 import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useSampleSlides, useSampleTimelineEvents } from "../hooks/useData";
 import { cn, displayCode } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
   sample,
@@ -48,6 +48,7 @@ export function SampleDetailsDrawer({
   // Viewers mirror the workstation read-only; the write controls below are
   // hidden rather than left to fail silently (#72).
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
   const { data: catalog = [] } = useAssayCatalog();
   const { data: sampleSlides = [] } = useSampleSlides(sample.id);
@@ -141,7 +142,7 @@ export function SampleDetailsDrawer({
             simply did nothing (#72). */}
         {showPreprocessing && readOnly && (
           <p className="mb-3 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-            Read-only viewer — the preprocessing checklist is completed on the workstation.
+            {readOnlyNotice(reason, "Read-only viewer — the preprocessing checklist is completed on the workstation.")}
           </p>
         )}
         {showPreprocessing && !readOnly && (
@@ -273,7 +274,7 @@ export function SampleDetailsDrawer({
               </p>
             )}
             <p className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-              Read-only viewer — cutting and stain requests are made on the workstation.
+              {readOnlyNotice(reason, "Read-only viewer — cutting and stain requests are made on the workstation.")}
               Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
             </p>
           </div>
@@ -362,16 +363,21 @@ export function SampleDetailsDrawer({
                   // with no extras left cannot fulfil one (#70), and that must
                   // not abandon the blocks behind it in the loop. The outcome is
                   // summarised rather than thrown.
-                  const { added, pulled, failed } = await requestStainForSamples(
+                  const { added, pulled, joined, failed } = await requestStainForSamples(
                     stainTargets,
                     assayType as "stain" | "ihc",
                     assayName,
                   );
                   setRequestAgent("");
-                  setRequestFailed(failed.length > 0 && added.length + pulled.length === 0);
+                  setRequestFailed(
+                    failed.length > 0 && added.length + pulled.length + joined.length === 0,
+                  );
                   const parts: string[] = [];
                   if (pulled.length) {
                     parts.push(`${pulled.length} pulled from an extra slide → now in Staining`);
+                  }
+                  if (joined.length) {
+                    parts.push(`${joined.length} added to the cut already waiting — no second cut`);
                   }
                   if (added.length) {
                     parts.push(`${added.length} flagged on the block — a new cut is needed`);

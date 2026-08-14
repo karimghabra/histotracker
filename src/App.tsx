@@ -33,7 +33,7 @@ import { useSync } from "./hooks/useSync";
 import { useBackupScheduler } from "./hooks/useBackupScheduler";
 import { useUndoStore } from "./lib/undo";
 import { hydrateUndoHistory } from "./lib/undoPersist";
-import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
+import { autoAdvanceProcessingRuns, setSignedOutReadOnly, setViewerReadOnly } from "./lib/db";
 import { getSyncConfig, type SyncConfigPublic } from "./lib/syncConfig";
 import { exportSamplesCsv, exportWorkbookXlsx } from "./lib/export";
 
@@ -96,6 +96,17 @@ export default function App() {
     if (syncConfig) setViewerReadOnly(syncConfig.role === "viewer");
   }, [syncConfig]);
 
+  // The same backstop for an unsigned session (#128).
+  //
+  // Nobody signed in means nobody to attribute the work to, and this app exists
+  // to keep a record — an entry stamped "Unsigned" is a hole in it that cannot
+  // be filled in later. Note the app signs itself out at launch (#76), so this
+  // is the state every session STARTS in: the board is readable, and the first
+  // click that changes anything is choosing your name.
+  useEffect(() => {
+    setSignedOutReadOnly(!activeUser);
+  }, [activeUser]);
+
   // Automatic local database backups — only the authoritative workstation backs
   // up (a viewer's DB is a read-only mirror). Announces scheduled/launch backups.
   useBackupScheduler(Boolean(syncConfig?.configured) && !isViewer, () =>
@@ -151,14 +162,11 @@ export default function App() {
     window.localStorage.setItem("histometer-drawer-width", String(drawerWidth));
   }, [drawerWidth]);
 
-  // Keep the protocol-checklist operator name in step with who is signed in —
-  // INCLUDING on sign-out. It used to be written but never cleared, so after an
-  // idle logout the protocol steps kept recording the departed operator's name
-  // (#76).
-  useEffect(() => {
-    if (activeUser) window.localStorage.setItem("histometer-active-operator", activeUser.name);
-    else window.localStorage.removeItem("histometer-active-operator");
-  }, [activeUser]);
+  // The protocol checklist used to keep its own copy of the operator's name in
+  // localStorage, mirrored from here, and #76 was the bug where that copy was
+  // written but never cleared — so after an idle logout the steps kept recording
+  // the departed operator. The checklist now reads the signed-in user directly
+  // (#127), so there is no second copy left to drift, and the mirror is gone.
 
   // #76 — the signed-in user lives in the DATABASE (app_settings.active_user_id),
   // so it survives quitting the app and rebooting the machine. On a shared bench
@@ -235,8 +243,13 @@ export default function App() {
   // in the header every 60s for an action nobody took, masking real messages
   // like "Sync error" that share that slot. Gated like useBackupScheduler and
   // useIdleLogout above.
+  //
+  // Gated on the signed-in user for the same reason (#128): with nobody signed
+  // in the UPDATE is refused, and this one is called bare — so the rejection
+  // would flash "Sign in before making modifications" in the header every sixty
+  // seconds for an action nobody took.
   useEffect(() => {
-    if (isViewer) return;
+    if (isViewer || !activeUser) return;
     const tick = async () => {
       const moved = await autoAdvanceProcessingRuns();
       if (moved > 0) {
@@ -247,7 +260,7 @@ export default function App() {
     tick();
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [qc, isViewer]);
+  }, [qc, isViewer, activeUser]);
 
   // Global undo/redo shortcuts (ignored while typing in a field).
   useEffect(() => {
@@ -582,7 +595,12 @@ export default function App() {
     // Viewer instances are read-only mirrors; the mutating surfaces below read
     // this and hide themselves rather than firing writes the data layer will
     // reject (#72).
-    <ReadOnlyProvider value={isViewer}>
+    <ReadOnlyProvider
+      value={{
+        readOnly: isViewer || !activeUser,
+        reason: isViewer ? "viewer" : "signed-out",
+      }}
+    >
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
         projects={projects}
@@ -939,7 +957,10 @@ export default function App() {
         />
       )}
       {/* #76 — say plainly that the session lapsed, and offer the way back in.
-          Dismissable: work can continue unsigned, it is just recorded that way. */}
+          Still dismissable, but what dismissing MEANS changed with #128: the
+          board stays readable and nothing can be changed until somebody signs
+          in. It used to say unsigned work was "recorded as unsigned", which is
+          no longer true and would now be a promise the app refuses to keep. */}
       {signedOut !== null && (
         <Modal
           title={SIGN_OUT_TITLE[signedOut.reason]}
@@ -948,7 +969,8 @@ export default function App() {
         >
           <p className="mb-3 text-xs text-ink-soft">
             {signOutMessage(signedOut.name, signedOut.reason, settings.idleLogoutMinutes)}{" "}
-            Sign back in so your changes are attributed to you — until then they are recorded as unsigned.
+            Sign back in to make changes — until then the board can be read but not edited, so
+            nothing lands in the record without a name on it.
           </p>
           <Field label="Sign in as">
             <select
@@ -969,7 +991,7 @@ export default function App() {
           </Field>
           <div className="mt-3 flex justify-end">
             <Button variant="ghost" onClick={() => setSignedOut(null)}>
-              Continue unsigned
+              Keep reading
             </Button>
           </div>
         </Modal>

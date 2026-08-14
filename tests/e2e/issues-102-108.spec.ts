@@ -154,7 +154,7 @@ test("#104: filters survive a view switch and reset on sign-out", async ({ page 
   await page.getByRole("button", { name: "Sign out" }).click();
   // Dismiss the sign-in prompt (#108) — it is modal and would swallow the nav
   // clicks below.
-  await page.getByRole("button", { name: "Continue unsigned" }).click();
+  await page.getByRole("button", { name: "Keep reading" }).click();
   await expect(page.getByLabel("Show archived")).not.toBeChecked();
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await expect(page.getByLabel("Filter needs embedding by project")).toHaveValue("all");
@@ -307,7 +307,6 @@ test("#102: imaging tiles carry the description and the agents", async ({ page }
   const staining = column(page, "Staining / IHC");
   await expect(staining.getByText(agentName).first()).toBeVisible({ timeout: 15000 });
   await staining.getByText(agentName).first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }

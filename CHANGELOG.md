@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.14.0 - unreleased
+
+No schema change — the two new settings are rows in `app_settings`, which every
+build since 0.8 already ignores what it does not recognise, so a 0.13 viewer
+opens a 0.14 database unchanged.
+
+The eight issues raised against 0.13.x, four of which are feedback on the 0.13
+work itself.
+
+- **Nobody signed in now means nobody writes (#128).** An unsigned session could
+  section blocks, consume extras, request stains, record images and mark work
+  analyzed — and every one of those landed in the record attributed to nobody at
+  all. The app signs itself out at launch, so this was not an edge case, it was
+  the state every session started in. An unsigned session now has a viewer's
+  privileges: the board reads normally and nothing can be changed until you say
+  who you are. The gate sits at the one place every write passes through, so the
+  three surfaces that call the data layer directly are covered too. Signing in
+  is, of course, still possible while signed out.
+- **The protocol checklist has no Operator box (#127).** It was a second,
+  editable identity sitting beside the real one — typeable over, able to go
+  stale, and the only thing standing between an unsigned session and a completed
+  protocol step. Steps are now recorded under the signed-in user, the checkboxes
+  grey out when there isn't one, and the message says "Sign in before making
+  modifications" rather than sending you to a workstation you are sitting at.
+- **Rack capacity is configurable (#123).** A rack holds 24 slides; the app
+  cheerfully piled forty into one, so what the board showed and what a technician
+  could pick up and carry were different things. Separate ceilings for staining
+  and IHC, in Settings. A full rack is left alone and the next slide opens a
+  fresh one.
+- **Racks can be split and merged (#124).** Tick some slides and split them into
+  a new rack; select several racks and pour them into one. Merging refuses racks
+  that are for different agents or that have already been through the reagents —
+  that last one is how a rack ends up holding stained and unstained glass
+  together, which is the bug #81 was about, arriving by a different door. An
+  emptied rack is retired, not deleted.
+- **A whole selection can be reassigned at once (#126).** The tick list that was
+  already there for removal now also moves slides to another agent, or back to
+  extras, as one action and one undo.
+- **A stain requested for a block that is already queued for cutting joins that
+  cut (#125).** It used to ask for a second cut, so a block whose plan read "H&E,
+  extra, extra" and had not been cut yet came back demanding another trip to the
+  microtome the moment somebody added PAS. Nobody sections twice for that. A
+  fresh cut is now prompted only when the block is not already queued AND no cut
+  extra is free.
+- **The stained/coverslipped checkboxes moved to the top of the rack panel
+  (#122).** Below fifty slides, the two boxes a technician actually ticks were a
+  long scroll away from the work.
+- **Refiling a slide onto another block is gone from the Logs (#121).** It should
+  not happen, and if it does it can be corrected by hand — a one-click path to
+  rewriting which block a slide came from does not belong in the everyday log
+  view.
+
 ## 0.13.3 - unreleased
 
 No schema change. A third stress harness — **the explorer** — which does the one

@@ -739,8 +739,23 @@ function makeApi(db) {
                  OR sl.stage_coverslipped_at IS NOT NULL
                  OR sl.stage_dried_at IS NOT NULL)
           )
+          -- …and it is not FULL (#123). A rack holds a fixed number of slides;
+          -- read from app_settings so the harness uses the lab's number, not a
+          -- copy of it. Removed slides free their place.
+          AND (
+            SELECT COUNT(*) FROM slides sl
+             WHERE sl.stack_id = slide_stacks.id AND sl.current_stage <> 'removed'
+          ) < ?
         ORDER BY id ASC LIMIT 1`,
-      [assayType, assayName]);
+      [assayType, assayName, rackCapacity(assayType)]);
+  }
+
+  /** Port of rackCapacity() — src/lib/settings.ts. */
+  function rackCapacity(assayType) {
+    const key = assayType === "ihc" ? "max_ihc_rack_slides" : "max_stain_rack_slides";
+    const row = get(`SELECT value FROM app_settings WHERE key = ?`, [key]);
+    const parsed = Number(row?.value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 24;
   }
 
   // Load a section's stain slides into their agents' cross-sample racks.
@@ -837,6 +852,74 @@ function makeApi(db) {
         [label.trim(), note.trim(), ...slideIds]);
   }
 
+  // Port of splitSlidesIntoNewRack() — src/lib/db.ts (#124).
+  function splitSlidesIntoNewRack(slideIds) {
+    if (slideIds.length === 0) throw new Error("Choose the slides to move into a new rack.");
+    const marks = slideIds.map(() => "?").join(", ");
+    const live = all(
+      `SELECT sl.id, sl.stack_id AS stack, sl.assay_type AS type, sl.assay_name AS name
+         FROM slides sl WHERE sl.id IN (${marks}) AND sl.current_stage <> 'removed'`, slideIds);
+    if (live.length === 0) throw new Error("Every one of those slides has been removed.");
+    const sources = [...new Set(live.map((r) => r.stack))];
+    if (sources.length > 1 || sources[0] == null) {
+      throw new Error("Split one rack at a time.");
+    }
+    if ([...new Set(live.map((r) => `${r.type}:${r.name}`))].length > 1) {
+      throw new Error("Those slides carry different agents.");
+    }
+    const held = get(
+      `SELECT COUNT(*) AS n FROM slides WHERE stack_id = ? AND current_stage <> 'removed'`,
+      [sources[0]]).n;
+    if (held <= live.length) throw new Error("That is the whole rack.");
+    if (live.length > rackCapacity(live[0].type)) throw new Error("Too many for one rack.");
+
+    // A NEW rack, not the open one — otherwise this merges instead of splitting.
+    const created = Number(run(
+      `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+       VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+      [live[0].type, live[0].name, now()]).lastInsertRowid);
+    const ids = live.map((r) => r.id);
+    run(`UPDATE slides SET stack_id = ? WHERE id IN (${ids.map(() => "?").join(", ")})`,
+        [created, ...ids]);
+    closeSlideStackIfEmpty(sources[0]);
+    return created;
+  }
+
+  // Port of mergeSlideStacks() — src/lib/db.ts (#124).
+  function mergeSlideStacks(stackIds) {
+    const unique = [...new Set(stackIds)];
+    if (unique.length < 2) throw new Error("Choose at least two racks to merge.");
+    const marks = unique.map(() => "?").join(", ");
+    const racks = all(
+      `SELECT ss.id, ss.kind, ss.assay_type AS type, ss.assay_name AS name,
+              ss.current_stage AS stage, ss.closed_at AS closed,
+              (SELECT COUNT(*) FROM slides sl
+                WHERE sl.stack_id = ss.id AND sl.current_stage <> 'removed') AS held,
+              (SELECT COUNT(*) FROM slides sl
+                WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
+                  AND (sl.stage_stained_at IS NOT NULL OR sl.stage_refrax_at IS NOT NULL
+                    OR sl.stage_coverslipped_at IS NOT NULL OR sl.stage_dried_at IS NOT NULL)) AS worked
+         FROM slide_stacks ss WHERE ss.id IN (${marks}) ORDER BY ss.id`, unique);
+    if (racks.length < 2) throw new Error("Those racks no longer exist.");
+    if (racks.some((r) => r.closed != null)) throw new Error("One of those racks has been retired.");
+    if (racks.some((r) => r.kind !== "stain")) throw new Error("Only staining racks merge.");
+    if ([...new Set(racks.map((r) => `${r.type}:${r.name}`))].length > 1) {
+      throw new Error("Those racks are for different agents.");
+    }
+    if (racks.some((r) => r.worked > 0 || r.stage !== "stain_requested")) {
+      throw new Error("One of those racks has already been through the reagents.");
+    }
+    const total = racks.reduce((sum, r) => sum + r.held, 0);
+    if (total > rackCapacity(racks[0].type)) throw new Error(`That would make a rack of ${total}.`);
+
+    const target = racks[0].id;
+    const sources = racks.slice(1).map((r) => r.id);
+    const sourceMarks = sources.map(() => "?").join(", ");
+    run(`UPDATE slides SET stack_id = ? WHERE stack_id IN (${sourceMarks})`, [target, ...sources]);
+    for (const source of sources) closeSlideStackIfEmpty(source);
+    return target;
+  }
+
   // Port of revertSectionToStage() — src/lib/db.ts. Dragging a cut group back to
   // Needs Sectioning clears stage_cut_at on its slides, so it has to be refused
   // once any of that glass has actually been worked on: otherwise the slide
@@ -902,6 +985,18 @@ function makeApi(db) {
                 stage_stain_requested_at = COALESCE(stage_stain_requested_at, ?)
           WHERE id = ?`, [rack.id, assayType, assayName, assayName, now(), extra.id]);
       return { target: "extra", slideId: extra.id, stackId: rack.id, createdStackId };
+    }
+    // The block may already be queued for the microtome (#125): put the agent on
+    // the cut it is waiting for rather than asking for a second one. Only
+    // needs_sectioning — a group past the queue has been cut, and its glass
+    // exists.
+    const pending = get(
+      `SELECT id FROM section_requests
+        WHERE sample_id = ? AND current_stage = 'needs_sectioning' ORDER BY id LIMIT 1`,
+      [sampleId]);
+    if (pending) {
+      const slideId = addSlideToSection(pending.id, { assayType, assayName });
+      return { target: "cut", slideId, stackId: null, createdStackId: null, sectionId: pending.id };
     }
     // An exhausted block cannot be cut again, so a request with no free extra to
     // fulfil it would flag the block forever — refuse it (#70).
@@ -1169,12 +1264,13 @@ function makeApi(db) {
       [sectionId]).next) ?? 1;
     const ts = now();
     const alreadyCut = Boolean(section.cut);
+    let newSlideId = 0;
     if (target && target.extra) {
-      run(
+      newSlideId = Number(run(
         `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose,
            assignment_saved, current_stage, stage_cut_at)
          VALUES (?, ?, ?, 'extra', 1, 'extra', ?)`,
-        [sectionId, ordinal, code, alreadyCut ? ts : null]);
+        [sectionId, ordinal, code, alreadyCut ? ts : null]).lastInsertRowid);
     } else {
       let stackId = null;
       if (alreadyCut) {
@@ -1186,7 +1282,7 @@ function makeApi(db) {
                VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
               [target.assayType, target.assayName, ts]).lastInsertRowid);
       }
-      run(
+      newSlideId = Number(run(
         `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
            assay_type, assay_name, requested_assay_type, requested_assay_name,
            assignment_saved, slice_count, control_agent, current_stage, stack_id,
@@ -1194,9 +1290,10 @@ function makeApi(db) {
          VALUES (?, ?, ?, 'stain', ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, ?, ?, ?)`,
         [sectionId, ordinal, code, target.assayName, target.assayType, target.assayName,
          target.assayType, target.assayName, alreadyCut ? "stain_requested" : "assigned",
-         stackId, alreadyCut ? ts : null, alreadyCut ? ts : null]);
+         stackId, alreadyCut ? ts : null, alreadyCut ? ts : null]).lastInsertRowid);
     }
     recordSlidesIssued(section.sample, letter);
+    return newSlideId;
   }
 
   return {
@@ -1207,7 +1304,8 @@ function makeApi(db) {
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     completeStackImaging, relabelSlideToSample, addSlideToSection,
     closeEmptyOpenStacks, closeSlideStack,
-    revertSectionToStage, setSlidesDepthTag,
+    revertSectionToStage, setSlidesDepthTag, openStainRack, rackCapacity,
+    splitSlidesIntoNewRack, mergeSlideStacks,
     tickSectionStainedCheckbox,
     removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
@@ -1971,12 +2069,22 @@ issue(62, "requesting the same/already-cut agent queues another outstanding slid
   eq(JSON.parse(pendingFlag(api, id)).filter((a) => a.assay_name === "H&E").length, 2,
     "two outstanding H&E slides queued (was deduped to one before)");
   // Cut ONE H&E → one outstanding remains; the other still flags.
-  api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  const [first] = api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
   eq(JSON.parse(pendingFlag(api, id)).filter((a) => a.assay_name === "H&E").length, 1,
     "cutting one H&E trims one outstanding request");
   // Cut the last H&E → flag clears. Then re-request H&E (no extras): re-flags.
-  api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  const [second] = api.createSectionRequests(id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
   eq(pendingFlag(api, id), "", "cutting the last H&E clears the flag");
+
+  // Actually take the sections. Until now this gate said "already-produced"
+  // while both groups were still sitting in the queue — planned, not cut (#95) —
+  // and #125 is the first code to ask that question and take the answer
+  // seriously: a block still queued for the microtome gets the new agent added
+  // to that cut instead of being flagged for another one. So produce the glass,
+  // and the assertion below tests what it always claimed to.
+  api.startAssayWork(first);
+  api.startAssayWork(second);
+
   eq(api.requestStainForSample(id, "stain", "H&E").target, "block", "re-request with no extra flags the block");
   assert(JSON.parse(pendingFlag(api, id)).some((a) => a.assay_name === "H&E"),
     "re-requesting an already-produced agent flags the block again (#41/#62)");
@@ -1996,12 +2104,19 @@ issue(62, "stain-request reconciliation trims produced agents once (data transla
   api.markEmbedded(id);
   // Simulate OLD-model data: an H&E slide was cut, but preselected still lists BOTH
   // (old builds never trimmed). Insert the produced slide WITHOUT trimming.
+  // Past the queue WITH a cut stamp, because that is what "an H&E slide was cut"
+  // means (#95). The fixture used to leave the group in needs_sectioning while
+  // claiming the slide existed — an internally contradictory state that only
+  // stopped mattering by luck, and #125 (which asks whether a cut is still
+  // pending) is the first code to read it and take it at its word.
   const sr = Number(api.run(
-    `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
-     VALUES (?, 1, 'H&E', 'needs_sectioning', ?)`, [id, "2026-01-01 08:00"]).lastInsertRowid);
+    `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at, stage_stain_requested_at)
+     VALUES (?, 1, 'H&E', 'stain_requested', ?, ?)`,
+    [id, "2026-01-01 08:00", "2026-01-01 09:00"]).lastInsertRowid);
   api.run(
-    `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage)
-     VALUES (?, 1, 'EE-0001-A', 'stain', 'stain', 'H&E', 1, 2, 'IgG', 'assigned')`, [sr]);
+    `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assay_type, assay_name, assignment_saved, slice_count, control_agent, current_stage, stage_cut_at)
+     VALUES (?, 1, 'EE-0001-A', 'stain', 'stain', 'H&E', 1, 2, 'IgG', 'assigned', ?)`,
+    [sr, "2026-01-01 09:00"]);
   api.run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`,
     [JSON.stringify([{ assay_type: "stain", assay_name: "H&E" }, { assay_type: "stain", assay_name: "Safranin O" }]), id]);
   eq(JSON.parse(api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [id]).preselected_stains).length, 2,
@@ -3630,6 +3745,224 @@ invariant("a removed slide cannot be given a depth tag", () => {
      "the removed slide keeps no depth it was never cut to");
   eq(api.get(`SELECT depth_label AS d FROM slides WHERE id = ?`, [slides[1].id]).d, "surface",
      "and the live slide beside it is tagged as asked");
+});
+
+
+issue(125, "a stain requested for a block already queued for cutting joins that cut", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "one stain planned, plan sent");
+  api.markEmbedded(id);
+  // The plan the issue describes: stain Y, extra, extra — sent, not yet cut.
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    { duplicates: 2, stains: "" },
+  ]);
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s,
+     "needs_sectioning", "the cut is queued and has not happened yet");
+  const before = api.get(
+    `SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`, [section]).c;
+
+  const result = api.requestStainForSample(id, "stain", "PAS");
+
+  eq(result.target, "cut", "the request joins the waiting cut instead of raising a second one");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`, [section]).c,
+     before + 1, "one more slide comes off the same ribbon");
+  eq(api.get(`SELECT preselected_stains AS s FROM samples WHERE id = ?`, [id]).s, "",
+     "and the block is NOT flagged for a fresh cut — that was the whole complaint");
+  eq(api.get(`SELECT stage_cut_at AS c FROM slides WHERE id = ?`, [result.slideId]).c, null,
+     "the new slide is planned, not cut: the blade has not touched the block yet (#95)");
+});
+
+invariant("a stain request still flags a block that is NOT queued for cutting", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "nothing pending");
+  api.markEmbedded(id);
+
+  // The guard must not swallow the case it was never meant to touch: no cut
+  // waiting and no free extra still means somebody has to go to the microtome.
+  const result = api.requestStainForSample(id, "stain", "PAS");
+  eq(result.target, "block", "the block is flagged for a fresh cut");
+  assert(api.get(`SELECT preselected_stains AS s FROM samples WHERE id = ?`, [id]).s.includes("PAS"),
+     "and the outstanding request records which agent is wanted");
+});
+
+invariant("a cut that has already happened is not given new agents", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "already cut");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(section); // leaves the queue — the glass now exists
+
+  // Past the queue the sections are real, so a new agent cannot be added to
+  // them: it would claim a section nobody took. With no extra free either, the
+  // block is flagged for a genuine second cut.
+  const result = api.requestStainForSample(id, "stain", "PAS");
+  eq(result.target, "block", "a fresh cut is required, as before #125");
+});
+
+
+issue(123, "a full staining rack is left alone and the next slide starts a fresh one", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  // A rack of three, so the ceiling is reached without cutting two dozen blocks.
+  api.run(`INSERT INTO app_settings (key, value) VALUES ('max_stain_rack_slides', '3')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+  eq(api.rackCapacity("stain"), 3, "the harness reads the lab's number, not a copy of it");
+
+  const racks = new Set();
+  for (let i = 0; i < 5; i += 1) {
+    const { id } = api.addSample(p, "EE", `block ${i + 1}`);
+    api.markEmbedded(id);
+    const [section] = api.createSectionRequests(id, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    api.startAssayWork(section);
+    racks.add(api.get(
+      `SELECT stack_id AS s FROM slides WHERE section_request_id = ?`, [section]).s);
+  }
+
+  // Five slides, three to a rack — so two racks, not one rack of five.
+  eq(racks.size, 2, "a second rack opens once the first is full");
+  const counts = api.all(
+    `SELECT stack_id AS s, COUNT(*) AS c FROM slides
+      WHERE purpose = 'stain' AND stack_id IS NOT NULL GROUP BY stack_id ORDER BY stack_id`);
+  for (const row of counts) {
+    assert(row.c <= 3, `no rack exceeds the ceiling (rack ${row.s} holds ${row.c})`);
+  }
+});
+
+invariant("a removed slide frees its place in the rack", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  api.run(`INSERT INTO app_settings (key, value) VALUES ('max_stain_rack_slides', '2')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+
+  const sections = [];
+  for (let i = 0; i < 2; i += 1) {
+    const { id } = api.addSample(p, "EE", `block ${i + 1}`);
+    api.markEmbedded(id);
+    const [section] = api.createSectionRequests(id, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    api.startAssayWork(section);
+    sections.push(section);
+  }
+  const rack = api.get(
+    `SELECT stack_id AS s FROM slides WHERE section_request_id = ?`, [sections[0]]).s;
+  eq(api.openStainRack("stain", "H&E"), undefined, "the rack is full, so nothing is open");
+
+  // Break one slide. The glass is gone, so the rack has room again — the record
+  // of the removal stays, but a place in a physical rack is not a record.
+  const doomed = api.get(
+    `SELECT id FROM slides WHERE section_request_id = ?`, [sections[0]]).id;
+  api.removeSlide(doomed, "dropped it");
+
+  eq(api.openStainRack("stain", "H&E").id, rack, "the same rack takes the next slide");
+});
+
+
+// A rack of three H&E slides across three blocks, none of it started.
+function loadedRack(api, count) {
+  const p = api.seedProject();
+  const ids = [];
+  for (let i = 0; i < count; i += 1) {
+    const { id } = api.addSample(p, "EE", `block ${i + 1}`);
+    api.markEmbedded(id);
+    const [section] = api.createSectionRequests(id, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    api.startAssayWork(section);
+    ids.push(api.get(`SELECT id, stack_id AS stack FROM slides WHERE section_request_id = ?`,
+                     [section]));
+  }
+  return { project: p, slides: ids, rack: ids[0].stack };
+}
+
+issue(124, "slides can be split out of a rack into a new one", () => {
+  const api = makeApi(freshDb());
+  const { slides, rack } = loadedRack(api, 3);
+  eq([...new Set(slides.map((s) => s.stack))].length, 1, "all three start in one rack");
+
+  const created = api.splitSlidesIntoNewRack([slides[0].id, slides[1].id]);
+
+  assert(created !== rack, "the two moved slides are in a genuinely new rack");
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [slides[0].id]).s, created, "first moved");
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [slides[1].id]).s, created, "second moved");
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [slides[2].id]).s, rack,
+     "the third stays where it was");
+  eq(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [rack]).c, null,
+     "the original rack still holds glass, so it stays open");
+});
+
+invariant("splitting off a whole rack is refused", () => {
+  const api = makeApi(freshDb());
+  const { slides } = loadedRack(api, 2);
+
+  // Moving everything creates an identical rack and retires the old one — a
+  // no-op that silently changes the id the board is pointing at.
+  let refused = false;
+  try {
+    api.splitSlidesIntoNewRack(slides.map((s) => s.id));
+  } catch {
+    refused = true;
+  }
+  assert(refused, "the whole rack cannot be split off itself");
+});
+
+issue(124, "two unstarted racks for the same agent merge into one", () => {
+  const api = makeApi(freshDb());
+  const { slides, rack } = loadedRack(api, 3);
+  const second = api.splitSlidesIntoNewRack([slides[0].id]);
+
+  const merged = api.mergeSlideStacks([rack, second]);
+
+  eq(merged, rack, "the older rack keeps its identity");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE stack_id = ?`, [rack]).c, 3,
+     "every slide is back in one rack");
+  assert(api.get(`SELECT closed_at AS c FROM slide_stacks WHERE id = ?`, [second]).c != null,
+     "the emptied rack is retired, not deleted — the row survives (#83)");
+  assert(api.get(`SELECT id FROM slide_stacks WHERE id = ?`, [second]) != null,
+     "and it is still there to be read");
+});
+
+invariant("a rack that has been through the reagents is never merged", () => {
+  const api = makeApi(freshDb());
+  const { slides, rack } = loadedRack(api, 3);
+  const second = api.splitSlidesIntoNewRack([slides[0].id]);
+  api.run(`UPDATE slides SET stage_stained_at = ? WHERE id = ?`, [now(), slides[0].id]);
+
+  // This is #81 arriving by a different door: pouring unstained glass into a
+  // batch that has already been stained.
+  let refused = false;
+  try {
+    api.mergeSlideStacks([rack, second]);
+  } catch {
+    refused = true;
+  }
+  assert(refused, "merging a started rack is refused");
+  eq(api.get(`SELECT stack_id AS s FROM slides WHERE id = ?`, [slides[0].id]).s, second,
+     "and the stained slide stays where it is");
+});
+
+invariant("a merge that would overflow the rack is refused", () => {
+  const api = makeApi(freshDb());
+  const { slides, rack } = loadedRack(api, 3);
+  const second = api.splitSlidesIntoNewRack([slides[0].id]);
+  api.run(`INSERT INTO app_settings (key, value) VALUES ('max_stain_rack_slides', '2')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+
+  let refused = false;
+  try {
+    api.mergeSlideStacks([rack, second]);
+  } catch {
+    refused = true;
+  }
+  assert(refused, "three slides do not go into a rack of two (#123)");
 });
 
 // ---------------------------------------------------------------------------

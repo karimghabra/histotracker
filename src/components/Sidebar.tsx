@@ -2,7 +2,7 @@ import { History, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, S
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { APP_VERSION } from "../lib/version";
 
 export type AppView = "board" | "logs" | "manifest";
@@ -32,6 +32,7 @@ export function Sidebar({
     () => window.localStorage.getItem("histometer-sidebar-collapsed") === "true",
   );
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   function toggleCollapsed() {
     setCollapsed((current) => {
       window.localStorage.setItem("histometer-sidebar-collapsed", String(!current));
@@ -80,7 +81,7 @@ export function Sidebar({
           // A viewer cannot create a project; the dialog's Save was rejected
           // downstream with no feedback (#72).
           disabled={readOnly}
-          title={readOnly ? "Read-only viewer — projects are created on the workstation" : "Add project"}
+          title={readOnly ? readOnlyNotice(reason, "Read-only viewer — projects are created on the workstation") : "Add project"}
           className="rounded-md p-1 text-ink-soft transition hover:bg-brand/10 hover:text-ink"
         >
           <Plus size={16} />

@@ -90,7 +90,6 @@ const col = (page: Page, title: string) =>
 async function runProtocolOnLoneRack(page: Page) {
   const staining = col(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }

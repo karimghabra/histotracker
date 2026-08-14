@@ -15,7 +15,7 @@ import {
   STAGE_ORDER,
 } from "../lib/stages";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
 // hold the accurate per-stage stamps) and — before any slides exist — its own
@@ -248,6 +248,7 @@ function NotesEditor({
   // rather than three separate call-site checks, one of which would be missed
   // (#72). Left editable, typing was accepted and silently discarded on blur.
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   // Adopt external changes only while not editing, so a refetch can't clobber typing.
   useEffect(() => {
     if (!focused) setText(value ?? "");
@@ -258,7 +259,7 @@ function NotesEditor({
       value={text}
       rows={rows}
       readOnly={readOnly}
-      title={readOnly ? "Read-only viewer — edited on the workstation" : undefined}
+      title={readOnly ? readOnlyNotice(reason, "Read-only viewer — edited on the workstation") : undefined}
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
       onFocus={() => setFocused(true)}
@@ -305,6 +306,7 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
 export function LogsView() {
   const { tagSlidesDepth } = useActions();
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const [showDepthDialog, setShowDepthDialog] = useState(false);
   const toggleSlideSelect = (id: number) =>
@@ -416,21 +418,6 @@ export function LogsView() {
     [samples, slidesBySample],
   );
 
-  // Candidate blocks for refiling a mislabelled slide. Every live block the
-  // Logs already knows about, minus the one it is filed under — computed once
-  // here rather than per row, and derived from the same data the table draws so
-  // it can never offer a block that is not on screen.
-  const relabelTargets = useMemo(
-    () =>
-      rows
-        .filter((row) => row.sample.current_stage !== "removed")
-        .map((row) => ({
-          id: row.sample.id,
-          code: displayCode(row.sample.sample_code),
-          description: row.sample.sample_description ?? "",
-        })),
-    [rows],
-  );
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -769,9 +756,6 @@ export function LogsView() {
                   onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
                   addableAgents={addableAgents}
-                  relabelTargets={relabelTargets.filter(
-                    (candidate) => candidate.id !== row.sample.id,
-                  )}
                   selectedSlideIds={selectedSlideIds}
                   onToggleSlideSelect={toggleSlideSelect}
                 />
@@ -791,7 +775,9 @@ export function LogsView() {
             {/* A viewer can SEE existing tags but cannot add them (#72) — the
                 write would be rejected and the dialog would hang. */}
             {readOnly ? (
-              <span className="text-[11px] text-ink-faint">Read-only viewer — tagging is done on the workstation</span>
+              <span className="text-[11px] text-ink-faint">
+                {readOnlyNotice(reason, "Read-only viewer — tagging is done on the workstation")}
+              </span>
             ) : (
               <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
                 <Tag size={13} /> Create Tag
@@ -880,7 +866,6 @@ function FragmentRow({
   onlyMatching,
   colCount,
   addableAgents,
-  relabelTargets,
   selectedSlideIds,
   onToggleSlideSelect,
 }: {
@@ -906,8 +891,6 @@ function FragmentRow({
   colCount: number;
   /** Active agents that can be added straight onto this block (#114). */
   addableAgents: Array<{ assay_type: string; name: string }>;
-  /** The other blocks a mislabelled slide could actually have come from. */
-  relabelTargets: Array<{ id: number; code: string; description: string }>;
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
@@ -917,14 +900,7 @@ function FragmentRow({
     editSampleDescription,
     setArchived,
     requestStainForSamples,
-    relabelSlideToSample,
   } = useActions();
-  // Relabelling is per-slide, so the draft is keyed by slide id — otherwise
-  // opening a second row inherits the first one's half-typed reason.
-  const [relabelFor, setRelabelFor] = useState<number | null>(null);
-  const [relabelTo, setRelabelTo] = useState("");
-  const [relabelWhy, setRelabelWhy] = useState("");
-  const [relabelFlash, setRelabelFlash] = useState<string | null>(null);
   const [stainToAdd, setStainToAdd] = useState("");
   const [addFlash, setAddFlash] = useState<string | null>(null);
   const readOnly = useReadOnly();
@@ -1092,7 +1068,7 @@ function FragmentRow({
                     onClick={async () => {
                       const [assayType, assayName] = stainToAdd.split("::");
                       try {
-                        const { pulled, failed } = await requestStainForSamples(
+                        const { pulled, joined, failed } = await requestStainForSamples(
                           [sample.id],
                           assayType as "stain" | "ihc",
                           assayName,
@@ -1103,7 +1079,9 @@ function FragmentRow({
                             ? failed[0].message
                             : pulled.length
                               ? `${assayName} pulled from an extra → now in Staining`
-                              : `${assayName} added — the block needs a cut`,
+                              : joined.length
+                                ? `${assayName} added to the cut already waiting`
+                                : `${assayName} added — the block needs a cut`,
                         );
                       } catch (error) {
                         setAddFlash(error instanceof Error ? error.message : String(error));
@@ -1286,94 +1264,13 @@ function FragmentRow({
                             placeholder="Notes about this slide…"
                             onSave={(notes) => void editSlideNotes(slide.id, notes)}
                           />
-                          {/* Mislabelling is the one correction the app could
-                              not make: a slide reaches its block only through
-                              its cut group, so glass cut from one block and
-                              written up as another could only be removed and
-                              re-cut — throwing away the fact that it exists.
-                              The Logs is the right home for it because this is
-                              the one place every slide is visible at every
-                              stage, including after its rack has retired. */}
-                          {!readOnly && !removed && relabelTargets.length > 0 && (
-                            <div className="rounded-md border border-line bg-surface px-2 py-1.5">
-                              {relabelFor === slide.id ? (
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <select
-                                    aria-label={`Move ${displayCode(slide.slide_code)} to another block`}
-                                    value={relabelTo}
-                                    onChange={(event) => setRelabelTo(event.target.value)}
-                                    className="rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
-                                  >
-                                    <option value="">Which block is it really from…</option>
-                                    {relabelTargets.map((candidate) => (
-                                      <option key={candidate.id} value={candidate.id}>
-                                        {candidate.code}
-                                        {candidate.description ? ` — ${candidate.description}` : ""}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <input
-                                    aria-label={`Why ${displayCode(slide.slide_code)} is being moved`}
-                                    value={relabelWhy}
-                                    onChange={(event) => setRelabelWhy(event.target.value)}
-                                    placeholder="Why — this is the record"
-                                    className="min-w-40 flex-1 rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
-                                  />
-                                  <button
-                                    type="button"
-                                    disabled={!relabelTo || !relabelWhy.trim()}
-                                    onClick={async () => {
-                                      try {
-                                        await relabelSlideToSample(
-                                          slide.id,
-                                          Number(relabelTo),
-                                          relabelWhy,
-                                        );
-                                        setRelabelFlash("Refiled — both blocks record it.");
-                                        setRelabelFor(null);
-                                        setRelabelTo("");
-                                        setRelabelWhy("");
-                                      } catch (error) {
-                                        setRelabelFlash(
-                                          error instanceof Error ? error.message : String(error),
-                                        );
-                                      }
-                                    }}
-                                    className="rounded px-1.5 py-1 text-[11px] font-medium text-brand hover:bg-brand/10 disabled:opacity-40"
-                                  >
-                                    Refile
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRelabelFor(null);
-                                      setRelabelWhy("");
-                                      setRelabelTo("");
-                                    }}
-                                    className="rounded px-1.5 py-1 text-[11px] text-ink-soft hover:bg-black/5"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setRelabelFor(slide.id);
-                                    setRelabelFlash(null);
-                                  }}
-                                  className="text-[11px] font-medium text-ink-soft hover:text-brand"
-                                >
-                                  Wrong block? Refile this slide…
-                                </button>
-                              )}
-                              {relabelFlash && relabelFor !== slide.id && (
-                                <span role="status" className="ml-2 text-[11px] text-brand">
-                                  {relabelFlash}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          {/* #121 removed the "refile onto another block" control that used to
+                              live here. Mislabelled glass is rare enough that the lab would
+                              rather correct it by hand than have a one-click path to rewriting
+                              which block a slide came from sitting in the everyday log view.
+                              `relabelSlideToSample` is deliberately KEPT in db.ts — the
+                              capability, its timeline events and its guards are all still there
+                              and still tested; only the affordance is gone. */}
                         </div>
                       )}
                     </div>

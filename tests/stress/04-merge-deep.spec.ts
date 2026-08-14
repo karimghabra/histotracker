@@ -267,8 +267,6 @@ test("merge: the cut-group checkbox path guards the loading rack too", async ({
   let steppedVia = "none";
   if (usedRackDrawer) {
     await groupCard.click();
-    const op = page.getByLabel("Active operator");
-    if (await op.count()) await op.fill("Alex");
     const step = drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first();
     if (await step.count()) {
       await step.click();

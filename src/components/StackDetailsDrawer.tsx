@@ -8,7 +8,7 @@ import type { SlideStack } from "../lib/types";
 import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { displayCode } from "../lib/utils";
 
 // Drying is no longer tracked (#80). The stage and its column are retained in
@@ -42,11 +42,15 @@ export function StackDetailsDrawer({
     removeSlideStacks,
     removeSlides,
     reassignSlide,
+    reassignSlides,
+    splitSlidesIntoNewRack,
+    mergeSlideStacks,
   } = useActions();
   const { data: slides = [] } = useStackSlides(stack.id);
   const { data: catalog = [] } = useAssayCatalog();
   // A viewer reads the rack and its protocol progress; it cannot drive them (#72).
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const [error, setError] = useState<string | null>(null);
   const [selectingSlides, setSelectingSlides] = useState(false);
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
@@ -72,6 +76,32 @@ export function StackDetailsDrawer({
     [slides],
   );
   const imagedCount = slides.filter((slide) => Boolean(slide.stage_pictures_taken_at)).length;
+
+  // Can the selected racks be poured into one (#124)?
+  //
+  // The data layer is the authority and refuses anything else — this only
+  // decides whether to OFFER the button, and says why when it will not. Same
+  // agent, and none of them started: merging a rack that has been through the
+  // reagents with one that has not is how a rack ends up holding glass at two
+  // different points, which is #81 arriving by a different door.
+  const mergeCandidates = activeStacks.filter((candidate) => candidate.kind === "stain");
+  const mergeAgents = [
+    ...new Set(mergeCandidates.map((candidate) => `${candidate.assay_type}:${candidate.assay_name}`)),
+  ];
+  const mergeStarted = mergeCandidates.some(
+    (candidate) => candidate.current_stage !== "stain_requested",
+  );
+  const canMerge =
+    mergeCandidates.length > 1 &&
+    mergeCandidates.length === activeStacks.length &&
+    mergeAgents.length === 1 &&
+    !mergeStarted;
+  const mergeRefusal =
+    mergeAgents.length > 1
+      ? "Those racks are for different agents."
+      : mergeStarted
+        ? "One of those racks has already been through the reagents."
+        : "Only staining and IHC racks can be merged.";
 
   // A stack can hold glass in different states — a late arrival from a second
   // rack, or a slide moved in that was already stained (#115). The stack's own
@@ -140,6 +170,51 @@ export function StackDetailsDrawer({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 thin-scroll">
+        {/* The protocol comes FIRST (#122).
+
+            It used to sit below the slide list, which is fine for a rack of
+            four and useless for a rack of fifty: the two checkboxes a
+            technician ticks at the bench were a long scroll past the glass
+            they refer to. The list is reference; the checkboxes are the
+            work. */}
+        {/* The protocol checkboxes write on every tick, so a viewer must not be
+            offered them — that is the hanging spinner in #72. */}
+        {readOnly && stack.current_stage === "stain_requested" && (
+          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
+            {readOnlyNotice(reason, "Read-only viewer — the stain protocol is run on the workstation.")}
+          </p>
+        )}
+        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("stain") && (
+          <ProtocolChecklist
+            scopeType="slide_stack"
+            scopeId={stack.id}
+            stageKey="stain_workflow_v5"
+            protocolName="Stain workflow"
+            // Drying is no longer tracked (#80). The stage_key stays at _v5 on
+            // purpose: ensureChecklist REUSES an existing run, so racks already
+            // mid-protocol keep the three steps they started with and finish the
+            // way the technician expects, while every new rack gets two.
+            labels={["Stained", "Coverslipped"]}
+            batchScopeIds={stainStackIds.filter((id) => id !== stack.id)}
+            onStepChange={(sortOrder, complete, scopeIds) =>
+              Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "stain", sortOrder, complete))).then(() => undefined)
+            }
+          />
+        )}
+        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("ihc") && (
+          <ProtocolChecklist
+            scopeType="slide_stack"
+            scopeId={stack.id}
+            stageKey="ihc_workflow_v5"
+            protocolName="IHC workflow"
+            labels={["IHC stained", "Coverslipped"]}
+            batchScopeIds={ihcStackIds.filter((id) => id !== stack.id)}
+            onStepChange={(sortOrder, complete, scopeIds) =>
+              Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "ihc", sortOrder, complete))).then(() => undefined)
+            }
+          />
+        )}
+
         <section className="mb-5">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold uppercase text-ink-faint">Assay slides</h3>
@@ -163,34 +238,125 @@ export function StackDetailsDrawer({
                       : "text-ink-soft hover:bg-black/5 hover:text-ink"
                   }`}
                 >
-                  <ListChecks size={13} /> {selectingSlides ? "Cancel" : "Remove slides"}
+                  <ListChecks size={13} /> {selectingSlides ? "Cancel" : "Select slides"}
                 </button>
               )}
             </div>
           </div>
           {/* Say it out loud when the rack holds glass at different points. This
               happens legitimately — a slide moved in from another agent brings
-              its staining with it (#115) — but the rack's own protocol below
-              reports a single state, so without this the two simply disagree
-              and the reader has to guess which is true. */}
+              its staining with it (#115) — but the rack's own protocol reports a
+              single state, so without this the two simply disagree and the
+              reader has to guess which is true. ("above", not "below", since
+              #122 moved the checklist to the top of the panel.) */}
           {mixedStaining && (
             <p className="mb-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
               {stainedCount} of {liveSlides.length} slides here were already stained — the protocol
-              below tracks this rack, not those slides. Their own dates are shown beside them.
+              above tracks this rack, not those slides. Their own dates are shown beside them.
             </p>
           )}
           {!readOnly && selectingSlides && (
-            <Button
-              variant="subtle"
-              className="mb-2 w-full justify-center text-red-600"
-              disabled={selectedSlideIds.size === 0}
-              onClick={() => setRemoving("slides")}
-            >
-              <Trash2 size={14} />
-              {selectedSlideIds.size > 0
-                ? `Remove ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"}`
-                : "Tick the slides to remove"}
-            </Button>
+            <div className="mb-2 space-y-1.5">
+              {/* One selection, two things to do with it (#126).
+                  
+                  Reassigning was per-slide only, which is fine for the one slide
+                  that went on the wrong agent and miserable for the twelve that
+                  did — twelve dropdowns, twelve waits, and no way to tell part
+                  way through which ones you had already done. The checkboxes
+                  were already here for removal; this just lets the same tick
+                  list drive the move. */}
+              <select
+                aria-label="Reassign the selected slides"
+                value=""
+                disabled={selectedSlideIds.size === 0}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (!next) return;
+                  event.target.value = "";
+                  const ids = [...selectedSlideIds];
+                  const target =
+                    next === "extra"
+                      ? ({ extra: true } as const)
+                      : (() => {
+                          const [assayType, ...nameParts] = next.split(":");
+                          return {
+                            assayType: assayType as "stain" | "ihc",
+                            assayName: nameParts.join(":"),
+                          };
+                        })();
+                  void run(async () => {
+                    await reassignSlides(ids, target);
+                    setSelectedSlideIds(new Set());
+                    setSelectingSlides(false);
+                  });
+                }}
+                className="w-full rounded-md border border-line bg-panel px-2 py-1.5 text-xs text-ink outline-none focus:border-brand disabled:opacity-50"
+              >
+                <option value="">
+                  {selectedSlideIds.size > 0
+                    ? `Move ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"} to…`
+                    : "Tick slides to move or remove"}
+                </option>
+                <option value="extra">Back to extras</option>
+                <optgroup label="Stains">
+                  {catalog
+                    .filter((entry) => entry.assay_type === "stain")
+                    .map((entry) => (
+                      <option key={`bulk-stain-${entry.name}`} value={`stain:${entry.name}`}>
+                        {entry.name}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="IHC">
+                  {catalog
+                    .filter((entry) => entry.assay_type === "ihc")
+                    .map((entry) => (
+                      <option key={`bulk-ihc-${entry.name}`} value={`ihc:${entry.name}`}>
+                        {entry.name}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+              {/* Split (#124). A rack is a physical holder, and half of one
+                  often needs to go through now while the rest waits. Doing that
+                  by reassigning each slide to another agent and back was the
+                  only route before, and it wrote a lie about the agent on every
+                  slide it touched. */}
+              <Button
+                variant="subtle"
+                className="w-full justify-center"
+                disabled={selectedSlideIds.size === 0 || selectedSlideIds.size >= liveSlides.length}
+                title={
+                  selectedSlideIds.size >= liveSlides.length && liveSlides.length > 0
+                    ? "That is the whole rack — leave at least one slide behind."
+                    : undefined
+                }
+                onClick={() => {
+                  const ids = [...selectedSlideIds];
+                  void run(async () => {
+                    await splitSlidesIntoNewRack(ids);
+                    setSelectedSlideIds(new Set());
+                    setSelectingSlides(false);
+                  });
+                }}
+              >
+                <Layers size={14} />
+                {selectedSlideIds.size > 0
+                  ? `Split ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"} into a new rack`
+                  : "Tick the slides to split off"}
+              </Button>
+              <Button
+                variant="subtle"
+                className="w-full justify-center text-red-600"
+                disabled={selectedSlideIds.size === 0}
+                onClick={() => setRemoving("slides")}
+              >
+                <Trash2 size={14} />
+                {selectedSlideIds.size > 0
+                  ? `Remove ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"}`
+                  : "Tick the slides to remove"}
+              </Button>
+            </div>
           )}
           <div className="space-y-1.5">
             {slides.map((slide) => {
@@ -296,44 +462,6 @@ export function StackDetailsDrawer({
           )}
         </section>
 
-        {/* The protocol checkboxes write on every tick, so a viewer must not be
-            offered them — that is the hanging spinner in #72. */}
-        {readOnly && stack.current_stage === "stain_requested" && (
-          <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-            Read-only viewer — the stain protocol is run on the workstation.
-          </p>
-        )}
-        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("stain") && (
-          <ProtocolChecklist
-            scopeType="slide_stack"
-            scopeId={stack.id}
-            stageKey="stain_workflow_v5"
-            protocolName="Stain workflow"
-            // Drying is no longer tracked (#80). The stage_key stays at _v5 on
-            // purpose: ensureChecklist REUSES an existing run, so racks already
-            // mid-protocol keep the three steps they started with and finish the
-            // way the technician expects, while every new rack gets two.
-            labels={["Stained", "Coverslipped"]}
-            batchScopeIds={stainStackIds.filter((id) => id !== stack.id)}
-            onStepChange={(sortOrder, complete, scopeIds) =>
-              Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "stain", sortOrder, complete))).then(() => undefined)
-            }
-          />
-        )}
-        {!readOnly && stack.current_stage === "stain_requested" && assayTypes.includes("ihc") && (
-          <ProtocolChecklist
-            scopeType="slide_stack"
-            scopeId={stack.id}
-            stageKey="ihc_workflow_v5"
-            protocolName="IHC workflow"
-            labels={["IHC stained", "Coverslipped"]}
-            batchScopeIds={ihcStackIds.filter((id) => id !== stack.id)}
-            onStepChange={(sortOrder, complete, scopeIds) =>
-              Promise.all(scopeIds.map((id) => syncAssayStackWorkflowStep(id, "ihc", sortOrder, complete))).then(() => undefined)
-            }
-          />
-        )}
-
         <h3 className="mb-2 text-xs font-semibold uppercase text-ink-faint">Stack timeline</h3>
         <ol className="space-y-1">
           {SECTION_STAGES.filter((stage) => STACK_TIMELINE_KEYS.has(stage.key)).map((stage) => {
@@ -379,6 +507,15 @@ export function StackDetailsDrawer({
           ) : (
             <Button variant="primary" className="flex-1" onClick={() => void run(() => moveSlideStacks(analysisIds, "analyzed"))}>
               <CheckCircle2 size={15} /> {analysisIds.length > 1 ? `Mark Analyzed (${analysisIds.length})` : "Mark Analyzed"}
+            </Button>
+          )}
+          {activeStacks.length > 1 && (
+            <Button
+              title={canMerge ? "Pour these racks into one" : mergeRefusal}
+              disabled={!canMerge}
+              onClick={() => void run(() => mergeSlideStacks(activeIds))}
+            >
+              <Layers size={15} /> Merge {activeStacks.length}
             </Button>
           )}
           <Button

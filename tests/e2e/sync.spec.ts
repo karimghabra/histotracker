@@ -224,7 +224,6 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   // stack). Each checklist toggle refetches, so wait for the running count to
   // tick before the next click instead of firing all three at once.
   await column(ws, "Staining / IHC").getByText("Alcian Blue").first().click();
-  await ws.getByLabel("Active operator").fill("Alex");
   const steps = ["Stained", "Coverslipped"];
   for (let i = 0; i < steps.length; i += 1) {
     await ws.getByRole("button", { name: steps[i], exact: true }).click();

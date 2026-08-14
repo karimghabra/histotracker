@@ -139,8 +139,6 @@ test("merge: loading racks pool by agent, and stop accepting the moment work sta
   // -- B. start the protocol, then send a third block to the same agent -----
   // #81: a rack that has begun work must never absorb a newcomer.
   expect(await openRack(page, "H&E")).toBe(true);
-  const operator = page.getByLabel("Active operator");
-  if (await operator.count()) await operator.fill("Alex");
   const firstStep = drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first();
   await firstStep.click();
   await page.waitForTimeout(400);
@@ -237,8 +235,6 @@ test("merge: reassigning a slide into an agent that already has a rack", async (
   // -- D. start PAS's protocol, then reassign another slide into PAS --------
   // The #81 guard has to hold for the reassignment route too, not just cutting.
   expect(await openRack(page, "PAS")).toBe(true);
-  const op = page.getByLabel("Active operator");
-  if (await op.count()) await op.fill("Alex");
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(400);
   await closeDrawer(page);
@@ -302,8 +298,6 @@ test("merge: a stained slide moved into a fresh rack, and what that rack accepts
   await cutAndSection(page, "PZ-2", ["stain::PAS", "extra"]);
 
   expect(await openRack(page, "H&E")).toBe(true);
-  const op = page.getByLabel("Active operator");
-  if (await op.count()) await op.fill("Alex");
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(400);
 
@@ -536,8 +530,6 @@ test("merge: what the bench SEES on a rack that mixes worked and unworked glass"
 
   // Stain the H&E slide, then move it into the untouched PAS rack.
   expect(await openRack(page, "H&E")).toBe(true);
-  const op = page.getByLabel("Active operator");
-  if (await op.count()) await op.fill("Alex");
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(400);
   const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
@@ -593,8 +585,6 @@ test("merge: what the bench SEES on a rack that mixes worked and unworked glass"
   const before = rows.find((r) => r.stained);
   const pending = drawer(page).locator("ol li button:not(:has(svg.lucide-check))");
   if ((await pending.count()) > 0) {
-    const op2 = page.getByLabel("Active operator");
-    if (await op2.count()) await op2.fill("Sam");
     await pending.first().click();
     await page.waitForTimeout(600);
     const after = await sql<{ code: string; stained: string | null }>(

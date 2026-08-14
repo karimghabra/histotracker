@@ -29,6 +29,7 @@ import {
   type AppSettings,
   parseSettings,
   plannedExtras,
+  rackCapacity,
   settingsToRows,
 } from "./settings";
 import {
@@ -57,6 +58,55 @@ export function setViewerReadOnly(readOnly: boolean): void {
   viewerReadOnly = readOnly;
 }
 
+/**
+ * When true, every write is rejected because NOBODY IS SIGNED IN (#128).
+ *
+ * An unsigned user had the run of the workstation: sectioning, consuming
+ * extras, requesting stains, recording images, marking blocks analyzed. In a
+ * posterity application that is worse than it sounds — the work still happened,
+ * but the record of who did it says "Unsigned", permanently and unfixably.
+ *
+ * The gate lives HERE rather than in `useActions`, because `useActions` is not
+ * the only way in: the protocol checklist, the cut-group drawer and the rack
+ * drawer all call `db.ts` directly. This is the one place every write passes
+ * through, so a surface that forgets to gate itself is merely ugly, not unsafe —
+ * the same argument the #72 viewer gate is built on.
+ */
+let signedOutReadOnly = false;
+
+export function setSignedOutReadOnly(readOnly: boolean): void {
+  signedOutReadOnly = readOnly;
+}
+
+export const VIEWER_REFUSAL = "This is a read-only viewer — changes are made on the workstation.";
+export const SIGNED_OUT_REFUSAL = "Sign in before making modifications.";
+
+/**
+ * The unwrapped `execute` for each open connection.
+ *
+ * Signing in is itself a write, so the session writes below have to reach past
+ * the signed-out gate or nobody could ever get through it. Keyed per connection
+ * because the file is swapped and reopened at runtime (undo, restore, sync).
+ */
+const rawExecutes = new WeakMap<Database, Database["execute"]>();
+
+/**
+ * Perform a write that manages the SESSION rather than the lab record.
+ *
+ * Exempt from the signed-out gate — adding a user, choosing one, retiring one,
+ * and the audit rows that narrate all three. NOT exempt from the viewer gate: a
+ * viewer is a read-only mirror of somebody else's database, and always was.
+ */
+async function sessionExecute(
+  db: Database,
+  query: string,
+  params: unknown[] = [],
+): Promise<{ rowsAffected: number; lastInsertId?: number }> {
+  if (viewerReadOnly) throw new Error(VIEWER_REFUSAL);
+  const raw = rawExecutes.get(db);
+  return raw ? raw(query, params) : db.execute(query, params);
+}
+
 export async function recordAuditEvent(
   action: string,
   entityType: string,
@@ -64,7 +114,10 @@ export async function recordAuditEvent(
   details = "",
 ): Promise<void> {
   const db = await getDb();
-  await db.execute(
+  // A session write: the audit trail must record a sign-out even though signing
+  // out is the moment the gate closes.
+  await sessionExecute(
+    db,
     `INSERT INTO audit_events (user_id, action, entity_type, summary, details)
      VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
              ?, ?, ?, ?)`,
@@ -74,12 +127,10 @@ export async function recordAuditEvent(
 
 function guardWrites(db: Database): Database {
   const original = db.execute.bind(db);
+  rawExecutes.set(db, original);
   db.execute = ((query: string, bindValues?: unknown[]) => {
-    if (viewerReadOnly) {
-      return Promise.reject(
-        new Error("This is a read-only viewer — changes are made on the workstation."),
-      );
-    }
+    if (viewerReadOnly) return Promise.reject(new Error(VIEWER_REFUSAL));
+    if (signedOutReadOnly) return Promise.reject(new Error(SIGNED_OUT_REFUSAL));
     return original(query, bindValues);
   }) as typeof db.execute;
   return db;
@@ -591,9 +642,12 @@ export async function listUsers(activeOnly = false): Promise<LabUser[]> {
   );
 }
 
+// The three session writes (#128). Each one is how somebody gets THROUGH the
+// signed-out gate, so none of them can be behind it.
 export async function addUser(input: { name: string; initials: string }): Promise<number> {
   const db = await getDb();
-  const res = await db.execute(
+  const res = await sessionExecute(
+    db,
     `INSERT INTO users (name, initials) VALUES (?, ?)`,
     [input.name.trim(), input.initials.trim().toUpperCase()],
   );
@@ -602,9 +656,13 @@ export async function addUser(input: { name: string; initials: string }): Promis
 
 export async function setUserActive(userId: number, isActive: boolean): Promise<void> {
   const db = await getDb();
-  await db.execute(`UPDATE users SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, userId]);
+  await sessionExecute(db, `UPDATE users SET is_active = ? WHERE id = ?`, [
+    isActive ? 1 : 0,
+    userId,
+  ]);
   if (!isActive) {
-    await db.execute(
+    await sessionExecute(
+      db,
       `UPDATE app_settings SET value = '' WHERE key = 'active_user_id' AND value = ?`,
       [String(userId)],
     );
@@ -630,7 +688,8 @@ export async function setActiveUser(userId: number | null): Promise<void> {
     );
     if (!rows.length) throw new Error("That user is no longer active.");
   }
-  await db.execute(
+  await sessionExecute(
+    db,
     `INSERT INTO app_settings (key, value) VALUES ('active_user_id', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [userId === null ? "" : String(userId)],
@@ -2831,8 +2890,22 @@ export async function getOpenStainRack(
                OR sl.stage_coverslipped_at IS NOT NULL
                OR sl.stage_dried_at IS NOT NULL)
         )
+        -- …and it is not already FULL (#123).
+        --
+        -- A rack holds a fixed number of slides — 24 by default, configurable
+        -- because it is a fact about the lab's hardware. Without this the app
+        -- piled every slide waiting for an agent into one rack, so the board
+        -- showed a single rack of forty that nobody could actually carry. A full
+        -- rack is skipped and the next slide opens a fresh one, which is exactly
+        -- what happens at the bench.
+        --
+        -- Removed slides do not count: the glass is gone, so its place is free.
+        AND (
+          SELECT COUNT(*) FROM slides sl
+           WHERE sl.stack_id = slide_stacks.id AND sl.current_stage <> 'removed'
+        ) < ?
       ORDER BY id ASC LIMIT 1`,
-    [assayType, assayName],
+    [assayType, assayName, rackCapacity(await getAppSettings(), assayType)],
   );
   return rows[0] ?? null;
 }
@@ -3556,10 +3629,11 @@ export async function requestStainForSample(input: {
   assayType: "stain" | "ihc";
   assayName: string;
 }): Promise<{
-  target: "extra" | "block";
+  target: "extra" | "cut" | "block";
   slideId: number | null;
   stackId: number | null;
   createdStackId: number | null;
+  sectionId?: number;
 }> {
   const db = await getDb();
   const assayName = input.assayName.trim();
@@ -3610,9 +3684,46 @@ export async function requestStainForSample(input: {
       createdStackId: openRack ? null : stackId,
     };
   }
-  // No free extra: the request would flag the BLOCK for a fresh cut. An
-  // exhausted block has no tissue left to cut, so that flag could never be
-  // satisfied and the block would sit lit up forever — refuse it (issue #70).
+  // No free extra — but the block may already be ON ITS WAY to the microtome
+  // (#125). If a cut group is sitting in Needs Sectioning, the honest answer is
+  // to put this agent on that cut, not to raise a second one.
+  //
+  // The old behaviour flagged the block for a fresh cut, so a block whose plan
+  // read "H&E, extra, extra" and had not been cut yet came back asking to be
+  // cut AGAIN the moment somebody requested PAS — two trips to the block for
+  // work that was always going to happen in one. Nobody sections twice for that;
+  // they add a slide to the ribbon they are about to take.
+  //
+  // Deliberately `needs_sectioning` only. A group that has left the queue has
+  // been cut, and its glass exists — putting a new agent on it would be claiming
+  // a section that was never taken. Those blocks still route to the extras
+  // branch above, or to a genuine new cut below.
+  const pendingCut = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests
+      WHERE sample_id = ? AND current_stage = 'needs_sectioning'
+      ORDER BY id LIMIT 1`,
+    [input.sampleId],
+  );
+  if (pendingCut.length > 0) {
+    // Appended, not inserted among the extras: slide_ordinal is the order the
+    // glass comes off the block, and renumbering the existing slides to make the
+    // list read prettily would rewrite a record of something already planned.
+    const slideId = await addSlideToSection(pendingCut[0].id, {
+      assayType: input.assayType,
+      assayName,
+    });
+    return {
+      target: "cut",
+      slideId,
+      stackId: null,
+      createdStackId: null,
+      sectionId: pendingCut[0].id,
+    };
+  }
+
+  // Nothing free and nothing pending: the request flags the BLOCK for a fresh
+  // cut. An exhausted block has no tissue left to cut, so that flag could never
+  // be satisfied and the block would sit lit up forever — refuse it (issue #70).
   // Note this guards the cut path only: a request that an already-cut extra can
   // fulfil is handled above and stays allowed, because that slide physically
   // exists regardless of the block being spent.
@@ -3823,6 +3934,243 @@ export async function updateSlideAssignment(
       id,
     ],
   );
+}
+
+/**
+ * Split slides out of their rack into a fresh one (#124).
+ *
+ * A rack is a physical thing: two dozen slides that travel together through the
+ * reagents. Sometimes half of them need to go now and half tomorrow, or a rack
+ * turns out to be over capacity after a busy morning. Until now the only way to
+ * divide one was to reassign each slide to another agent and back, which is a
+ * lie about the agent and does not reliably produce two racks anyway.
+ *
+ * Rules, each one a consequence of the rack model:
+ *  · Every slide must come from the SAME rack. Splitting across racks is not a
+ *    split, it is two of them, and doing it in one call would hide which slides
+ *    came from where.
+ *  · Not the whole rack. Moving every slide out retires the old rack and creates
+ *    an identical one — a no-op with extra steps that silently changes the rack
+ *    id the board has been pointing at.
+ *  · One agent. A rack IS an agent plus the glass going through it.
+ *  · The new rack starts empty, so the split cannot exceed capacity (#123) —
+ *    checked anyway, because the ceiling is configurable and somebody will lower
+ *    it below a rack that is already full.
+ *
+ * Work already done is untouched. A stained slide stays stained: it is the same
+ * glass, in a different holder.
+ */
+export async function splitSlidesIntoNewRack(slideIds: number[]): Promise<number> {
+  if (slideIds.length === 0) throw new Error("Choose the slides to move into a new rack.");
+  const db = await getDb();
+  const placeholders = slideIds.map(() => "?").join(", ");
+  const rows = await db.select<
+    Array<{
+      id: number;
+      stack_id: number | null;
+      slide_code: string;
+      assay_type: string;
+      assay_name: string;
+      current_stage: string;
+      sample_id: number;
+    }>
+  >(
+    `SELECT sl.id, sl.stack_id, sl.slide_code, sl.assay_type, sl.assay_name,
+            sl.current_stage, sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.id IN (${placeholders})`,
+    slideIds,
+  );
+  if (rows.length === 0) throw new Error("Those slides no longer exist.");
+
+  const live = rows.filter((row) => row.current_stage !== "removed");
+  if (live.length === 0) throw new Error("Every one of those slides has been removed.");
+
+  const sourceIds = [...new Set(live.map((row) => row.stack_id))];
+  if (sourceIds.length > 1 || sourceIds[0] == null) {
+    throw new Error("Split one rack at a time — those slides are not all in the same rack.");
+  }
+  const sourceId = sourceIds[0];
+
+  const agents = [...new Set(live.map((row) => `${row.assay_type}:${row.assay_name}`))];
+  if (agents.length > 1) {
+    throw new Error("Those slides carry different agents — move them one agent at a time.");
+  }
+
+  const held = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(*) AS n FROM slides WHERE stack_id = ? AND current_stage <> 'removed'`,
+    [sourceId],
+  );
+  if (Number(held[0]?.n ?? 0) <= live.length) {
+    throw new Error("That is the whole rack — there would be nothing left to split from.");
+  }
+
+  const assayType = live[0].assay_type;
+  const assayName = live[0].assay_name;
+  const capacity = rackCapacity(await getAppSettings(), assayType);
+  if (live.length > capacity) {
+    throw new Error(`A ${assayName} rack holds ${capacity} slides; you chose ${live.length}.`);
+  }
+
+  // A NEW rack, deliberately — not getOpenStainRack, which would hand back a
+  // half-full rack for the same agent and quietly merge instead of splitting.
+  const timestamp = nowTimestamp();
+  const created = await db.execute(
+    `INSERT INTO slide_stacks
+      (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+     VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+    [assayType, assayName, timestamp],
+  );
+  if (created.lastInsertId == null) throw new Error("Could not create the new rack.");
+  const newStackId = created.lastInsertId;
+
+  const movedIds = live.map((row) => row.id);
+  await db.execute(
+    `UPDATE slides SET stack_id = ? WHERE id IN (${movedIds.map(() => "?").join(", ")})`,
+    [newStackId, ...movedIds],
+  );
+
+  // One event per block, naming its own slides — a technician reading EE-4's
+  // timeline should not have to read about somebody else's glass.
+  for (const sampleId of new Set(live.map((row) => row.sample_id))) {
+    const codes = live
+      .filter((row) => row.sample_id === sampleId)
+      .map((row) => displayCode(row.slide_code))
+      .join(", ");
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'rack_split', ?, ?, ?)`,
+      [
+        sampleId,
+        `${codes} moved into a new ${assayName} rack`,
+        JSON.stringify({ from_stack: sourceId, to_stack: newStackId, slides: movedIds }),
+        timestamp,
+      ],
+    );
+  }
+
+  await closeSlideStackIfEmpty(sourceId);
+  return newStackId;
+}
+
+/**
+ * Pour several racks into one (#124).
+ *
+ * The inverse of a split and the more dangerous direction, because merging is
+ * how a rack ends up holding glass at two different points in the protocol —
+ * which is exactly what #81 was about. So the rule is strict: only racks that
+ * have not started work can be merged.
+ *
+ * Rules:
+ *  · Same agent, for the same reason a split is single-agent.
+ *  · Nothing started. If any slide in any of them has been stained,
+ *    coverslipped or dried, the racks are at different points, and merging would
+ *    drop unstained glass into a batch that has already been through reagents.
+ *  · The result must fit on the bench (#123).
+ *  · Emptied racks are RETIRED, never deleted — the row stays, closed.
+ */
+export async function mergeSlideStacks(stackIds: number[]): Promise<number> {
+  const unique = [...new Set(stackIds)];
+  if (unique.length < 2) throw new Error("Choose at least two racks to merge.");
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const racks = await db.select<
+    Array<{
+      id: number;
+      kind: string;
+      assay_type: string;
+      assay_name: string;
+      current_stage: string;
+      closed_at: string | null;
+      held: number;
+      worked: number;
+    }>
+  >(
+    `SELECT ss.id, ss.kind, ss.assay_type, ss.assay_name, ss.current_stage, ss.closed_at,
+            (SELECT COUNT(*) FROM slides sl
+              WHERE sl.stack_id = ss.id AND sl.current_stage <> 'removed') AS held,
+            (SELECT COUNT(*) FROM slides sl
+              WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
+                AND (sl.stage_stained_at IS NOT NULL OR sl.stage_refrax_at IS NOT NULL
+                  OR sl.stage_coverslipped_at IS NOT NULL OR sl.stage_dried_at IS NOT NULL)) AS worked
+       FROM slide_stacks ss
+      WHERE ss.id IN (${placeholders})
+      ORDER BY ss.id`,
+    unique,
+  );
+  if (racks.length < 2) throw new Error("Those racks no longer exist.");
+  if (racks.some((rack) => rack.closed_at != null)) {
+    throw new Error("One of those racks has been retired.");
+  }
+  if (racks.some((rack) => rack.kind !== "stain")) {
+    throw new Error("Only staining and IHC racks can be merged.");
+  }
+  const agents = [...new Set(racks.map((rack) => `${rack.assay_type}:${rack.assay_name}`))];
+  if (agents.length > 1) {
+    const names = [...new Set(racks.map((rack) => rack.assay_name))].join(", ");
+    throw new Error(`Those racks are for different agents (${names}).`);
+  }
+  if (racks.some((rack) => rack.worked > 0 || rack.current_stage !== "stain_requested")) {
+    throw new Error(
+      "One of those racks has already been through the reagents — merging it would put " +
+        "unstained glass in with stained.",
+    );
+  }
+
+  const total = racks.reduce((sum, rack) => sum + rack.held, 0);
+  const capacity = rackCapacity(await getAppSettings(), racks[0].assay_type);
+  if (total > capacity) {
+    throw new Error(
+      `That would make a rack of ${total}; a ${racks[0].assay_name} rack holds ${capacity}.`,
+    );
+  }
+
+  // The oldest rack wins, so the merged rack keeps the identity the board has
+  // been showing all along instead of appearing as something new.
+  const target = racks[0].id;
+  const sources = racks.slice(1).map((rack) => rack.id);
+  const sourceMarks = sources.map(() => "?").join(", ");
+  const timestamp = nowTimestamp();
+
+  const moving = await db.select<Array<{ id: number; slide_code: string; sample_id: number }>>(
+    `SELECT sl.id, sl.slide_code, sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.stack_id IN (${sourceMarks}) AND sl.current_stage <> 'removed'`,
+    sources,
+  );
+  await db.execute(`UPDATE slides SET stack_id = ? WHERE stack_id IN (${sourceMarks})`, [
+    target,
+    ...sources,
+  ]);
+
+  for (const sampleId of new Set(moving.map((row) => row.sample_id))) {
+    const codes = moving
+      .filter((row) => row.sample_id === sampleId)
+      .map((row) => displayCode(row.slide_code))
+      .join(", ");
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'rack_merged', ?, ?, ?)`,
+      [
+        sampleId,
+        `${codes} merged into one ${racks[0].assay_name} rack`,
+        JSON.stringify({
+          into_stack: target,
+          from_stacks: sources,
+          slides: moving.map((row) => row.id),
+        }),
+        timestamp,
+      ],
+    );
+  }
+
+  for (const source of sources) await closeSlideStackIfEmpty(source);
+  await reopenSlideStackIfPopulated(target);
+  return target;
 }
 
 /**

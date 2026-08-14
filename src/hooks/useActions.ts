@@ -11,6 +11,8 @@ import {
   removeSlide,
   reassignSlide as reassignSlideDb,
   addSlideToSection as addSlideToSectionDb,
+  splitSlidesIntoNewRack as splitSlidesIntoNewRackDb,
+  mergeSlideStacks as mergeSlideStacksDb,
   relabelSlideToSample as relabelSlideToSampleDb,
   closeSlideStack,
   closeSlideStackIfEmpty,
@@ -58,7 +60,7 @@ import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../li
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
 import { composeDescription, nowTimestamp } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 /**
  * Central mutation layer. Every action performs its DB write, invalidates the
@@ -71,6 +73,7 @@ export function useActions() {
   const qc = useQueryClient();
   const record = useUndoStore((s) => s.record);
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
 
   const invalidate = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["projects"] });
@@ -111,18 +114,18 @@ export function useActions() {
       // Refusing here means a missed surface is merely UGLY (a clear message)
       // rather than mysterious, and the component-level gating above it is now
       // presentation, not the safety mechanism.
-      if (readOnly) {
-        throw new Error(
-          "This instance is a read-only viewer. Changes are made on the workstation.",
-        );
-      }
+      //
+      // Since #128 there are two reasons to be here, and they call for different
+      // words: a viewer is told to use the workstation, an unsigned user is told
+      // to sign in — which is the whole fix, and one click away.
+      if (readOnly) throw new Error(readOnlyMessage(reason));
       const before = await snapshotDb();
       const result = await fn();
       invalidate();
       record({ label, snapshot: before });
       return result;
     },
-    [invalidate, record, readOnly],
+    [invalidate, reason, record, readOnly],
   );
 
   function validateForwardSampleMove(sample: Sample, stageKey: string) {
@@ -508,11 +511,16 @@ export function useActions() {
         async () => {
           const added: number[] = [];
           const pulled: number[] = [];
+          // Blocks whose request joined a cut they were already queued for
+          // (#125) — neither "pulled from stock" nor "needs cutting", and
+          // reporting it as either would be a lie about what happens next.
+          const joined: number[] = [];
           const failed: Array<{ sampleId: number; message: string }> = [];
           for (const sampleId of sampleIds) {
             try {
               const result = await requestStainForSampleDb({ sampleId, assayType, assayName });
               if (result.target === "extra") pulled.push(sampleId);
+              else if (result.target === "cut") joined.push(sampleId);
               else added.push(sampleId);
             } catch (error) {
               failed.push({
@@ -521,7 +529,7 @@ export function useActions() {
               });
             }
           }
-          return { added, pulled, failed };
+          return { added, pulled, joined, failed };
         },
       ),
     [commit],
@@ -573,6 +581,73 @@ export function useActions() {
         "extra" in target ? "Return slide to extras" : `Reassign slide → ${target.assayName}`,
         () => reassignSlideDb(slideId, target),
       ),
+    [commit],
+  );
+
+  /**
+   * Move a whole selection onto another agent, or back to extras (#126).
+   *
+   * ONE undo step for the lot — the snapshot is taken before the first write, so
+   * Ctrl+Z puts every slide back where it was rather than unpicking them one at
+   * a time.
+   *
+   * Failures are collected, not thrown. `reassignSlide` legitimately refuses
+   * individual slides (an uncut one, one that has already been imaged), and a
+   * technician moving twelve slides should not lose the eleven that were fine
+   * because the twelfth was photographed this morning. Same shape as
+   * `requestStainForSamples`, and for the same reason.
+   */
+  const reassignSlides = useCallback(
+    (
+      slideIds: number[],
+      target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
+    ) =>
+      commit(
+        "extra" in target
+          ? `Return ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"} to extras`
+          : `Reassign ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"} → ${target.assayName}`,
+        async () => {
+          const moved: number[] = [];
+          const failed: Array<{ slideId: number; message: string }> = [];
+          for (const slideId of slideIds) {
+            try {
+              await reassignSlideDb(slideId, target);
+              moved.push(slideId);
+            } catch (error) {
+              failed.push({
+                slideId,
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          // Say so if some were refused — silently moving eleven of twelve is
+          // the failure mode that gets noticed a week later.
+          if (failed.length > 0 && moved.length === 0) throw new Error(failed[0].message);
+          if (failed.length > 0) {
+            throw new Error(
+              `Moved ${moved.length}; ${failed.length} refused — ${failed[0].message}`,
+            );
+          }
+          return { moved, failed };
+        },
+      ),
+    [commit],
+  );
+
+  /** Divide a rack in two (#124). */
+  const splitSlidesIntoNewRack = useCallback(
+    (slideIds: number[]) =>
+      commit(
+        `Split ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"} into a new rack`,
+        () => splitSlidesIntoNewRackDb(slideIds),
+      ),
+    [commit],
+  );
+
+  /** Pour several racks into one (#124). */
+  const mergeSlideStacks = useCallback(
+    (stackIds: number[]) =>
+      commit(`Merge ${stackIds.length} racks`, () => mergeSlideStacksDb(stackIds)),
     [commit],
   );
 
@@ -814,6 +889,9 @@ export function useActions() {
     requestStain,
     requestStainForSamples,
     reassignSlide,
+    reassignSlides,
+    splitSlidesIntoNewRack,
+    mergeSlideStacks,
     addSlideToSection,
     relabelSlideToSample,
     withdrawStainRequest,

@@ -97,7 +97,6 @@ async function cutAndSectionIntoStaining(page: Page, code: string, stainIndex = 
 async function runProtocolOnLoneRack(page: Page) {
   const staining = col(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -127,7 +126,6 @@ test("#81: a rack whose Stained box is ticked does not absorb a newly-moved samp
   // Tick ONLY "Stained" — the rack is mid-protocol, not yet coverslipped. This
   // is the state that used to leave it open to newcomers.
   await staining.getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   await page.getByRole("button", { name: "Stained", exact: true }).click();
   await expect(page.getByText(/1\/2 complete/)).toBeVisible();
   await page.locator("button:has(svg.lucide-x)").first().click();
@@ -156,7 +154,6 @@ test("#80: the stain protocol no longer has a drying step", async ({ page }) => 
 
   const staining = col(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
 
   await expect(page.getByRole("button", { name: "Stained", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Coverslipped", exact: true })).toBeVisible();

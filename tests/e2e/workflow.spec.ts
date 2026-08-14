@@ -276,7 +276,6 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   // Run the whole stain protocol (Stained → Coverslipped → Dried). Finishing the
   // last step auto-advances the rack to Ready for Imaging, scattering it into a
   // per-sample imaging stack (which is where the aggregate row loses the stamps).
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -345,7 +344,6 @@ test("Logs status partition + CSV export", async ({ page }) => {
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
   await staining.getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -463,7 +461,6 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
 
   // Run the stain protocol → scatter into Ready for Imaging.
   await col("Staining / IHC").getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   const steps = ["Stained", "Coverslipped"];
   for (let i = 0; i < steps.length; i += 1) {
     await page.getByRole("button", { name: steps[i], exact: true }).click();
@@ -499,7 +496,6 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
 
   // Scatter into Ready for Imaging.
   await col("Staining / IHC").getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }

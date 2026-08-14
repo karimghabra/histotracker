@@ -3,7 +3,7 @@ import { Archive, CheckCircle2, Star, Trash2, X } from "lucide-react";
 import type { Slide } from "../lib/types";
 import { useAssayCatalog } from "../hooks/useData";
 import { useActions } from "../hooks/useActions";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { displayCode } from "../lib/utils";
 import { Button } from "./ui";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
@@ -22,6 +22,7 @@ export function ExtraSlideDetailsDrawer({
   const { data: catalog = [] } = useAssayCatalog();
   const { assignExtraSlide, removeSlides } = useActions();
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [assays, setAssays] = useState<Record<number, AssaySelection | "">>({});
   const [error, setError] = useState<string | null>(null);
@@ -156,7 +157,7 @@ export function ExtraSlideDetailsDrawer({
             those writes are rejected downstream and would just spin (#72). */}
         {readOnly ? (
           <p className="text-xs text-ink-faint">
-            Read-only viewer — slides are assigned and removed on the workstation.
+            {readOnlyNotice(reason, "Read-only viewer — slides are assigned and removed on the workstation.")}
           </p>
         ) : (
         <>
