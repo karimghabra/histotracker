@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.14.3 - unreleased
+
+Mostly harness. The rack work in 0.14.0 shipped with unit and e2e coverage and no
+fuzz coverage at all — the newest code in the app was the least walked — so the
+explorer was widened to reach it, then run hard at it.
+
+- Four new moves (split a rack, merge two racks, move a selection to another
+  agent, change the rack ceiling) and four new invariants covering what those
+  operations must never break: a rack over its ceiling, a rack holding another
+  agent's glass, a slide in a stainer before it was cut, and a removed slide
+  reading "stained, never cut".
+- A **self-check** that plants each violation directly in the database and
+  insists the catalogue notices. It earned its keep immediately: a fifth
+  invariant could not be made to fail, because it was a tautology — two racks can
+  no more share a number than two integers can. Deleted, with the reason written
+  where the next person will look.
+- Roughly 2,500 moves across eleven seeds, three of them 45-round runs, plus
+  split and merge fired concurrently at the same racks. **No new workflow
+  defects.**
+- One cosmetic fix the fuzz printed on its way past: a refusal read
+  `a Alcian Blue rack holds 18`. Pluralised, since an "a/an" guess breaks the
+  moment the lab adds an agent starting with a vowel.
+
 ## 0.14.2 - unreleased
 
 Two ways a retracted cut could rewrite history, both found by the explorer while

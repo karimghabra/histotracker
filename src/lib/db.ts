@@ -4027,7 +4027,12 @@ export async function splitSlidesIntoNewRack(slideIds: number[]): Promise<number
   const assayName = live[0].assay_name;
   const capacity = rackCapacity(await getAppSettings(), assayType);
   if (live.length > capacity) {
-    throw new Error(`A ${assayName} rack holds ${capacity} slides; you chose ${live.length}.`);
+    // Pluralised rather than articled: "a Alcian Blue rack" is what an "a/an"
+    // guess produces the moment an agent starts with a vowel, and the catalogue
+    // is the lab's to fill in.
+    throw new Error(
+      `${assayName} racks hold ${capacity} slides; you chose ${live.length}.`,
+    );
   }
 
   // A NEW rack, deliberately — not getOpenStainRack, which would hand back a
@@ -4141,7 +4146,7 @@ export async function mergeSlideStacks(stackIds: number[]): Promise<number> {
   const capacity = rackCapacity(await getAppSettings(), racks[0].assay_type);
   if (total > capacity) {
     throw new Error(
-      `That would make a rack of ${total}; a ${racks[0].assay_name} rack holds ${capacity}.`,
+      `That would make a rack of ${total}; ${racks[0].assay_name} racks hold ${capacity}.`,
     );
   }
 

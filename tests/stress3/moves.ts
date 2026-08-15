@@ -258,6 +258,133 @@ export const MOVES: Move[] = [
     },
   },
 
+  // ------------------------------------------------------------- 0.14 racks
+  // Split, merge, bulk reassign and the capacity ceiling shipped with unit and
+  // e2e coverage and no fuzzing at all. They move glass between physical
+  // holders, which is where the app's worst bugs have always lived.
+  {
+    label: "split slides into a new rack",
+    plan: async (page, random) => {
+      // A rack with at least two live slides, since splitting the whole rack is
+      // (correctly) refused.
+      const rack = await one<{ id: number; held: number }>(
+        page,
+        `SELECT ss.id AS id, COUNT(sl.id) AS held
+           FROM slide_stacks ss
+           JOIN slides sl ON sl.stack_id = ss.id AND sl.current_stage <> 'removed'
+          WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
+          GROUP BY ss.id HAVING held >= 2
+          ORDER BY id`,
+        [],
+        random,
+      );
+      if (!rack) return null;
+      const members = await sql<{ id: number }>(
+        page,
+        `SELECT id FROM slides
+          WHERE stack_id = ? AND current_stage <> 'removed' ORDER BY id`,
+        [rack.id],
+      );
+      // Leave at least one behind — the interesting cases are the legal ones.
+      const take = 1 + Math.floor(random() * Math.max(1, members.length - 1));
+      return {
+        fn: "splitSlidesIntoNewRack",
+        args: [members.slice(0, take).map((row) => row.id)],
+      };
+    },
+  },
+  {
+    label: "merge two racks",
+    plan: async (page, random) => {
+      // Two open racks for the SAME agent. The data layer refuses the rest, and
+      // a move that is always refused exercises nothing.
+      const pair = await one<{ a: number; b: number }>(
+        page,
+        `SELECT a.id AS a, b.id AS b
+           FROM slide_stacks a JOIN slide_stacks b
+             ON b.kind = 'stain' AND b.id > a.id
+            AND b.assay_type = a.assay_type AND b.assay_name = a.assay_name
+          WHERE a.kind = 'stain' AND a.closed_at IS NULL AND b.closed_at IS NULL
+          ORDER BY a.id`,
+        [],
+        random,
+      );
+      if (!pair) return null;
+      return { fn: "mergeSlideStacks", args: [[pair.a, pair.b]] };
+    },
+  },
+  {
+    label: "move a selection to another agent",
+    plan: async (page, random) => {
+      const rack = await one<{ id: number }>(
+        page,
+        `SELECT DISTINCT ss.id AS id FROM slide_stacks ss
+           JOIN slides sl ON sl.stack_id = ss.id AND sl.current_stage <> 'removed'
+          WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
+          ORDER BY id`,
+        [],
+        random,
+      );
+      if (!rack) return null;
+      const members = await some<{ id: number }>(
+        page,
+        `SELECT id FROM slides
+          WHERE stack_id = ? AND current_stage <> 'removed' AND stage_cut_at IS NOT NULL
+          ORDER BY id`,
+        [rack.id],
+        random,
+        1 + Math.floor(random() * 3),
+      );
+      if (members.length === 0) return null;
+      const [type, name] = AGENTS[Math.floor(random() * AGENTS.length)];
+      // reassignSlides is the hook's bulk wrapper; the data layer's own loop is
+      // reassignSlide, so the fuzz drives that directly, one call per slide.
+      return {
+        fn: "reassignSlide",
+        args: [members[0].id, random() < 0.8 ? { assayType: type, assayName: name } : { extra: true }],
+      };
+    },
+  },
+  {
+    label: "change the rack ceiling",
+    plan: async (page, random) => {
+      const settings = await callDb(page, "getAppSettings", []);
+      if (!settings.ok) return null;
+      const current = settings.value as Record<string, number>;
+
+      // Never BELOW what the board already holds.
+      //
+      // A lab lowering its ceiling under a rack that is already full is a real
+      // thing, and the app deliberately does not retroactively split that rack —
+      // so it would leave an over-capacity rack that is not a defect, and the
+      // capacity invariant would fire on it every round afterwards. That is a
+      // guaranteed false positive, which costs more than the coverage is worth.
+      // The ceiling still varies; it just cannot be used to manufacture a
+      // violation of the rule it defines.
+      const biggest = await one<{ n: number }>(
+        page,
+        `SELECT COALESCE(MAX(held), 0) AS n FROM (
+           SELECT COUNT(sl.id) AS held FROM slide_stacks ss
+             JOIN slides sl ON sl.stack_id = ss.id AND sl.current_stage <> 'removed'
+            WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
+            GROUP BY ss.id)`,
+        [],
+        () => 0,
+      );
+      const floor = Math.max(1, Number(biggest?.n ?? 1));
+      return {
+        fn: "saveAppSettings",
+        args: [
+          {
+            ...current,
+            maxStainRackSlides: floor + Math.floor(random() * 6),
+            maxIhcRackSlides: floor + Math.floor(random() * 6),
+          },
+        ],
+      };
+    },
+  },
+
   // ------------------------------------------------------------ cross-cutting
   // These are the point of v3. Each one changes something OTHER code has already
   // read and is relying on.

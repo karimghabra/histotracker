@@ -201,6 +201,50 @@ deactivating a project is about board clutter. The check now counts every
 candidate predicate in one statement and says which one the screen matches, so a
 disagreement points at a rule rather than at a number.
 
+## Deployment after the repair (0.14.3)
+
+With the walk finally reproducible, the harness was widened at the place it was
+thinnest — the newest code. Capacity, split, merge and bulk reassign shipped in
+0.14.0 with unit and e2e coverage and **no fuzz coverage at all**: the least
+walked code in the app was the code written last week.
+
+Four moves added (split a rack, merge two racks, move a selection to another
+agent, change the rack ceiling) and four invariants that say what those
+operations must never break:
+
+| invariant | what it forbids |
+|---|---|
+| `rack-within-capacity` | a rack holding more than the ceiling allows |
+| `rack-holds-one-agent` | PAS glass sitting in the H&E rack |
+| `racked-slide-was-cut` | a slide in a stainer before it was cut |
+| `removed-slide-keeps-its-record` | a broken slide reading "stained, never cut" |
+
+**A fifth was written and deleted.** `rack-numbers-are-unique` could not be
+poisoned: the number is "how many racks for this agent have an id at or below
+mine", which is injective over distinct ids, so no state can violate it. It was a
+tautology that read like a check. The property that actually matters — that a
+number does not MOVE — is temporal and lives in `tests/e2e/racks.spec.ts`. This
+is what `33-selfcheck.spec.ts` is for: it plants each violation directly in the
+image and insists the catalogue notices, and it caught this on its first run.
+
+The ceiling move is deliberately bounded to never go BELOW the largest existing
+rack. A lab lowering its ceiling under a full rack is real, and the app does not
+retroactively split that rack — so the move could otherwise manufacture a
+"violation" that is not a defect, every round, forever.
+
+### What the deployment found
+
+Roughly **2,500 moves across eleven seeds**, including three 45-round runs, plus
+split and merge fired concurrently at the same racks. No new defects in the
+workflow. One cosmetic defect in my own 0.14 code, visible in a refusal message
+the fuzz printed: `a Alcian Blue rack holds 18`. Now pluralised, because an
+"a/an" guess breaks the moment the lab adds an agent starting with a vowel.
+
+That is a real result but a limited one, and worth saying plainly: the sweep
+confirms the rack operations hold under the sequences this move set can reach.
+It is not evidence that they are correct, only that nothing this harness knows
+how to ask has caught them out.
+
 ## What v3 still cannot see
 
 Stated plainly, because a harness that does not say this reads as more thorough
