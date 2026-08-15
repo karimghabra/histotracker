@@ -35,6 +35,26 @@ import { INVARIANTS } from "./invariants";
 type Plan = { fn: string; args: unknown[]; label: string } | null;
 
 /**
+ * Pick one candidate row with the WALKER's generator.
+ *
+ * These queries used to end `ORDER BY RANDOM() LIMIT 1` — SQLite's generator,
+ * which the seed printed at the top of this file never reaches. So the seed
+ * chose which MOVE each walker made and never which row it made it on, and the
+ * "a failure is a command line, not a story" this harness was built on was not
+ * true. Same repair as v3 (`tests/stress3/moves.ts`).
+ */
+async function pickRow<T>(
+  page: import("@playwright/test").Page,
+  query: string,
+  params: unknown[],
+  random: () => number,
+): Promise<T | null> {
+  const rows = await sql<T>(page, query, params);
+  if (rows.length === 0) return null;
+  return rows[Math.floor(random() * rows.length)] ?? null;
+}
+
+/**
  * One walker's next move, planned against the live board.
  *
  * Everything is chosen from what actually exists, so a walker only ever attempts
@@ -61,11 +81,8 @@ async function planMove(
   const lane = (roll + bias) % 1;
 
   if (lane < 0.16) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM samples WHERE current_stage = 'embedded' AND block_exhausted = 0
-        ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM samples WHERE current_stage = 'embedded' AND block_exhausted = 0
+        ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: "cut a block",
@@ -80,11 +97,8 @@ async function planMove(
     };
   }
   if (lane < 0.3) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM section_requests WHERE current_stage = 'needs_sectioning'
-        ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM section_requests WHERE current_stage = 'needs_sectioning'
+        ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: "send a group for cutting",
@@ -93,13 +107,10 @@ async function planMove(
     };
   }
   if (lane < 0.45) {
-    const rows = await sql<{ id: number; assay_type: string }>(
-      page,
-      `SELECT DISTINCT st.id AS id, sl.assay_type AS assay_type
+    const rows = [await pickRow<{ id: number; assay_type: string }>(page, `SELECT DISTINCT st.id AS id, sl.assay_type AS assay_type
          FROM slide_stacks st JOIN slides sl ON sl.stack_id = st.id
         WHERE st.kind = 'stain' AND st.closed_at IS NULL AND sl.purpose = 'stain'
-        ORDER BY RANDOM() LIMIT 1`,
-    );
+        ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: random() < 0.85 ? "tick a rack step" : "untick a rack step",
@@ -108,11 +119,8 @@ async function planMove(
     };
   }
   if (lane < 0.58) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM slides WHERE purpose = 'stain' AND current_stage = 'ready_for_imaging'
-        ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM slides WHERE purpose = 'stain' AND current_stage = 'ready_for_imaging'
+        ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: "record images",
@@ -121,10 +129,7 @@ async function planMove(
     };
   }
   if (lane < 0.68) {
-    const rows = await sql<{ id: number; current_stage: string }>(
-      page,
-      `SELECT id, current_stage FROM slide_stacks WHERE closed_at IS NULL ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number; current_stage: string }>(page, `SELECT id, current_stage FROM slide_stacks WHERE closed_at IS NULL ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     const next: Record<string, string> = {
       stain_requested: "ready_for_imaging",
@@ -136,11 +141,8 @@ async function planMove(
     return { label: "advance a stack", fn: "updateSlideStackStage", args: [rows[0].id, target] };
   }
   if (lane < 0.78) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM slides WHERE purpose = 'stain' AND current_stage <> 'removed'
-          AND stage_cut_at IS NOT NULL ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM slides WHERE purpose = 'stain' AND current_stage <> 'removed'
+          AND stage_cut_at IS NOT NULL ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: random() < 0.7 ? "reassign a slide" : "back to extras",
@@ -149,18 +151,18 @@ async function planMove(
     };
   }
   if (lane < 0.86) {
-    const rows = await sql<{ id: number; sample_id: number }>(
-      page,
-      `SELECT sl.id AS id, sr.sample_id AS sample_id
+    const rows = [await pickRow<{ id: number; sample_id: number }>(page, `SELECT sl.id AS id, sr.sample_id AS sample_id
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-        WHERE sl.current_stage <> 'removed' ORDER BY RANDOM() LIMIT 1`,
-    );
+        WHERE sl.current_stage <> 'removed' ORDER BY id`, [], random)];
     if (!rows[0]) return null;
-    const other = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM samples WHERE id <> ? ORDER BY RANDOM() LIMIT 1`,
-      [rows[0].sample_id],
-    );
+    const other = [
+      await pickRow<{ id: number }>(
+        page,
+        `SELECT id FROM samples WHERE id <> ? ORDER BY id`,
+        [rows[0].sample_id],
+        random,
+      ),
+    ];
     if (!other[0]) return null;
     return {
       label: "refile onto another block",
@@ -169,18 +171,12 @@ async function planMove(
     };
   }
   if (lane < 0.93) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM slides WHERE current_stage <> 'removed' ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return { label: "remove a slide", fn: "removeSlide", args: [rows[0].id, "swarm: broke"] };
   }
   if (lane < 0.97) {
-    const rows = await sql<{ id: number }>(
-      page,
-      `SELECT id FROM section_requests ORDER BY RANDOM() LIMIT 1`,
-    );
+    const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM section_requests ORDER BY id`, [], random)];
     if (!rows[0]) return null;
     return {
       label: "add one more slide",
@@ -188,10 +184,7 @@ async function planMove(
       args: [rows[0].id, random() < 0.5 ? { extra: true } : { assayType, assayName }],
     };
   }
-  const rows = await sql<{ id: number }>(
-    page,
-    `SELECT id FROM samples ORDER BY RANDOM() LIMIT 1`,
-  );
+  const rows = [await pickRow<{ id: number }>(page, `SELECT id FROM samples ORDER BY id`, [], random)];
   if (!rows[0]) return null;
   return {
     label: "ask for a stain",

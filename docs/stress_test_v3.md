@@ -133,6 +133,35 @@ stay unique, and the screen still agrees with the store. The fix remains a
 mutation lock, and remains deferred: it needs an audit of which exports call which
 before it can be added without deadlocking.
 
+## The harness was not reproducible, and said it was
+
+Written up separately because it is the worst of the lot: it is the claim this
+document opens with, and it was false.
+
+The walk is driven by a seeded generator, and the seed is printed. But every move
+chose its TARGET with `ORDER BY RANDOM() LIMIT 1` — SQLite's generator, which no
+seed of ours reaches — and `seedLarge` built the board with `Math.random()`. So
+the seed chose which move to make and never what to make it on. Two runs of the
+same seed walked different boards, and the first real defect the explorer found
+could not be re-run to trace: three separate attempts to reproduce it came back
+clean while the explorer kept failing.
+
+Both are now driven by the walk's own generator (v3 in `tests/stress3/moves.ts`,
+and the identical flaw in v2's swarm). Verified rather than assumed: two runs of
+seed 4242 now perform the same 246 moves and end on the same census, to the row.
+
+One source of drift remains and cannot be seeded away — the app advances timed
+processing runs on a sixty-second interval, so a slow run and a fast one diverge
+by wall clock. That is why the explorer now keeps a move history and dumps the
+last twelve on the first broken invariant: the seed gets you most of the way, and
+the history covers the rest.
+
+That dump is also what finally cracked the defect. It printed **`offending rows:
+[]`** — the invariant was reporting a violation the dump could not find, because
+the dump filtered out removed slides and the invariant does not. The disagreement
+was the answer: the offending slide had been removed, and the bug was a retraction
+wiping the cut date of a slide whose record is supposed to be immutable.
+
 ## Two harness bugs worth writing down
 
 Both produced confident, dramatic, completely false findings. They are recorded
