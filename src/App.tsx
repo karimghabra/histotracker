@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
-import { Sidebar, type AppView } from "./components/Sidebar";
+import { ALL_PROJECTS, Sidebar, type AppView } from "./components/Sidebar";
 import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
 import { NewProjectDialog } from "./components/NewProjectDialog";
@@ -211,21 +211,44 @@ export default function App() {
     settings.idleLogoutMinutes * 60_000,
   );
 
-  // Restore the last-used project, falling back to the first active one (#84).
-  // Without persistence, every restart silently reset the sidebar to whichever
-  // project happened to sort first — and the next New Sample went there.
+  // Restore the last-used project (#84), now including "All projects" (#131).
+  //
+  // `null` used to mean two things — "nothing restored yet" and "no project" —
+  // which was harmless while every session had to land on some project. #131
+  // makes null a state a user can CHOOSE, so the two meanings are separated: a
+  // dedicated `restored` flag says whether the restore has run, and the stored
+  // value "all" round-trips to null instead of falling through to projects[0].
+  // Without that separation, picking All Projects snapped straight back to the
+  // first project on the next render.
+  const [projectRestored, setProjectRestored] = useState(false);
   useEffect(() => {
-    if (selectedProjectId !== null || projects.length === 0) return;
-    const remembered = Number(window.localStorage.getItem("histometer-selected-project") ?? "");
-    const stillExists = projects.some((project) => project.id === remembered);
-    setSelectedProjectId(stillExists ? remembered : projects[0].id);
-  }, [projects, selectedProjectId]);
+    if (projectRestored || projects.length === 0) return;
+    const stored = window.localStorage.getItem("histometer-selected-project");
+    if (stored === ALL_PROJECTS) {
+      setSelectedProjectId(null);
+    } else {
+      const remembered = Number(stored ?? "");
+      const stillExists = projects.some((project) => project.id === remembered);
+      setSelectedProjectId(stillExists ? remembered : projects[0].id);
+    }
+    setProjectRestored(true);
+  }, [projects, projectRestored]);
 
   useEffect(() => {
-    if (selectedProjectId !== null) {
-      window.localStorage.setItem("histometer-selected-project", String(selectedProjectId));
-    }
-  }, [selectedProjectId]);
+    if (!projectRestored) return;
+    window.localStorage.setItem(
+      "histometer-selected-project",
+      selectedProjectId === null ? ALL_PROJECTS : String(selectedProjectId),
+    );
+  }, [selectedProjectId, projectRestored]);
+
+  // A project that is deactivated or deleted while selected must not leave the
+  // sidebar pointing at a row that is no longer drawn — the board would filter
+  // to a project the user cannot see or clear.
+  useEffect(() => {
+    if (selectedProjectId === null || projects.length === 0) return;
+    if (!projects.some((project) => project.id === selectedProjectId)) setSelectedProjectId(null);
+  }, [projects, selectedProjectId]);
 
   // Restore the persisted undo/redo history (if it matches the live DB) so a
   // reload doesn't strand the user with a greyed-out Undo (#2).
@@ -318,7 +341,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [modalOpen, drawerOpen]);
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const selectedSample = useMemo(
     () => samples.find((s) => s.id === selectedSampleId) ?? null,
     [samples, selectedSampleId],
@@ -739,12 +761,15 @@ export default function App() {
             {!isViewer && (
               <Button
                 variant="primary"
-                disabled={!selectedProject || !activeUser}
+                // No longer gated on a sidebar selection (#132): the dialog
+                // asks for the project itself, so there is nothing to select
+                // first. Still gated on being signed in (#128).
+                disabled={!activeUser || projects.length === 0}
                 title={
                   !activeUser
                     ? "Sign in before adding samples"
-                    : !selectedProject
-                      ? "Select a project first"
+                    : projects.length === 0
+                      ? "Create a project first"
                       : undefined
                 }
                 onClick={() => setShowNewSample(true)}
@@ -789,6 +814,13 @@ export default function App() {
           <div className="min-w-0 flex-1 overflow-hidden p-3">
             <Board
               key={`board-${activeUser?.id ?? "none"}`}
+              // #131 — the sidebar selection is the board's project filter.
+              // Id and code both: the six column filters do not all match on the
+              // same column.
+              projectFilterId={selectedProjectId ?? "all"}
+              projectFilterCode={
+                projects.find((project) => project.id === selectedProjectId)?.code ?? "all"
+              }
               samples={samples}
               sections={sections}
               stacks={stacks}
@@ -896,8 +928,14 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
-      {showNewSample && selectedProject && (
-        <NewSampleDialog project={selectedProject} onClose={() => setShowNewSample(false)} />
+      {showNewSample && (
+        // #132 — the dialog asks which project; it is no longer decided by what
+        // happened to be selected in the sidebar before the button was pressed.
+        <NewSampleDialog
+          projects={projects}
+          initialProjectId={selectedProjectId}
+          onClose={() => setShowNewSample(false)}
+        />
       )}
       {pendingBatchSampleIds && pendingBatchSamples.length > 0 && (
         <BatchStartDialog

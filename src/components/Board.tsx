@@ -23,6 +23,7 @@ import {
   STAGE_ORDER,
   STAGE_TO_QUEUE,
 } from "../lib/stages";
+import { sampleNeedsCut } from "../lib/db";
 import { ProcessingBatchRow } from "./ProcessingBatchRow";
 import { QueueColumn } from "./QueueColumn";
 import { SampleCard } from "./SampleCard";
@@ -30,7 +31,11 @@ import { SectionCard } from "./SectionCard";
 import { StackCard } from "./StackCard";
 import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
-type EmbeddedSort = "embedded_date" | "name" | "sample_id";
+// #129 — "needs cut" joins the sort keys, and gets a filter of its own. A block
+// that owes somebody a cut is the only thing in this column with a deadline
+// attached; everything else is inventory sitting still.
+type EmbeddedSort = "needs_cut" | "embedded_date" | "name" | "sample_id";
+type EmbeddedFlagFilter = "all" | "needs_cut";
 type ExtraSlidesSort = "sample_id" | "name";
 // #89 — Pre-processing is where every sample enters, so it fills up fastest and
 // needs the same project filter and sort the downstream queues already have.
@@ -51,6 +56,15 @@ function sortEmbedded(samples: Sample[], key: EmbeddedSort): Sample[] {
   const copy = [...samples];
   copy.sort((a, b) => {
     if (a.is_priority !== b.is_priority) return b.is_priority - a.is_priority;
+    // Flagged first, then oldest-flagged first, because "needs cut" is not an
+    // ordering on its own — it is one bit, and it would leave the whole flagged
+    // group in whatever order the query happened to return.
+    if (key === "needs_cut") {
+      const aFlag = sampleNeedsCut(a) ? 1 : 0;
+      const bFlag = sampleNeedsCut(b) ? 1 : 0;
+      if (aFlag !== bFlag) return bFlag - aFlag;
+      return (a.stage_embedded_at ?? "").localeCompare(b.stage_embedded_at ?? "");
+    }
     switch (key) {
       case "name":
         return (a.sample_description || a.sample_code).localeCompare(
@@ -217,6 +231,8 @@ export function Board({
   onSelectProcessingBatch,
   onConfirmProcessingBatchStart,
   onToggleSamplePriority,
+  projectFilterId,
+  projectFilterCode,
   readOnly = false,
 }: {
   samples: Sample[];
@@ -244,6 +260,18 @@ export function Board({
   onSelectProcessingBatch: (batchId: number) => void;
   onConfirmProcessingBatchStart: (batchId: number) => void;
   onToggleSamplePriority: (sampleId: number) => void;
+  /**
+   * The sidebar's project selection (#131); "all" when none is chosen.
+   *
+   * Both the id AND the code, because the six column filters are not one kind
+   * of thing: four match `project_id`, and the Extras and Ready-for-Imaging ones
+   * match `project_code`. Passing only the id set those two to a number that no
+   * code can equal, and both columns silently rendered empty — caught by the
+   * sync specs, not by the first version of the #131 test, which only looked at
+   * Pre-processing.
+   */
+  projectFilterId: number | "all";
+  projectFilterCode: string;
   /** Viewer role: disable drag-to-move and the priority toggle. */
   readOnly?: boolean;
 }) {
@@ -260,6 +288,7 @@ export function Board({
   const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useViewPref<number | "all">("board.embeddedFilter", "all");
   const [embeddedSort, setEmbeddedSort] = useViewPref<EmbeddedSort>("board.embeddedSort", "embedded_date");
+  const [embeddedFlagFilter, setEmbeddedFlagFilter] = useViewPref<EmbeddedFlagFilter>("board.embeddedFlagFilter", "all");
   // Pre-processing gets the same two controls (#89).
   const [preprocessingFilter, setPreprocessingFilter] = useViewPref<number | "all">("board.preprocessingFilter", "all");
   const [preprocessingSort, setPreprocessingSort] = useViewPref<PreprocessingSort>("board.preprocessingSort", "received_date");
@@ -272,6 +301,28 @@ export function Board({
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
   const [imagingProjectFilter, setImagingProjectFilter] = useViewPref<string>("board.imagingProjectFilter", "all");
   const [imagingStainFilter, setImagingStainFilter] = useViewPref<string>("board.imagingStainFilter", "all");
+  // #131 — the sidebar selection sets every column's project filter.
+  //
+  // It SETS them rather than replacing them: each column keeps its own control,
+  // so "show me all of Staining while I work through one project's Embedded
+  // Inventory" is still reachable. Picking a project (or All Projects) is the
+  // broad stroke; the per-column dropdown is the exception you make afterwards.
+  //
+  // Keyed on the value, not on a mount flag, so the effect is a no-op until the
+  // selection actually changes — otherwise every re-render would stamp over an
+  // exception the user had just made.
+  useEffect(() => {
+    setEmbeddedFilter(projectFilterId);
+    setPreprocessingFilter(projectFilterId);
+    setNeedsEmbeddingFilter(projectFilterId);
+    setNeedsSectioningFilter(projectFilterId);
+    // Code, not id — see the prop's note.
+    setExtraSlidesFilter(projectFilterCode);
+    setImagingProjectFilter(projectFilterCode);
+    // The setters are stable (useViewPref), so the selection is the only trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectFilterId, projectFilterCode]);
+
   const [topLaneHeight, setTopLaneHeight] = useState(
     () => Number(window.localStorage.getItem("histometer-board-top-height") ?? "50"),
   );
@@ -428,8 +479,11 @@ export function Board({
     if (embeddedFilter !== "all") {
       items = items.filter((sample) => sample.project_id === embeddedFilter);
     }
+    // #129 — narrowing to the flagged blocks, for the morning where the question
+    // is "what am I cutting today?" rather than "what is in the drawer?".
+    if (embeddedFlagFilter === "needs_cut") items = items.filter(sampleNeedsCut);
     return sortEmbedded(items, embeddedSort);
-  }, [blocksByQueue, embeddedFilter, embeddedSort]);
+  }, [blocksByQueue, embeddedFilter, embeddedFlagFilter, embeddedSort]);
 
   // ---- Pre-processing filter + sort (#89) ----
   const projectsInPreprocessing = useMemo(() => {
@@ -1092,10 +1146,23 @@ export function Board({
                               ))}
                             </select>
                             <select
+                              aria-label="Filter embedded inventory by cutting status"
+                              className={selectClass}
+                              value={embeddedFlagFilter}
+                              onChange={(event) =>
+                                setEmbeddedFlagFilter(event.target.value as EmbeddedFlagFilter)
+                              }
+                            >
+                              <option value="all">All blocks</option>
+                              <option value="needs_cut">Needs cut</option>
+                            </select>
+                            <select
+                              aria-label="Sort embedded inventory"
                               className={selectClass}
                               value={embeddedSort}
                               onChange={(event) => setEmbeddedSort(event.target.value as EmbeddedSort)}
                             >
+                              <option value="needs_cut">Needs cut first</option>
                               <option value="embedded_date">Date embedded</option>
                               <option value="name">Name</option>
                               <option value="sample_id">Sample ID</option>

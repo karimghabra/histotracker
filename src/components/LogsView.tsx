@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -16,6 +16,7 @@ import {
 } from "../lib/stages";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
 // hold the accurate per-stage stamps) and — before any slides exist — its own
@@ -304,11 +305,16 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
 }
 
 export function LogsView() {
-  const { tagSlidesDepth } = useActions();
+  // #133 — the Logs get the actions the dashboard has, driven by the selection
+  // that was already here for tagging. One ticked list, three things to do with
+  // it, exactly as the rack panel works since 0.14.1.
+  const { tagSlidesDepth, removeSlides, reassignSlides } = useActions();
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const [showDepthDialog, setShowDepthDialog] = useState(false);
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const toggleSlideSelect = (id: number) =>
     setSelectedSlideIds((cur) => {
       const next = new Set(cur);
@@ -325,6 +331,18 @@ export function LogsView() {
   const addableAgents = useMemo(
     () => catalog.filter((agent) => agent.is_active !== 0),
     [catalog],
+  );
+  // Removed slides can be SELECTED — "Show removed" puts them in the list, and
+  // tagging deliberately skips them rather than refusing the whole selection
+  // (#69). Remove and reassign work on the live subset for the same reason: a
+  // technician ticking eleven slides, one of which broke last week, should get
+  // the ten done rather than an error and nothing.
+  const liveSelectedIds = useMemo(
+    () =>
+      slides
+        .filter((slide) => selectedSlideIds.has(slide.id) && !isRemoved(slide))
+        .map((slide) => slide.id),
+    [slides, selectedSlideIds],
   );
   const { data: removalList = [] } = useSlideRemovals();
   const removals = useMemo(
@@ -765,31 +783,115 @@ export function LogsView() {
         </table>
       </div>
 
-      {/* Depth-tagging action bar — appears when slides are selected (#69). */}
+      {/* Selection action bar — tagging (#69), and since #133 the two things the
+          issue named: removal and reassignment. */}
       {selectedSlideIds.size > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center">
-          <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2 shadow-xl">
+          <div className="pointer-events-auto flex flex-col gap-1.5 rounded-xl border border-line bg-panel px-4 py-2 shadow-xl">
+            <div className="flex items-center gap-3">
             <span className="text-xs font-medium text-ink">
               {selectedSlideIds.size} slide{selectedSlideIds.size === 1 ? "" : "s"} selected
+              {liveSelectedIds.length !== selectedSlideIds.size && (
+                <span className="ml-1 text-ink-faint">
+                  ({liveSelectedIds.length} live)
+                </span>
+              )}
             </span>
-            {/* A viewer can SEE existing tags but cannot add them (#72) — the
+            {/* A viewer can SEE the record but cannot change it (#72/#128) — the
                 write would be rejected and the dialog would hang. */}
             {readOnly ? (
               <span className="text-[11px] text-ink-faint">
-                {readOnlyNotice(reason, "Read-only viewer — tagging is done on the workstation")}
+                {readOnlyNotice(reason, "Read-only viewer — this is done on the workstation")}
               </span>
             ) : (
-              <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
-                <Tag size={13} /> Create Tag
-              </Button>
+              <>
+                <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
+                  <Tag size={13} /> Create Tag
+                </Button>
+                {/* Reassigning is a SELECTION action, not a per-row dropdown —
+                    the lesson of 0.14.1, where a select box on every row was
+                    twenty-four controls for an occasional job. */}
+                <select
+                  aria-label="Reassign the selected slides"
+                  className={selectClass}
+                  value=""
+                  disabled={liveSelectedIds.length === 0}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (!next) return;
+                    event.target.value = "";
+                    const target =
+                      next === "extra"
+                        ? ({ extra: true } as const)
+                        : (() => {
+                            const [assayType, ...rest] = next.split(":");
+                            return {
+                              assayType: assayType as "stain" | "ihc",
+                              assayName: rest.join(":"),
+                            };
+                          })();
+                    setActionError(null);
+                    void reassignSlides(liveSelectedIds, target)
+                      .then(() => setSelectedSlideIds(new Set()))
+                      .catch((err: unknown) =>
+                        setActionError(err instanceof Error ? err.message : "Could not reassign."),
+                      );
+                  }}
+                >
+                  <option value="">Reassign to…</option>
+                  {addableAgents.map((agent) => (
+                    <option key={`${agent.assay_type}:${agent.name}`} value={`${agent.assay_type}:${agent.name}`}>
+                      {agent.name}
+                    </option>
+                  ))}
+                  <option value="extra">Extra (no stain)</option>
+                </select>
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1.5 text-xs text-red-700"
+                  disabled={liveSelectedIds.length === 0}
+                  title={
+                    liveSelectedIds.length === 0
+                      ? "Every selected slide has already been removed"
+                      : undefined
+                  }
+                  onClick={() => setShowRemoveDialog(true)}
+                >
+                  <Trash2 size={13} /> Remove
+                </Button>
+              </>
             )}
-            <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSelectedSlideIds(new Set())}>
+            <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => {
+              setSelectedSlideIds(new Set());
+              setActionError(null);
+            }}>
               Clear
             </Button>
+            </div>
+            {actionError && (
+              <p className="text-[11px] text-red-700">{actionError}</p>
+            )}
           </div>
         </div>
       )}
 
+      {showRemoveDialog && (
+        <RemovalReasonDialog
+          title="Remove slides"
+          what={`${liveSelectedIds.length} slide${liveSelectedIds.length === 1 ? "" : "s"}`}
+          confirmLabel={`Remove ${liveSelectedIds.length} slide${liveSelectedIds.length === 1 ? "" : "s"}`}
+          onClose={() => setShowRemoveDialog(false)}
+          onConfirm={(why) => {
+            setShowRemoveDialog(false);
+            setActionError(null);
+            void removeSlides(liveSelectedIds, why)
+              .then(() => setSelectedSlideIds(new Set()))
+              .catch((err: unknown) =>
+                setActionError(err instanceof Error ? err.message : "Could not remove."),
+              );
+          }}
+        />
+      )}
       {showDepthDialog && (
         <DepthTagDialog
           count={selectedSlideIds.size}

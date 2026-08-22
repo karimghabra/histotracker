@@ -7,6 +7,15 @@ import { APP_VERSION } from "../lib/version";
 
 export type AppView = "board" | "logs" | "manifest";
 
+/**
+ * The value stored for "no project chosen" (#131).
+ *
+ * A sentinel rather than an absent key, because absent already means "nothing
+ * has been stored yet", and those two must restore differently: nothing stored
+ * lands on a project, All Projects stays on All Projects.
+ */
+export const ALL_PROJECTS = "all";
+
 export function Sidebar({
   projects,
   selectedProjectId,
@@ -19,7 +28,7 @@ export function Sidebar({
 }: {
   projects: Project[];
   selectedProjectId: number | null;
-  onSelectProject: (id: number) => void;
+  onSelectProject: (id: number | null) => void;
   onAddProject: () => void;
   view: AppView;
   onSelectView: (view: AppView) => void;
@@ -101,6 +110,74 @@ export function Sidebar({
           <p className="px-2 py-4 text-sm text-ink-faint">
             No projects yet. Add one to begin.
           </p>
+        )}
+        {/* #131 — the selection drives the whole dashboard, so there has to be a
+            way to say "no filter". It is a row in the same list rather than a
+            control somewhere else, because it is the same kind of choice: it
+            answers the question this list asks. */}
+        {projects.length > 0 && (
+          <button
+            onClick={() => onSelectProject(null)}
+            title={collapsed ? "All projects" : undefined}
+            aria-current={selectedProjectId === null ? "true" : undefined}
+            aria-label="All projects"
+            className={cn(
+              "relative mb-1 flex w-full items-center justify-between rounded-lg py-2 text-left transition",
+              collapsed ? "justify-center px-1" : "pl-4 pr-3",
+              selectedProjectId === null
+                ? "bg-brand/45 text-ink ring-2 ring-inset ring-brand shadow-sm before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1.5 before:rounded-l-lg before:bg-brand-strong"
+                : "opacity-80 hover:opacity-100 hover:bg-brand/8",
+            )}
+          >
+            {collapsed ? (
+              <span
+                className={cn(
+                  "block w-full truncate text-center text-xs leading-none",
+                  selectedProjectId === null ? "font-bold text-ink" : "font-semibold",
+                )}
+              >
+                ALL
+              </span>
+            ) : (
+              <span className="min-w-0">
+                <span
+                  className={cn(
+                    "block truncate text-sm",
+                    selectedProjectId === null ? "font-bold" : "font-medium",
+                  )}
+                >
+                  All projects
+                </span>
+                <span className="mt-0.5 flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "text-xs",
+                      selectedProjectId === null ? "font-semibold text-ink" : "text-ink-faint",
+                    )}
+                  >
+                    No filter
+                  </span>
+                  {selectedProjectId === null && (
+                    <span className="rounded-sm bg-brand-strong px-1 py-px text-[9px] font-bold uppercase tracking-wider text-surface">
+                      Selected
+                    </span>
+                  )}
+                </span>
+              </span>
+            )}
+            {!collapsed && (
+              <span
+                className={cn(
+                  "ml-2 shrink-0 rounded-full px-2 py-0.5 text-[11px]",
+                  selectedProjectId === null
+                    ? "bg-brand-strong font-semibold text-surface"
+                    : "bg-brand/10 text-brand-strong",
+                )}
+              >
+                {projects.reduce((total, project) => total + (project.sample_count ?? 0), 0)}
+              </span>
+            )}
+          </button>
         )}
         {projects.map((p) => {
           const active = p.id === selectedProjectId;

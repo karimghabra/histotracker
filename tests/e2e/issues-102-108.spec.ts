@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -37,9 +37,9 @@ async function signInAndProject(page: Page) {
   await addProject(page, "EE", "Enthesis Engineering");
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode?: string) {
+  // #132 — the dialog asks which project. Single-project tests can leave it out.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
   await expect(page.getByRole("heading", { name: /New Sample/ })).toHaveCount(0);
@@ -101,12 +101,15 @@ test("#103: Needs Embedding can be filtered by project and sorted", async ({ pag
 
   // One block from each project, both parked in Needs Embedding.
   await page.locator("aside").first().getByRole("button", { name: /Enthesis/ }).click();
-  await addSample(page, "enthesis block");
+  await addSample(page, "enthesis block", "EE");
   await toNeedsEmbedding(page, "EE-1", "Batch 1");
   await page.locator("aside").first().getByRole("button", { name: /Zebrafish/ }).click();
-  await addSample(page, "zebrafish block");
+  await addSample(page, "zebrafish block", "ZZ");
   await toNeedsEmbedding(page, "ZZ-1", "Batch 2");
 
+  // #131 — the sidebar selection now filters the board, and this test is about
+  // the COLUMN's filter, so it starts from a board showing everything.
+  await page.getByRole("button", { name: "All projects" }).click();
   const col = column(page, "Needs Embedding");
   await expect(col.getByText("EE-1", { exact: true })).toBeVisible();
   await expect(col.getByText("ZZ-1", { exact: true })).toBeVisible();
@@ -133,9 +136,12 @@ test("#104: filters survive a view switch and reset on sign-out", async ({ page 
   await signInAndProject(page);
   await addProject(page, "ZZ", "Zebrafish Zone");
   await page.locator("aside").first().getByRole("button", { name: /Enthesis/ }).click();
-  await addSample(page, "enthesis block");
+  await addSample(page, "enthesis block", "EE");
   await toNeedsEmbedding(page, "EE-1", "Batch 1");
 
+  // Set from All Projects, so the column filter under test is the user's own
+  // choice rather than one the sidebar had already made (#131).
+  await page.getByRole("button", { name: "All projects" }).click();
   await page.getByLabel("Filter needs embedding by project").selectOption({ label: "EE" });
 
   // Board → Logs → Board. The filter used to reset to All Projects, because the

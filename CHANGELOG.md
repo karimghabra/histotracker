@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.15.0 - unreleased
+
+No schema change. The two new preferences (the sidebar's All Projects state and
+the Embedded Inventory cutting filter) are browser-local view state, not database
+rows, so a 0.14 instance opens a 0.15 database unchanged and no lockstep upgrade
+is needed.
+
+The four issues raised against 0.14.x. Two of them are one change seen from
+opposite sides.
+
+- **The New Sample dialog asks which project (#132).** It used to inherit
+  whatever was selected in the sidebar, and said so only as three letters in the
+  title bar — a selection made for one reason (looking at a project) silently
+  deciding another (where twenty new samples get filed). The dialog now asks,
+  first field, and will not create anything until it has an answer. Nothing is
+  preselected when there is a real choice: a prefilled picker is one Enter away
+  from being no question at all. A lab with a single project is not asked, since
+  there is nothing to decide.
+
+- **The sidebar selection now filters the whole board (#131),** with an **All
+  projects** row to clear it. It *sets* each column's filter rather than
+  replacing it, so the per-column dropdowns still work and still say what the
+  board is doing — picking a project is the broad stroke, the column control is
+  the exception you make afterwards.
+
+  This is what #132 had to land first for: the sidebar meant two things at once,
+  and it could only be made to mean one of them cleanly after the other had
+  somewhere else to live. "No project" is now a state you can choose, so it is
+  also a state that has to persist — it is stored explicitly rather than as an
+  absent key, because absent already means "nothing restored yet", and the two
+  restore differently.
+
+- **Embedded Inventory can be filtered and sorted by what needs cutting (#129).**
+  The `needs cut` flag has been on the card since #110, but nothing could sort or
+  filter on it, so finding the flagged blocks in a full drawer meant reading
+  every card. Both new controls and the flag itself now share **one** predicate
+  in `db.ts` — two copies would be two answers to "needs cut", and a filter that
+  hides a flagged card is worse than no filter.
+
+- **Slides can be removed and reassigned from the Logs (#133).** The Logs could
+  show that a slide had been removed, and who removed it and why, but not remove
+  one — so the record was readable where the work was not. Both actions hang off
+  the tick list that was already there for tagging, the same way the rack panel
+  has worked since 0.14.1: one selection, three things to do with it. They act on
+  the live slides in the selection, so ticking eleven slides when one broke last
+  week does the ten rather than refusing all eleven.
+
+  Scoped to the two actions the issue names. "Anything that can be done in the
+  dashboard should be completable in the logs" is a direction, not a change, and
+  the rest of it should be argued for one action at a time.
+
+Every one of the six new tests was revert-verified — each watched failing with
+its change undone.
+
+**One bug introduced and caught in the same cycle**, recorded because the shape
+of it will recur. The six column filters are not one kind of thing: four match
+`project_id` and two — Extras and Ready for Imaging — match `project_code`. The
+first version of #131 set all six from the id, so both code-matched columns were
+handed a number no code can equal and rendered empty for every selection. The
+first version of the #131 test did not catch it, because it only looked at a
+project_id column; the sync specs did. The test now checks one column of each
+kind, through cards on screen.
+
+#131 and #132 also changed what a dozen existing specs could assume — that the
+sidebar decides where a sample is filed, and that the board shows every project.
+Both assumptions were the thing being removed. The New Sample flow is now driven
+through one helper (`tests/helpers/app.ts`) rather than fixed twelve times, for
+the same reason `helpers/rack.ts` exists: the next change to that dialog should
+be one edit, not twelve chances to look like twelve unrelated failures.
+
 ## 0.14.4 - unreleased
 
 Coverage, not behaviour. Nothing in the app changes; two shipped issues that had

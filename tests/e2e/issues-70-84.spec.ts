@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage, setTheme } from "../helpers/app";
+import { openManage, setTheme, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogs } from "../helpers/stains";
 
@@ -28,9 +28,10 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
   await page.getByRole("button", { name: "Save Project" }).click();
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode?: string) {
+  // #132 — the dialog asks which project rather than inheriting the sidebar
+  // selection. Single-project tests can leave it out; anything with two must say.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
 }
@@ -213,10 +214,13 @@ test("#82: the Ready for Imaging stain filter actually narrows the queue", async
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Zebrafish Study");
   await page.getByRole("button", { name: "Save Project" }).click();
 
-  await addSample(page, "imaging block two");
+  await addSample(page, "imaging block two", "ZZ");
   await embed(page, "ZZ-1", "Batch 2");
   await cutAndSectionIntoStaining(page, "ZZ-1", 2);
   await runProtocolOnLoneRack(page);
+  // #131 — creating ZZ selected it, and the selection now filters the board. The
+  // filters under test are the COLUMN's own, so the board starts unfiltered.
+  await page.getByRole("button", { name: "All projects" }).click();
   await expect(tiles).toHaveCount(2, { timeout: 15000 });
 
   const projectFilter = page.getByLabel("Filter imaging by project");

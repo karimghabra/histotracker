@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // The 0.7.1 wave: #85 (sticky Ready-for-Imaging filter) and the #79 follow-up
@@ -25,9 +25,10 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
   await page.getByRole("button", { name: "Save Project" }).click();
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode?: string) {
+  // #132 — the dialog asks which project rather than inheriting the sidebar
+  // selection. Single-project tests can leave it out; anything with two must say.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
 }
@@ -113,11 +114,12 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Zebrafish Study");
   await page.getByRole("button", { name: "Save Project" }).click();
 
-  // Sample in ZZ → Ready for Imaging. Creating a project does not select it, so
-  // pick it explicitly or the sample lands in EE.
+  // Sample in ZZ → Ready for Imaging. The sidebar no longer decides where a
+  // sample is filed (#132) — the dialog is told — but it does decide what the
+  // board shows (#131), so it is still selected here for the assertions below.
   await page.locator("aside").getByText("Zebrafish Study").click();
   await expect(page.locator('aside button[aria-current="true"]')).toContainText("Zebrafish Study");
-  await addSample(page, "zz block");
+  await addSample(page, "zz block", "ZZ");
   await embed(page, "ZZ-1", "Batch 1");
   await cutAndSection(page, "ZZ-1");
   await runProtocolOnLoneRack(page);
@@ -128,10 +130,13 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
 
   // Sample in EE → Ready for Imaging as well.
   await page.locator("aside").getByText("Enthesis Engineering").click();
-  await addSample(page, "ee block");
+  await addSample(page, "ee block", "EE");
   await embed(page, "EE-1", "Batch 2");
   await cutAndSection(page, "EE-1");
   await runProtocolOnLoneRack(page);
+  // #131 — with EE selected the board is filtered to EE, and this assertion is
+  // about both projects being present before the COLUMN filter narrows them.
+  await page.getByRole("button", { name: "All projects" }).click();
   await expect(tiles).toHaveCount(2, { timeout: 20000 });
 
   // Filter to EE, then analyze EE's only stack.

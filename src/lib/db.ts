@@ -2585,6 +2585,32 @@ export function parsePreselectedStains(
   }
 }
 
+/**
+ * Does this block still owe somebody a cut? (#110, #129)
+ *
+ * Defined ONCE and shared by the card that draws the flag and the board that
+ * sorts and filters on it. Two copies would be two answers to "needs cut", and
+ * the one a technician can SEE would not be the one the filter used — a filter
+ * that hides a flagged card, or surfaces an unflagged one, is worse than no
+ * filter at all.
+ *
+ * It sits here rather than in `stages.ts` because it has to go through
+ * `parsePreselectedStains`: an outstanding entry with no agent name is not an
+ * outstanding request, and a bare "is the column non-empty" test would count it.
+ * stages.ts cannot import this module without a cycle.
+ *
+ * A pending agent means the slide that will carry it does not exist yet, so the
+ * block is waiting for the microtome, not for a stainer (#110). A deliberately
+ * saved cutting plan says the same thing. `plan_saved`, not `sectioning_plan` —
+ * every block is auto-seeded a plan at embedding, so that would flag them all.
+ */
+export function sampleNeedsCut(sample: {
+  pending_stains?: string | null;
+  plan_saved?: number | null;
+}): boolean {
+  return parsePreselectedStains(sample.pending_stains).length > 0 || sample.plan_saved === 1;
+}
+
 export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
   const db = await getDb();
   return db.select<SectionRequest[]>(

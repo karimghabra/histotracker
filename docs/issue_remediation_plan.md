@@ -44,6 +44,75 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## 0.15.0 — #129, #131, #132, #133
+
+### #132 before #131, deliberately
+
+The two are one change seen from opposite sides. The sidebar selection meant two
+unrelated things at once — which project you are looking at, and where new
+samples get filed — and it could only be made to mean one of them cleanly after
+the other had somewhere else to live. So #132 (the dialog asks) lands first, and
+#131 (the selection filters) lands on top of it.
+
+**#132.** `NewSampleDialog` takes `projects` + `initialProjectId` instead of a
+single `project`, and asks. Nothing is preselected when there is a real choice:
+a prefilled picker is one Enter away from being no question at all, and the harm
+it prevents — a batch of twenty filed under the wrong project, noticed weeks
+later — is the same harm #84 was about. A single-project lab is not asked.
+
+**#131.** The sidebar gains an **All projects** row and the selection sets every
+column's project filter. It *sets* rather than replaces, so the per-column
+controls still work and still say what the board is doing.
+
+`null` used to mean two things in `App.tsx` — "nothing restored yet" and "no
+project" — which was harmless while every session had to land on some project.
+Now that null is choosable it is stored explicitly (`ALL_PROJECTS`), with a
+separate `projectRestored` flag for the other meaning. Without that separation,
+choosing All Projects snapped back to the first project on the next render.
+
+### The bug this introduced, and why the first test missed it
+
+The six column filters are **not one kind of thing**. Four match `project_id`;
+Extras and Ready for Imaging match `project_code`. The first version set all six
+from the id, so the two code-matched columns were handed a number that no code
+can equal and rendered **empty for every selection**.
+
+The #131 spec did not catch it — it only looked at Pre-processing, a project_id
+column. `sync.spec.ts` caught it. The spec now checks one column of each kind,
+through cards on screen rather than through the control, because a column with
+nothing in it legitimately resets its own filter to "all" (#85's stale-filter
+guard) and therefore proves nothing either way.
+
+### #129 — one predicate, not two
+
+The `needs cut` flag has been on the card since #110; nothing could sort or
+filter on it. `sampleNeedsCut()` now lives in `db.ts` — next to
+`parsePreselectedStains`, which it needs, and which `stages.ts` cannot import
+without a cycle — and the card, the sort and the filter all call it. Two copies
+would be two answers, and a filter that hides a flagged card is worse than no
+filter.
+
+### #133 — scoped to what the issue names
+
+Removal and stain reassignment, both hung off the tick list that was already
+there for tagging. They act on the **live** slides in the selection, matching how
+tagging already behaves (#69): eleven ticked slides with one broken should do the
+ten, not refuse all eleven.
+
+"Anything that can be done in the dashboard should be completable in the logs" is
+a direction, not a change. The rest of it should be argued one action at a time.
+
+### Cost to the existing suite
+
+A dozen specs assumed the sidebar decided where a sample was filed, and that the
+board showed every project. Both assumptions were the thing being removed, so
+they are updated rather than worked around, and the New Sample flow now goes
+through `openNewSample()` in `tests/helpers/app.ts` — one helper, for the same
+reason `helpers/rack.ts` exists.
+
+One locator needed scoping for an unrelated reason: `getByText(/needs cut/i)` now
+matches the two new #129 controls as well as the flag they act on.
+
 ## 0.14.4 — the two issues that shipped with no test, and a finding that did not survive
 
 `#121`–`#128` all shipped in 0.14.0–0.14.3, and six of them carry gates. **Two

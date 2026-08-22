@@ -214,7 +214,10 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
 
   // #41a: the embedded tile is flagged. It says NEEDS CUT (#110): the
   // slide that will carry the stain has not been cut yet.
-  await expect(page.getByText(/needs cut/i)).toBeVisible();
+  // Scoped to the FLAG on the card. Since #129 the Embedded Inventory header
+  // also carries "Needs cut" twice — a filter option and a sort option — so an
+  // unscoped text match now finds the controls as well as the thing they act on.
+  await expect(page.getByText("⚑ needs cut")).toBeVisible();
 
   // #41b: Send for Cutting is prefilled from the block's preselected stains.
   await page.getByText("EE-1", { exact: true }).first().click();

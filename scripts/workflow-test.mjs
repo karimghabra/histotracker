@@ -3201,10 +3201,20 @@ issue(88, "a sample cannot be created without a description", () => {
 invariant("the new-sample dialog blocks Create until every sample has a description", () => {
   const dialog = readFileSync(join(HERE, "..", "src", "components", "NewSampleDialog.tsx"), "utf8");
   assert(/missingCodes/.test(dialog), "the dialog must compute which samples are still blank");
-  assert(/disabled=\{saving \|\| missingCodes\.length > 0\}/.test(dialog),
-    "Create must be disabled while any sample would be created blank");
-  assert(/if \(missingCodes\.length > 0\) return;/.test(dialog),
+  // #132 widened both guards: the project is chosen in the dialog now, so
+  // "nothing would be created blank" is no longer the only way to be
+  // incomplete. Asserted as the exact shape rather than a loose match, because
+  // the point of this invariant is that the guard cannot quietly weaken.
+  assert(/disabled=\{saving \|\| !project \|\| missingCodes\.length > 0\}/.test(dialog),
+    "Create must be disabled while any sample would be created blank or unfiled");
+  assert(/if \(missingCodes\.length > 0 \|\| !project\) return;/.test(dialog),
     "save() must re-check — a disabled button is presentation, not a guard");
+  // #132 — the project is asked for HERE. A `project: Project` prop would mean
+  // the sidebar had quietly decided it again.
+  assert(/projects: Project\[\]/.test(dialog),
+    "the dialog takes the list of projects, not one chosen for it (#132)");
+  assert(/aria-label="Project for these samples"/.test(dialog),
+    "and renders a picker for it (#132)");
   // #86 — the per-sample rows are the primary input, so no checkbox gates them
   // and the paste shortcut sits BELOW the list it fills.
   assert(!/perSample/.test(dialog), "the per-sample rows must not be behind a checkbox (#86)");

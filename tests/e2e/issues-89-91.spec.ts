@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -31,9 +31,11 @@ async function addProject(page: Page, code: string, name: string) {
   await page.getByRole("button", { name: "Save Project" }).click();
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode: string) {
+  // #132 — the dialog asks which project rather than inheriting the sidebar's
+  // selection, so every caller has to say. Named explicitly even when only one
+  // project exists, because that is the thing the test means.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
 }
@@ -68,8 +70,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
 // started, which is exactly when the old planned-only rule refused to help.
 test("#91: a sample can be added to and removed from a RUNNING processor run", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "in the run");
-  await addSample(page, "forgotten");
+  await addSample(page, "in the run", "EE");
+  await addSample(page, "forgotten", "EE");
   await completePreprocessing(page, "EE-1");
   await completePreprocessing(page, "EE-2");
 
@@ -123,8 +125,8 @@ test("#91: a sample can be added to and removed from a RUNNING processor run", a
 // around the guard that starting one already enforces.
 test("#91: a half-preprocessed sample is not offered for a running run", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "ready to go");
-  await addSample(page, "still in fixative");
+  await addSample(page, "ready to go", "EE");
+  await addSample(page, "still in fixative", "EE");
   await completePreprocessing(page, "EE-1");
   // EE-2 gets only the first step — it is not eligible for the processor.
   await page.getByText("EE-2", { exact: true }).first().click();
@@ -147,9 +149,13 @@ test("#91: a half-preprocessed sample is not offered for a running run", async (
 // #89 — Pre-processing is where every sample enters, so it fills up fastest.
 test("#89: Pre-processing filters by project and sorts", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "enthesis one");
+  await addSample(page, "enthesis one", "EE");
   await addProject(page, "CART", "Cartilage Repair");
-  await addSample(page, "cartilage one");
+  await addSample(page, "cartilage one", "CART");
+  // #131 — creating a project selects it, and the selection now filters the
+  // board. This test is about the COLUMN control, so it starts from a board
+  // that is showing everything.
+  await page.getByRole("button", { name: "All projects" }).click();
 
   const preprocessing = page
     .locator("div.rounded-lg")
@@ -178,9 +184,10 @@ test("#89: Pre-processing filters by project and sorts", async ({ page }) => {
 // the column silently filters itself down to nothing.
 test("#89: the pre-processing filter clears itself when its project empties", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "enthesis one");
+  await addSample(page, "enthesis one", "EE");
   await addProject(page, "CART", "Cartilage Repair");
-  await addSample(page, "cartilage one");
+  await addSample(page, "cartilage one", "CART");
+  await page.getByRole("button", { name: "All projects" }).click();
 
   const preprocessing = page
     .locator("div.rounded-lg")

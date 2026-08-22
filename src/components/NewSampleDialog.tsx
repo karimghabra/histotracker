@@ -27,14 +27,35 @@ function codeRange(first: string, quantity: number): string {
   return `${first} – ${codeAt(first, quantity - 1)}`;
 }
 
+/**
+ * #132 — the project is chosen HERE, not before the dialog opens.
+ *
+ * It used to be implicit: whatever was selected in the sidebar became the parent
+ * of everything the dialog created, and the only sign of it was three letters in
+ * the title bar. That is the same failure mode as #84 — a selection made for one
+ * reason (looking at a project) silently deciding another (where new samples are
+ * filed) — and a batch of twenty filed under the wrong project is not something
+ * anybody notices on the day.
+ *
+ * Nothing is preselected when there is a choice to make, which is deliberate: a
+ * prefilled picker is one Enter away from being no question at all. A lab with a
+ * single project has no choice to make, so that one is filled in.
+ */
 export function NewSampleDialog({
-  project,
+  projects,
+  initialProjectId,
   onClose,
 }: {
-  project: Project;
+  projects: Project[];
+  initialProjectId: number | null;
   onClose: () => void;
 }) {
   const { createSamples } = useActions();
+  // Preselect only when there is nothing to choose between (see the note above).
+  const [projectId, setProjectId] = useState<number | null>(
+    projects.length === 1 ? projects[0].id : projects.length > 1 ? null : initialProjectId,
+  );
+  const project = projects.find((p) => p.id === projectId) ?? null;
   const { data: catalog = [] } = useAssayCatalog();
   const { data: settings = DEFAULT_SETTINGS } = useAppSettings();
   const [saving, setSaving] = useState(false);
@@ -74,8 +95,21 @@ export function NewSampleDialog({
   const [overallNotes, setOverallNotes] = useState("");
 
   useEffect(() => {
-    nextSampleCode(project.id, project.code).then(setPreviewCode);
-  }, [project.id, project.code]);
+    if (!project) {
+      setPreviewCode("—");
+      return;
+    }
+    // The dialog stays open while the picker changes, so a slow lookup for the
+    // project you just left must not land after the one you just chose and
+    // relabel the batch. Anything that resolves after a switch is ignored.
+    let current = true;
+    nextSampleCode(project.id, project.code).then((code) => {
+      if (current) setPreviewCode(code);
+    });
+    return () => {
+      current = false;
+    };
+  }, [project]);
 
   // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
   const previewLabel = codeRange(previewCode, quantity);
@@ -97,8 +131,9 @@ export function NewSampleDialog({
   const shared = description.trim();
   const resolvedDescription = (index: number) =>
     composeDescription(shared, descriptions[index] ?? "");
-  const missingCodes =
-    quantity > 1
+  const missingCodes = !project
+    ? []
+    : quantity > 1
       ? Array.from({ length: quantity }, (_, i) => i)
           .filter((i) => !resolvedDescription(i))
           .map((i) => displayCode(codeAt(previewCode, i)))
@@ -124,7 +159,7 @@ export function NewSampleDialog({
   async function save() {
     // Belt and braces: the button is disabled, but a batch created with a blank
     // description is unrecoverable, so the guard does not rely on the UI alone.
-    if (missingCodes.length > 0) return;
+    if (missingCodes.length > 0 || !project) return;
     setSaving(true);
     await createSamples(
       {
@@ -152,7 +187,25 @@ export function NewSampleDialog({
   }
 
   return (
-    <Modal title={`New Sample · ${project.code}`} onClose={onClose} width="max-w-lg">
+    <Modal title="New Sample" onClose={onClose} width="max-w-lg">
+      {/* First field in the dialog, because it is the first decision: everything
+          below it — the sample IDs, the numbering — depends on the answer. */}
+      <Field label="Project">
+        <Select
+          aria-label="Project for these samples"
+          value={projectId == null ? "" : String(projectId)}
+          onChange={(event) =>
+            setProjectId(event.target.value === "" ? null : Number(event.target.value))
+          }
+        >
+          <option value="">Which project are these samples for…</option>
+          {projects.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.code} · {candidate.name}
+            </option>
+          ))}
+        </Select>
+      </Field>
       <div className="grid grid-cols-[1fr_6rem] gap-x-4">
         <Field label={quantity > 1 ? "Sample IDs" : "Next Sample ID"}>
           <TextInput value={previewLabel} readOnly className="bg-surface font-semibold" />
@@ -342,8 +395,14 @@ export function NewSampleDialog({
         <Button
           variant="primary"
           onClick={save}
-          disabled={saving || missingCodes.length > 0}
-          title={missingCodes.length > 0 ? "Every sample needs a description" : undefined}
+          disabled={saving || !project || missingCodes.length > 0}
+          title={
+            !project
+              ? "Choose the project these samples belong to"
+              : missingCodes.length > 0
+                ? "Every sample needs a description"
+                : undefined
+          }
         >
           Create {quantity > 1 ? `${quantity} Samples` : "Sample"}
         </Button>
