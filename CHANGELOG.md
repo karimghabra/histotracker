@@ -3,8 +3,9 @@
 ## 0.14.4 - unreleased
 
 Coverage, not behaviour. Nothing in the app changes; two shipped issues that had
-no test of any kind now have one, and a real defect found while writing them is
-recorded where it will be seen.
+no test of any kind now have one, and a suspected defect found while writing them
+turned out not to be one — which is recorded here, because the reasoning that
+made it look real is the part worth keeping.
 
 - **#121 and #122 had no automated coverage at all.** Both are pure screen
   changes — one control deleted, one block of markup moved — which is exactly the
@@ -16,19 +17,26 @@ recorded where it will be seen.
   `relabelSlideToSample` is still exported, because the issue removed the
   affordance and deliberately kept the capability — an assertion satisfied by
   deleting the function would be the wrong fix passing the right test.
-- **A stain requested against a legacy `sectioned` group asks for a recut it does
-  not need.** #125's rule is that a fresh cut is right only when the block is not
-  already due for cutting AND no extra is free. A group at `sectioned` has been
-  cut and can still hold free extras, but the extras query excludes that stage,
-  so the request flags the block instead of taking glass off the shelf. Gated as
-  `knownOpen`, not fixed: `sectioned` is unreachable in this build — a card
-  leaving Needs Sectioning goes straight to `stain_requested` — so it can only
-  exist in a database written by an older build, and changing what happens to
-  live lab data is a decision to make deliberately rather than in passing.
-- A companion invariant pins the two exclusions that are *correct*, so the open
-  gate above cannot be closed by simply loosening the filter. Verified by doing
-  exactly that: dropping the stages from the query turns the gate green and
-  breaks three other checks, including this one.
+- **A finding about #125, investigated and retracted.** A stain requested against
+  a `sectioned` cut group appeared to ask for a recut it did not need: the group
+  has been cut, it can hold free extras, and the request still flags the block.
+  It is not a defect. `sectioned` sits *before* `assignment_required` in the
+  workflow, so a slide labelled "extra" there has been cut but not yet
+  dispositioned — surfacing it is issue #12 verbatim. Two experiments settled it:
+  rewriting the filter to ask "has this been cut?" makes the case pass and breaks
+  #12, and removing the three excluded stages one at a time shows `sectioned`
+  carries no weight at all — nothing fails without it, because no build can
+  produce a group at that stage holding slides still marked as extras.
+- What survives is an invariant naming the rule the filter actually encodes: an
+  extra is not inventory until its group reaches `stain_requested`, the point
+  where disposition is settled. The excluded stages are exactly the earlier ones.
+  It reads the stage order out of `src/lib/stages.ts` rather than retyping it, so
+  a reordering of the workflow fails here instead of passing against a private
+  copy. Revert-verified: dropping `needs_sectioning` from the filter fails it.
+- A guard for the unreachable case was written and deleted — it could not be made
+  to fail, the same way `rack-numbers-are-unique` could not in 0.14.3. The
+  reasoning is recorded next to the invariant so the next person does not
+  rediscover it as a bug.
 
 ## 0.14.3 - 2026-08-17
 

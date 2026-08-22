@@ -44,7 +44,7 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
-## 0.14.4 — the two issues that shipped with no test, and what writing one found
+## 0.14.4 — the two issues that shipped with no test, and a finding that did not survive
 
 `#121`–`#128` all shipped in 0.14.0–0.14.3, and six of them carry gates. **Two
 did not: #121 and #122.** Both are pure screen changes — a control deleted and a
@@ -60,34 +60,49 @@ then is the missing control asserted. It also checks that
 deliberately kept the capability, so a "fix" that deleted the function would
 otherwise satisfy the test while doing the wrong thing.
 
-### One real defect, found while writing them — OPEN
+### A suspected defect in #125, investigated and RETRACTED
 
-**A stain requested against a `sectioned` cut group asks for a recut it does not
-need.** #125's rule is that a fresh cut is right only when the block is not
-already due for cutting AND no extra is free. The extras query in
-`requestStainForSample` excludes three section stages, and two of those
-exclusions are correct — at `needs_sectioning` an extra is a plan rather than
-glass (#12/#95), and at `assignment_required` the extras have already been
-converted out of `purpose = 'extra'`, so there is nothing to take. `sectioned`
-is the odd one: the cut happened, the glass is real and free, and the request
-still flags the block for a second trip to the microtome.
+While writing the above I reported that a stain requested against a `sectioned`
+cut group asks for a recut it does not need — the group has been cut, it can hold
+free extras, and `requestStainForSample` still flags the block. It is not a
+defect, and the way it fell apart is the useful part.
 
-Verified against the real `db.ts`, not only the harness port: a group advanced
-through the actual `updateSectionStage` to `sectioned`, holding three free
-extras, answers `target: "block"`.
+**The stage order is the answer.** `SECTION_STAGES` runs `needs_sectioning` (0),
+`sectioned` (1), `assignment_required` (2), `stain_requested` (3). `sectioned`
+comes *before* assignment, so a slide labelled "extra" at that stage has been cut
+but not yet dispositioned — nobody has said which slide is a stain and which is
+spare. The three excluded stages are exactly the ones before `stain_requested`,
+which makes the filter one rule, not three special cases: **an extra is not
+inventory until its group's disposition is settled.**
 
-**Gated `knownOpen`, not fixed.** `sectioned` is unreachable in this build — a
-card leaving Needs Sectioning goes straight to `stain_requested` (#34/#38), and
-the only remaining writer of that stage is `relabelSlideToSample`, whose
-affordance #121 removed. So it can only exist in a database written by an older
-build, which makes the fix a decision about live lab data rather than a code
-tidy. The section_request stages in the database on this machine are one row at
-`ready_for_imaging` — nothing affected here, but that is one machine.
+Two experiments, both run:
 
-A companion invariant pins the two exclusions that ARE correct, so the open gate
-cannot be closed by loosening the filter. Verified by doing exactly that:
-dropping the stages from the query turns the gate green and breaks three other
-checks.
+1. Rewriting the filter to ask `stage_cut_at IS NOT NULL` — "has this glass been
+   cut?" — makes the suspected case pass and **breaks issue #12**, which exists
+   precisely to keep provisional extras out of the inventory.
+2. Removing the three stages one at a time says which carry weight. Without
+   `needs_sectioning`, three checks fail. Without `assignment_required`, #12
+   fails. Without **`sectioned`, nothing fails at all** — it is unreachable from
+   either direction: a legacy group never holds slides at
+   `current_stage = 'extra'` (assignment set them to `'cut'`), and a modern group
+   never reaches that stage.
+
+**How the false finding was manufactured**, since the next one will be built the
+same way: the probe advanced a MODERN pre-assigned cut group into a LEGACY
+pre-assignment stage. No build has ever written that combination. The state
+looked like a defect because it was incoherent, not because the app was wrong.
+The first version of the probe was worse still — it planted the stage with a raw
+`UPDATE`, producing a group that claimed to be cut while its slides carried no
+cut date.
+
+**No migration is needed, and none should be written.** The behaviour is correct
+for every state any build can produce, so there is nothing to translate.
+
+A guard for the unreachable case was written and then deleted: it could not be
+made to fail, the same as `rack-numbers-are-unique` in 0.14.3. What replaces it
+is an invariant that names the disposition rule and reads the stage order out of
+`src/lib/stages.ts` rather than retyping it — revert-verified by dropping
+`needs_sectioning` from the filter and watching it fail.
 
 ### A correction to the audit banner above
 

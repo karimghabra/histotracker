@@ -32,6 +32,22 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(HERE, "..", "src-tauri", "migrations");
+
+/**
+ * The section-stage ORDER, read out of `src/lib/stages.ts` rather than retyped.
+ *
+ * Retyping it would fork it, and a forked constant compared against itself
+ * tests nothing — the trap that produced a vacuous rack-number check in 0.14.3.
+ * Parsing the real file means a reordering of the workflow surfaces here as a
+ * failure, which is the whole reason to assert on it.
+ */
+const SECTION_STAGE_ORDER_PORT = (() => {
+  const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
+  const block = src.slice(src.indexOf("export const SECTION_STAGES"));
+  const keys = [...block.slice(0, block.indexOf("];")).matchAll(/key:\s*"([a-z_]+)"/g)].map((m) => m[1]);
+  if (keys.length < 4) throw new Error("could not read SECTION_STAGES out of stages.ts");
+  return Object.fromEntries(keys.map((k, i) => [k, i]));
+})();
 const VERBOSE = process.argv.includes("--verbose");
 
 // ---------------------------------------------------------------------------
@@ -3822,80 +3838,65 @@ invariant("a cut that has already happened is not given new agents", () => {
 });
 
 
-issue(125, "a legacy 'sectioned' group with free extras is not sent back to the microtome", () => {
+invariant("an extra is not real until its cut group has been dispositioned", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
-  const { id } = api.addSample(p, "EE", "cut under an older build");
+  const { id } = api.addSample(p, "EE", "extras through disposition");
   api.markEmbedded(id);
+  // Two groups, the way a cut plan is written: the stain, and the spare glass
+  // that comes off the same block.
   const [section, extrasGroup] = api.createSectionRequests(id, [
     { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
     { duplicates: 3, stains: "" },
   ]);
 
-  // Plant the state an OLDER build left behind. `sectioned` is not reachable in
-  // this build — a card dragged out of Needs Sectioning goes straight to
-  // `stain_requested` (#34/#38) — but it is still one of the three stages the
-  // Needs Sectioning column renders (stages.ts), and a database in use since
-  // before that change can hold rows in it. Planted the way
-  // updateSectionStage(id, 'sectioned') writes it: the cut IS stamped, because
-  // the group has left the queue, and the extras stay free.
-  // A sentinel date the app cannot produce, so "this was planted" stays legible
-  // in any dump this gate ever prints.
-  const CUT_AT = "2019-07-02 03:11";
-  for (const sid of [section, extrasGroup]) {
-    api.run(`UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`,
-            [CUT_AT, sid]);
-    api.run(`UPDATE section_requests SET current_stage = 'sectioned',
-               stage_sectioned_at = COALESCE(stage_sectioned_at, ?) WHERE id = ?`, [CUT_AT, sid]);
-  }
-  eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
-               WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [id]).c,
-     3, "three extras are cut, free, and sitting on the shelf");
+  // The rule the extras filter encodes — and it is ONE rule, not a list of
+  // special cases. The excluded stages are exactly those that come BEFORE
+  // `stain_requested`, which is where a slide's disposition is finally settled.
+  // Until then "extra" is a label somebody may still change, so the glass is not
+  // inventory and cannot fulfil a stain request.
+  eq(SECTION_STAGE_ORDER_PORT.needs_sectioning, 0, "needs_sectioning is first");
+  eq(SECTION_STAGE_ORDER_PORT.sectioned, 1, "sectioned is BEFORE assignment, not after");
+  eq(SECTION_STAGE_ORDER_PORT.assignment_required, 2, "assignment comes next");
+  eq(SECTION_STAGE_ORDER_PORT.stain_requested, 3, "and disposition is settled here");
 
-  // #125: a recut is right ONLY when the block is not due for cutting AND no
-  // extra is free. Here glass exists, so the request should consume one.
-  const result = api.requestStainForSample(id, "stain", "PAS");
+  eq(api.listExtraSlides().length, 0, "queued: nothing on the shelf yet");
+  eq(api.requestStainForSample(id, "stain", "PAS").target, "cut",
+     "and a request joins the waiting cut rather than spending a planned extra");
 
-  eq(result.target, "extra", "the request takes an extra that has already been cut");
-  eq(api.get(`SELECT preselected_stains AS s FROM samples WHERE id = ?`, [id]).s, "",
-     "and nobody is sent back to the microtome for glass that is already on the shelf");
-}, { knownOpen: true });
-
-// Why the gate above is knownOpen rather than a fix.
-//
-// The extras query in requestStainForSample excludes three section stages, and
-// two of those exclusions are right: at `needs_sectioning` an extra is a PLAN,
-// not glass (#12/#95), and at `assignment_required` the extras have already
-// been converted out of `purpose = 'extra'` so there is nothing to take. Only
-// `sectioned` is wrong — the cut happened, the glass is real and free, and the
-// request still flags the block for a second trip to the microtome.
-//
-// Left open deliberately: `sectioned` is unreachable in this build, so the fix
-// only ever changes behaviour on databases written by an older one, and that is
-// a decision about live lab data rather than a code tidy. Verified against the
-// real db.ts, not just this port — a group advanced through the actual
-// updateSectionStage to `sectioned`, holding three free extras, answers
-// "target: block".
-
-invariant("the OTHER two needs-sectioning stages are excluded for good reasons", () => {
-  const api = makeApi(freshDb());
-  const p = api.seedProject();
-  const { id } = api.addSample(p, "EE", "queued, not cut");
-  api.markEmbedded(id);
-  api.createSectionRequests(id, [
-    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
-    { duplicates: 3, stains: "" },
-  ]);
-
-  // Still in the queue: the extras are a plan on paper. Taking one would put
-  // uncut glass into a staining rack, which is what the filter exists to stop.
-  // The request must join the waiting cut instead — never consume an extra.
-  const result = api.requestStainForSample(id, "stain", "PAS");
-  eq(result.target, "cut", "a queued block joins its cut rather than spending a planned extra");
-  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE purpose = 'extra' AND current_stage = 'extra'
-               AND section_request_id IN (SELECT id FROM section_requests WHERE sample_id = ?)`, [id]).c,
-     3, "and all three planned extras are still planned");
+  api.startAssayWork(section);
+  api.startAssayWork(extrasGroup);
+  eq(api.listExtraSlides().length, 3, "past disposition the extras are real glass");
+  eq(api.requestStainForSample(id, "ihc", "CD31").target, "extra",
+     "and a request now takes one instead of asking for a second cut");
 });
+
+// A retracted finding, kept because the mistake is the instructive part.
+//
+// A previous pass gated `sectioned` as a BUG: such a group has been cut, it can
+// hold free extras, and requestStainForSample still flags the block for a fresh
+// cut. Two experiments killed it.
+//
+// 1. Rewriting the filter to ask "has this glass been cut?" instead of naming
+//    stages makes that gate pass and BREAKS issue #12 — because `sectioned`
+//    sits before `assignment_required`, so a slide labelled "extra" there has
+//    been cut but not yet dispositioned. Surfacing it is #12 verbatim.
+// 2. Removing the three stages one at a time says which are load-bearing:
+//    without `needs_sectioning`, three checks fail; without
+//    `assignment_required`, #12 fails; without **`sectioned`, nothing fails at
+//    all**. It is unreachable either way — a legacy group never carries slides
+//    at current_stage='extra' (assignment set them to 'cut'), and a modern group
+//    never reaches that stage. Harmless, and impossible to exercise.
+//
+// So there is no defect here and nothing to migrate. The trap was building the
+// test state by advancing a MODERN pre-assigned group into a LEGACY
+// pre-assignment stage — a combination no build has written. It looked like a
+// defect because it was incoherent, not because the app was wrong.
+//
+// A guard was written for the unreachable case and deleted: it could not be
+// made to fail, exactly like `rack-numbers-are-unique` in 0.14.3. The ordering
+// assertions above are what remain, because they are what makes the exclusions
+// read as one rule instead of three arbitrary strings.
 
 
 issue(123, "a full staining rack is left alone and the next slide starts a fresh one", () => {
