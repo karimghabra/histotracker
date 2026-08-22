@@ -1,6 +1,36 @@
 # Changelog
 
-## 0.14.3 - unreleased
+## 0.14.4 - unreleased
+
+Coverage, not behaviour. Nothing in the app changes; two shipped issues that had
+no test of any kind now have one, and a real defect found while writing them is
+recorded where it will be seen.
+
+- **#121 and #122 had no automated coverage at all.** Both are pure screen
+  changes — one control deleted, one block of markup moved — which is exactly the
+  kind of change that reads as self-evidently done in a diff and quietly comes
+  back the next time somebody edits around it. `tests/e2e/issues-121-122.spec.ts`
+  covers both, and both were revert-verified: the checklist was moved back below
+  the slide list and the refile control was put back, and each test was watched
+  failing before being trusted. The #121 test also asserts that
+  `relabelSlideToSample` is still exported, because the issue removed the
+  affordance and deliberately kept the capability — an assertion satisfied by
+  deleting the function would be the wrong fix passing the right test.
+- **A stain requested against a legacy `sectioned` group asks for a recut it does
+  not need.** #125's rule is that a fresh cut is right only when the block is not
+  already due for cutting AND no extra is free. A group at `sectioned` has been
+  cut and can still hold free extras, but the extras query excludes that stage,
+  so the request flags the block instead of taking glass off the shelf. Gated as
+  `knownOpen`, not fixed: `sectioned` is unreachable in this build — a card
+  leaving Needs Sectioning goes straight to `stain_requested` — so it can only
+  exist in a database written by an older build, and changing what happens to
+  live lab data is a decision to make deliberately rather than in passing.
+- A companion invariant pins the two exclusions that are *correct*, so the open
+  gate above cannot be closed by simply loosening the filter. Verified by doing
+  exactly that: dropping the stages from the query turns the gate green and
+  breaks three other checks, including this one.
+
+## 0.14.3 - 2026-08-17
 
 Mostly harness. The rack work in 0.14.0 shipped with unit and e2e coverage and no
 fuzz coverage at all — the newest code in the app was the least walked — so the
@@ -23,7 +53,7 @@ explorer was widened to reach it, then run hard at it.
   `a Alcian Blue rack holds 18`. Pluralised, since an "a/an" guess breaks the
   moment the lab adds an agent starting with a vowel.
 
-## 0.14.2 - unreleased
+## 0.14.2 - 2026-08-17
 
 Two ways a retracted cut could rewrite history, both found by the explorer while
 verifying 0.14.1, and both producing the same impossible record: a slide stained
@@ -53,7 +83,7 @@ Also in the harness, which had been claiming more than it delivered:
 - The explorer dumps the offending rows and the last twelve moves on the first
   broken invariant. "Somewhere in these ten moves" is not a lead.
 
-## 0.14.1 - unreleased
+## 0.14.1 - 2026-08-17
 
 - **The per-slide "Move…" dropdown is gone from the rack panel.** It put a select
   box on every row — twenty-four of them on a full rack — for an action that is
@@ -72,7 +102,7 @@ Also in the harness, which had been claiming more than it delivered:
   renumber the survivors each time a rack finished — and a rack somebody wrote
   "H&E 2" on in marker would silently become H&E 1.
 
-## 0.14.0 - unreleased
+## 0.14.0 - 2026-08-17
 
 No schema change — the two new settings are rows in `app_settings`, which every
 build since 0.8 already ignores what it does not recognise, so a 0.13 viewer
@@ -124,7 +154,7 @@ work itself.
   rewriting which block a slide came from does not belong in the everyday log
   view.
 
-## 0.13.3 - unreleased
+## 0.13.3 - 2026-08-13
 
 No schema change. A third stress harness — **the explorer** — which does the one
 thing the second one couldn't: it *looks at the screen*. Ten walkers, twenty move
@@ -162,7 +192,7 @@ completely false alarms: the stress suites no longer reuse a running dev server
 like it wiped everything), and the view checks now force a real refresh before
 reading the screen.
 
-## 0.13.2 - unreleased
+## 0.13.2 - 2026-08-13
 
 No schema change. Six more defects, found by pointing **many random walkers at
 one large board** — 150 blocks, ~400 slides — and checking all 19 invariants

@@ -3822,6 +3822,82 @@ invariant("a cut that has already happened is not given new agents", () => {
 });
 
 
+issue(125, "a legacy 'sectioned' group with free extras is not sent back to the microtome", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "cut under an older build");
+  api.markEmbedded(id);
+  const [section, extrasGroup] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    { duplicates: 3, stains: "" },
+  ]);
+
+  // Plant the state an OLDER build left behind. `sectioned` is not reachable in
+  // this build — a card dragged out of Needs Sectioning goes straight to
+  // `stain_requested` (#34/#38) — but it is still one of the three stages the
+  // Needs Sectioning column renders (stages.ts), and a database in use since
+  // before that change can hold rows in it. Planted the way
+  // updateSectionStage(id, 'sectioned') writes it: the cut IS stamped, because
+  // the group has left the queue, and the extras stay free.
+  // A sentinel date the app cannot produce, so "this was planted" stays legible
+  // in any dump this gate ever prints.
+  const CUT_AT = "2019-07-02 03:11";
+  for (const sid of [section, extrasGroup]) {
+    api.run(`UPDATE slides SET stage_cut_at = COALESCE(stage_cut_at, ?) WHERE section_request_id = ?`,
+            [CUT_AT, sid]);
+    api.run(`UPDATE section_requests SET current_stage = 'sectioned',
+               stage_sectioned_at = COALESCE(stage_sectioned_at, ?) WHERE id = ?`, [CUT_AT, sid]);
+  }
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+               WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [id]).c,
+     3, "three extras are cut, free, and sitting on the shelf");
+
+  // #125: a recut is right ONLY when the block is not due for cutting AND no
+  // extra is free. Here glass exists, so the request should consume one.
+  const result = api.requestStainForSample(id, "stain", "PAS");
+
+  eq(result.target, "extra", "the request takes an extra that has already been cut");
+  eq(api.get(`SELECT preselected_stains AS s FROM samples WHERE id = ?`, [id]).s, "",
+     "and nobody is sent back to the microtome for glass that is already on the shelf");
+}, { knownOpen: true });
+
+// Why the gate above is knownOpen rather than a fix.
+//
+// The extras query in requestStainForSample excludes three section stages, and
+// two of those exclusions are right: at `needs_sectioning` an extra is a PLAN,
+// not glass (#12/#95), and at `assignment_required` the extras have already
+// been converted out of `purpose = 'extra'` so there is nothing to take. Only
+// `sectioned` is wrong — the cut happened, the glass is real and free, and the
+// request still flags the block for a second trip to the microtome.
+//
+// Left open deliberately: `sectioned` is unreachable in this build, so the fix
+// only ever changes behaviour on databases written by an older one, and that is
+// a decision about live lab data rather than a code tidy. Verified against the
+// real db.ts, not just this port — a group advanced through the actual
+// updateSectionStage to `sectioned`, holding three free extras, answers
+// "target: block".
+
+invariant("the OTHER two needs-sectioning stages are excluded for good reasons", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "queued, not cut");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    { duplicates: 3, stains: "" },
+  ]);
+
+  // Still in the queue: the extras are a plan on paper. Taking one would put
+  // uncut glass into a staining rack, which is what the filter exists to stop.
+  // The request must join the waiting cut instead — never consume an extra.
+  const result = api.requestStainForSample(id, "stain", "PAS");
+  eq(result.target, "cut", "a queued block joins its cut rather than spending a planned extra");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE purpose = 'extra' AND current_stage = 'extra'
+               AND section_request_id IN (SELECT id FROM section_requests WHERE sample_id = ?)`, [id]).c,
+     3, "and all three planned extras are still planned");
+});
+
+
 issue(123, "a full staining rack is left alone and the next slide starts a fresh one", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();

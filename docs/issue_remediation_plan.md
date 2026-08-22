@@ -44,6 +44,60 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## 0.14.4 — the two issues that shipped with no test, and what writing one found
+
+`#121`–`#128` all shipped in 0.14.0–0.14.3, and six of them carry gates. **Two
+did not: #121 and #122.** Both are pure screen changes — a control deleted and a
+block of markup moved — and both were verified by reading the JSX, which is the
+same standard the audit banner above already recorded as insufficient. They are
+covered now, in `tests/e2e/issues-121-122.spec.ts`, and both were watched failing
+with their change undone before being trusted.
+
+The #121 test needs a note. It asserts an ABSENCE, which passes just as happily
+when the panel never rendered, so the slide panel is proved open first and only
+then is the missing control asserted. It also checks that
+`relabelSlideToSample` is still exported: #121 removed the affordance and
+deliberately kept the capability, so a "fix" that deleted the function would
+otherwise satisfy the test while doing the wrong thing.
+
+### One real defect, found while writing them — OPEN
+
+**A stain requested against a `sectioned` cut group asks for a recut it does not
+need.** #125's rule is that a fresh cut is right only when the block is not
+already due for cutting AND no extra is free. The extras query in
+`requestStainForSample` excludes three section stages, and two of those
+exclusions are correct — at `needs_sectioning` an extra is a plan rather than
+glass (#12/#95), and at `assignment_required` the extras have already been
+converted out of `purpose = 'extra'`, so there is nothing to take. `sectioned`
+is the odd one: the cut happened, the glass is real and free, and the request
+still flags the block for a second trip to the microtome.
+
+Verified against the real `db.ts`, not only the harness port: a group advanced
+through the actual `updateSectionStage` to `sectioned`, holding three free
+extras, answers `target: "block"`.
+
+**Gated `knownOpen`, not fixed.** `sectioned` is unreachable in this build — a
+card leaving Needs Sectioning goes straight to `stain_requested` (#34/#38), and
+the only remaining writer of that stage is `relabelSlideToSample`, whose
+affordance #121 removed. So it can only exist in a database written by an older
+build, which makes the fix a decision about live lab data rather than a code
+tidy. The section_request stages in the database on this machine are one row at
+`ready_for_imaging` — nothing affected here, but that is one machine.
+
+A companion invariant pins the two exclusions that ARE correct, so the open gate
+cannot be closed by loosening the filter. Verified by doing exactly that:
+dropping the stages from the query turns the gate green and breaks three other
+checks.
+
+### A correction to the audit banner above
+
+Point 2 — "Playwright does not run in CI" — is no longer true.
+`.github/workflows/test.yml` runs `pnpm exec playwright test` on every push, so
+the new spec is enforced rather than merely present. Left in place above because
+it was true when written, and the banner is a record.
+
+---
+
 Covers the 11 open issues in `karimghabra/histotracker` (as of 2026-07-17).
 Each entry is anchored to the real code, states the root cause, the proposed
 fix, blast radius, effort, and how it's tested. A runnable regression harness
