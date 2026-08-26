@@ -301,17 +301,36 @@ export function Board({
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
   const [imagingProjectFilter, setImagingProjectFilter] = useViewPref<string>("board.imagingProjectFilter", "all");
   const [imagingStainFilter, setImagingStainFilter] = useViewPref<string>("board.imagingStainFilter", "all");
-  // #131 — the sidebar selection sets every column's project filter.
+  // #131 — CHANGING the sidebar selection sets every column's project filter.
   //
-  // It SETS them rather than replacing them: each column keeps its own control,
-  // so "show me all of Staining while I work through one project's Embedded
-  // Inventory" is still reachable. Picking a project (or All Projects) is the
-  // broad stroke; the per-column dropdown is the exception you make afterwards.
+  // It SETS rather than replaces: each column keeps its own control, so "show me
+  // all of Staining while I work through one project's Embedded Inventory" is
+  // still reachable. Picking a project is the broad stroke; the per-column
+  // dropdown is the exception you make afterwards.
   //
-  // Keyed on the value, not on a mount flag, so the effect is a no-op until the
-  // selection actually changes — otherwise every re-render would stamp over an
-  // exception the user had just made.
+  // The mount run is skipped, and that is the whole subtlety. `useEffect` with a
+  // dependency array still runs once on mount, and the Board REMOUNTS every time
+  // you come back from the Logs — so without this guard, a trip to the Logs
+  // stamped the sidebar's selection over the column filter you had just set, and
+  // #104 ("filters survive a view switch") was quietly broken. It survived the
+  // local run by timing and failed all three attempts in CI.
+  //
+  // The consequence, stated because it is a real trade: on a fresh load the
+  // columns show whatever was stored for them, not whatever the sidebar restored
+  // to. That is the correct half to lose. #104 is about a choice the user made
+  // by hand surviving; #131 is about what happens when they PICK a project, and
+  // picking is an action, not a restore.
+  const lastSelection = useRef<string | null>(null);
   useEffect(() => {
+    const selection = `${projectFilterId}|${projectFilterCode}`;
+    if (lastSelection.current === null) {
+      // First render of this Board instance: adopt nothing, remember where we
+      // came in at, and let the stored column preferences stand.
+      lastSelection.current = selection;
+      return;
+    }
+    if (lastSelection.current === selection) return;
+    lastSelection.current = selection;
     setEmbeddedFilter(projectFilterId);
     setPreprocessingFilter(projectFilterId);
     setNeedsEmbeddingFilter(projectFilterId);

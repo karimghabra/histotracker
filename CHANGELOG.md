@@ -1,6 +1,34 @@
 # Changelog
 
-## 0.15.0 - unreleased
+## 0.15.1 - unreleased
+
+One fix, for a regression that 0.15.0 shipped with. **0.15.0 is published and
+should not be used**; this supersedes it.
+
+- **Coming back from the Logs wiped the column filter you had just set.** #131's
+  effect stamps the sidebar's selection onto every column filter, and a
+  `useEffect` with a dependency array still runs once on mount — so a trip to the
+  Logs and back, which remounts the Board, stamped the selection over a filter
+  the user had chosen by hand. That is #104 ("filters survive a view switch")
+  broken by the change meant to sit beside it. The mount run is now skipped: the
+  selection is adopted when it CHANGES, and the stored column preferences stand
+  on their own at mount.
+
+  The trade is deliberate and worth stating: on a fresh load the columns show
+  what was stored for them rather than what the sidebar restored to. That is the
+  right half to lose. #104 is about a choice made by hand surviving; #131 is
+  about what happens when you PICK a project, and picking is an action, not a
+  restore.
+
+**How it got out**, which matters more than the fix. The comment above the effect
+claimed it was "a no-op until the selection actually changes" — describing the
+behaviour I intended rather than the code I had written. The local suite ran with
+`retries: 2` and the test failed once and passed on retry, and I recorded it as
+flaky and moved on. It then failed all three attempts in CI. A flaky result on a
+test adjacent to the change under test is a finding, not noise; the full run
+before a push now uses `--retries=0`.
+
+## 0.15.0 - 2026-08-26 (superseded by 0.15.1 — do not use)
 
 No schema change. The two new preferences (the sidebar's All Projects state and
 the Embedded Inventory cutting filter) are browser-local view state, not database
