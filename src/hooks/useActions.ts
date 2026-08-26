@@ -49,7 +49,6 @@ import {
   setStageTimestamp,
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
-  updateSampleDetails,
   updateSampleStage,
   updateSectioningPlan,
   updateSectionStage,
@@ -262,15 +261,6 @@ export function useActions() {
     [commit],
   );
 
-  const saveDetails = useCallback(
-    async (sampleId: number, input: Omit<NewSampleInput, "project_id">) => {
-      const before = await getSample(sampleId);
-      if (!before) return;
-      await commit(`Edit ${before.sample_code}`, () => updateSampleDetails(sampleId, input));
-    },
-    [commit],
-  );
-
   const editSampleNotes = useCallback(
     (sampleId: number, notes: string) => commit("Edit sample notes", () => setSampleNotes(sampleId, notes)),
     [commit],
@@ -319,12 +309,6 @@ export function useActions() {
   // removeSample/removeSamples are GONE (#83) — see the note where
   // deleteSample() used to live in db.ts. Use setArchived/setArchivedSamples.
 
-  const createSample = useCallback(
-    (input: NewSampleInput, projectCode: string) =>
-      commit("Create sample", () => addSample(input, projectCode)),
-    [commit],
-  );
-
   // Create N samples that share the same details (issue #1) as a single undo.
   /**
    * Create N samples as ONE undo entry. `descriptions[i]` overrides the shared
@@ -352,22 +336,6 @@ export function useActions() {
 
   // ---- Section requests (children of embedded blocks) ----------------------
 
-  const sendSectionsToCuttingForSamples = useCallback(
-    (sampleIds: number[], groups: Array<{ duplicates: number; stains?: string }>) =>
-      commit(
-        sampleIds.length > 1 ? `Send for cutting · ${sampleIds.length} blocks` : "Send for cutting",
-        async () => {
-          let total = 0;
-          for (const sampleId of sampleIds) {
-            const ids = await createSectionRequests(sampleId, groups);
-            total += ids.length;
-          }
-          return total;
-        },
-      ),
-    [commit],
-  );
-
   // Cut each block by its own reviewed/edited plan (the batch navigator sends
   // one entry per block; a single block is just one entry).
   const sendPlansToCutting = useCallback(
@@ -385,12 +353,6 @@ export function useActions() {
         return total;
       }),
     [commit],
-  );
-
-  const sendSectionsToCutting = useCallback(
-    (sampleId: number, groups: Array<{ duplicates: number; stains?: string }>) =>
-      sendSectionsToCuttingForSamples([sampleId], groups),
-    [sendSectionsToCuttingForSamples],
   );
 
   const moveSections = useCallback(
@@ -761,11 +723,6 @@ export function useActions() {
     [commit],
   );
 
-  const removeSection = useCallback(
-    (sectionId: number, reason: string) => removeSections([sectionId], reason),
-    [removeSections],
-  );
-
   const setExhausted = useCallback(
     async (sampleId: number, exhausted: boolean) => {
       const before = await getSample(sampleId);
@@ -861,7 +818,6 @@ export function useActions() {
   }, [invalidate]);
 
   return {
-    moveSample,
     moveSamples,
     startProcessingBatch,
     planProcessingBatch,
@@ -870,17 +826,13 @@ export function useActions() {
     moveProcessingBatch,
     editBatchStart,
     editTimestamp,
-    saveDetails,
     editSampleNotes,
     editSampleDescription,
     editSlideNotes,
     tagSlidesDepth,
     saveSectioningPlan,
-    createSample,
     createSamples,
     markAnalyzed: (sampleId: number) => moveSample(sampleId, "analyzed"),
-    sendSectionsToCutting,
-    sendSectionsToCuttingForSamples,
     sendPlansToCutting,
     moveSection,
     moveSections,
@@ -902,7 +854,6 @@ export function useActions() {
     removeSlideStacks,
     removeSlides,
     editSectionTimestamp,
-    removeSection,
     removeSections,
     markSectionAnalyzed: (sectionId: number) => moveSection(sectionId, "analyzed"),
     setExhausted,

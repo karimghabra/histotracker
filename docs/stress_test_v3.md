@@ -184,6 +184,15 @@ and `--ui` against a hand-started `pnpm dev:browser` is worth keeping. The rule
 is the same one either way — **if source changed since the server started, restart
 it before believing anything.**
 
+**It bit a fourth time in 0.15.2**, on the config left reusing, and the lesson is
+that writing the rule down is not the same as following it. A dead-code deletion
+came back with two failures, one reproducing 2/2 in isolation, and reverting the
+deletion made them go away — which is exactly what a real regression looks like.
+It was the server. From a cold start the same tree passed 116/116, and the bisect
+had by then re-deleted all 178 lines and watched them pass. The tell was there
+from the beginning: the failures appeared immediately after a large edit to files
+the running server had already loaded.
+
 **The view checks needed a real refresh.** The explorer calls `db.ts` directly,
 which is what buys its depth — and means nothing ever calls `useActions`'
 `invalidate()`, so React Query happily served the cache it filled before the walk

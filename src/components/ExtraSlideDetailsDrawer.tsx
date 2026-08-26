@@ -4,7 +4,7 @@ import type { Slide } from "../lib/types";
 import { useAssayCatalog } from "../hooks/useData";
 import { useActions } from "../hooks/useActions";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
-import { displayCode } from "../lib/utils";
+import { displayCode, parseAgent } from "../lib/utils";
 import { Button } from "./ui";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
 
@@ -48,11 +48,11 @@ export function ExtraSlideDetailsDrawer({
     setBusy(true);
     try {
       for (const slide of selectedSlides) {
-        const [assayType, ...nameParts] = assays[slide.id].split(":");
+        const { assayType, assayName } = parseAgent(assays[slide.id]);
         await assignExtraSlide({
           slideId: slide.id,
           assayType: assayType as "stain" | "ihc",
-          assayName: nameParts.join(":"),
+          assayName,
         });
       }
       setSelected(new Set());

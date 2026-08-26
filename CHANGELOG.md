@@ -1,6 +1,52 @@
 # Changelog
 
-## 0.15.1 - unreleased
+## 0.15.2 - unreleased
+
+Dead code, and one latent bug found while removing it. No behaviour change and
+no schema change.
+
+- **The per-row undo subsystem is gone — 178 lines.** Undo has restored whole
+  SQLite images since 0.13.0, and the row-by-row machinery it replaced was left
+  behind: nine `restore*`/`reinsert*` functions, four `*_RESTORE_COLUMNS` tables,
+  a `ChecklistRunSnapshot` interface and the reader that filled it. Every one had
+  zero callers, inside `db.ts` or out. `snapshotDb`, `restoreDb` and
+  `restoreDbPreservingSession` — the whole-image trio that undo actually uses —
+  are untouched, and the harness gate that pins their existence (#28) still
+  passes.
+- **Five superseded `useActions` exports are gone — 49 lines.** `saveDetails`,
+  `createSample`, `sendSectionsToCutting`, `sendSectionsToCuttingForSamples` and
+  `removeSection`, each replaced by a bulk version the UI already calls
+  (`editSampleDescription`, `createSamples`, `sendPlansToCutting`,
+  `moveSamples`). `moveSample` is NOT deleted — the export is, but `markAnalyzed`
+  calls it, which is the kind of thing a line count does not tell you.
+- **One parser for agent pairs, and it is the careful one.** A `<select>` of
+  agents carries the pair as one string, and the app had two conventions:
+  `stain::PAS` to pick from the catalogue, `stain:PAS` to move glass onto an
+  agent — with `SectionDetailsDrawer` using both, twenty lines apart, and nothing
+  saying so.
+
+  Both formats are kept, because they are option VALUES and moving them would
+  change the DOM for no gain. What changed is that all nine parse sites now share
+  one implementation. The five catalogue sites did
+  `const [type, name] = value.split("::")`, which **silently truncates any agent
+  name containing the separator** — a lab that names an agent `CD31::clone2` gets
+  `CD31` and no error. The four reassign sites rejoined the tail and were
+  correct. Splitting once at the first separator is right for both and cannot
+  truncate. Covered by three new unit tests, revert-verified against the
+  truncating version.
+
+**A note on how the verification went**, because it nearly cost a correct change.
+After the deletion the suite reported two failures, one of them reproducing 2/2
+in isolation, and reverting `db.ts` "fixed" it. It was the dev server: the e2e
+config sets `reuseExistingServer: true`, so a server that had hot-reloaded across
+the edits was serving stale modules. `docs/stress_test_v3.md` already records
+this trap and states the rule — *if source changed since the server started,
+restart it before believing anything* — and I applied it to the stress configs
+and not to this one. From a cold server the same tree passes 116/116. The
+deletion was never at fault, and a bisect had already got as far as re-deleting
+all 178 lines and watching them pass.
+
+## 0.15.1 - 2026-08-26
 
 One fix, for a regression that 0.15.0 shipped with. **0.15.0 is published and
 should not be used**; this supersedes it.

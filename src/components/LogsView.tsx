@@ -14,7 +14,7 @@ import {
   STAGE_LABELS,
   STAGE_ORDER,
 } from "../lib/stages";
-import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
+import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt, parseAgent, CATALOG_SEP } from "../lib/utils";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
 
@@ -824,11 +824,8 @@ export function LogsView() {
                       next === "extra"
                         ? ({ extra: true } as const)
                         : (() => {
-                            const [assayType, ...rest] = next.split(":");
-                            return {
-                              assayType: assayType as "stain" | "ihc",
-                              assayName: rest.join(":"),
-                            };
+                            const { assayType, assayName } = parseAgent(next);
+                            return { assayType: assayType as "stain" | "ihc", assayName };
                           })();
                     setActionError(null);
                     void reassignSlides(liveSelectedIds, target)
@@ -1168,7 +1165,7 @@ function FragmentRow({
                     type="button"
                     disabled={!stainToAdd}
                     onClick={async () => {
-                      const [assayType, assayName] = stainToAdd.split("::");
+                      const { assayType, assayName } = parseAgent(stainToAdd, CATALOG_SEP);
                       try {
                         const { pulled, joined, failed } = await requestStainForSamples(
                           [sample.id],

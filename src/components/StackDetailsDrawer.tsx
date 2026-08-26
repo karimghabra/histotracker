@@ -9,7 +9,7 @@ import { Button } from "./ui";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
-import { displayCode } from "../lib/utils";
+import { displayCode, parseAgent } from "../lib/utils";
 
 // Drying is no longer tracked (#80). The stage and its column are retained in
 // the schema (append-only contract, and legacy rows may still carry a stamp),
@@ -284,11 +284,8 @@ export function StackDetailsDrawer({
                     next === "extra"
                       ? ({ extra: true } as const)
                       : (() => {
-                          const [assayType, ...nameParts] = next.split(":");
-                          return {
-                            assayType: assayType as "stain" | "ihc",
-                            assayName: nameParts.join(":"),
-                          };
+                          const { assayType, assayName } = parseAgent(next);
+                          return { assayType: assayType as "stain" | "ihc", assayName };
                         })();
                   void run(async () => {
                     await reassignSlides(ids, target);

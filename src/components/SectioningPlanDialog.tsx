@@ -5,7 +5,7 @@ import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import { useAppSettings } from "../hooks/useData";
 import { DEFAULT_SETTINGS, plannedExtras, type AppSettings } from "../lib/settings";
 import type { Sample } from "../lib/types";
-import { cn, displayCode } from "../lib/utils";
+import { cn, displayCode, parseAgent, CATALOG_SEP } from "../lib/utils";
 
 // A single slide the technician plans to cut: either a plain Extra or a slide
 // carrying one stain/IHC agent. Encoded as "extra" or "<type>::<name>".
@@ -62,7 +62,7 @@ function rowsToGroups(rows: SlideRow[]): Group[] {
   const groups: Group[] = [];
   for (const [value, n] of counts) {
     if (value === "extra") continue;
-    const [assay_type, assay_name] = value.split("::");
+    const { assayType: assay_type, assayName: assay_name } = parseAgent(value, CATALOG_SEP);
     groups.push({ duplicates: n, stains: assay_name, assay_type, assay_name });
   }
   const extras = counts.get("extra") ?? 0;

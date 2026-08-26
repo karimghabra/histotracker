@@ -1001,19 +1001,6 @@ export async function getSample(sampleId: number): Promise<Sample | null> {
   return rows[0] ?? null;
 }
 
-// Columns that a snapshot restore is allowed to overwrite (everything mutable).
-const RESTORE_COLUMNS = [
-  "project_sample_number", "sample_code", "sample_description", "date_added",
-  "processing_type", "fixative_agent", "needs_decalcification", "cut_notes",
-  "slide_notes", "stains", "preselected_stains", "overall_notes", "sectioning_plan", "current_stage",
-  "stage_received_at", "decalc_completed_at", "fixative_placed_at", "fixative_removed_at",
-  "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",
-  "stage_embedded_at", "stage_needs_sectioning_at", "stage_sectioned_at", "stage_stain_requested_at",
-  "stage_stained_at", "stage_deparaffinized_at", "stage_ihc_at", "stage_pictures_taken_at",
-  "stage_analyzed_at", "stage_picked_up_at", "block_exhausted",
-  "is_priority", "prioritized_at",
-] as const;
-
 export async function setSamplePriority(sampleId: number, priority: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(
@@ -1022,23 +1009,6 @@ export async function setSamplePriority(sampleId: number, priority: boolean): Pr
       WHERE id = ?`,
     [priority ? 1 : 0, priority ? 1 : 0, nowTimestamp(), sampleId],
   );
-}
-
-/** Restore a previously captured sample snapshot (for undo of moves/edits). */
-export async function restoreSample(snapshot: Sample): Promise<void> {
-  const db = await getDb();
-  const assignments = RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`UPDATE samples SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
-
-/** Re-insert a deleted sample with its original id (for undo of delete). */
-export async function reinsertSample(snapshot: Sample): Promise<void> {
-  const db = await getDb();
-  const cols = ["id", "project_id", ...RESTORE_COLUMNS, "created_at"];
-  const placeholders = cols.map(() => "?").join(", ");
-  const values = cols.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`INSERT INTO samples (${cols.join(", ")}) VALUES (${placeholders})`, values);
 }
 
 export async function updateSectioningPlan(
@@ -2199,11 +2169,6 @@ export async function syncAssayWorkflowStep(
 
 // ---- Section requests (children of embedded blocks) -------------------------
 
-const SECTION_RESTORE_COLUMNS = [
-  "duplicates", "stains", "notes", "current_stage",
-  ...SECTION_STAGES.map((s) => s.column),
-] as const;
-
 const SECTION_COLUMN_SET = new Set(Object.values(SECTION_STAGE_COLUMNS));
 
 // Per-sample slide code: EE-0001-A, -B, … (no depth, 0.3.3). Letters continue
@@ -3050,72 +3015,6 @@ export async function reopenSlideStackIfPopulated(id: number): Promise<boolean> 
   return result.rowsAffected > 0;
 }
 
-export async function reinsertSlideStack(snapshot: SlideStack): Promise<void> {
-  const db = await getDb();
-  const columns = [
-    "id", "kind", "assay_type", "assay_name", "sample_id", "current_stage",
-    ...Object.values(STACK_STAGE_COLUMNS), "closed_at", "created_at",
-  ];
-  const values = columns.map((column) => (snapshot as unknown as Record<string, unknown>)[column]);
-  await db.execute(
-    `INSERT INTO slide_stacks (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-    values,
-  );
-}
-
-export interface ChecklistRunSnapshot {
-  id: number;
-  scope_type: string;
-  scope_id: number;
-  stage_key: string;
-  protocol_name: string;
-  protocol_version: number;
-  completed_at: string | null;
-  created_at: string;
-  items: ChecklistItem[];
-}
-
-export async function listChecklistRunsForScope(
-  scopeType: string,
-  scopeId: number,
-): Promise<ChecklistRunSnapshot[]> {
-  const db = await getDb();
-  const runs = await db.select<Array<Omit<ChecklistRunSnapshot, "items">>>(
-    `SELECT * FROM checklist_runs WHERE scope_type = ? AND scope_id = ? ORDER BY id`,
-    [scopeType, scopeId],
-  );
-  return Promise.all(runs.map(async (run) => ({
-    ...run,
-    items: await db.select<ChecklistItem[]>(
-      `SELECT * FROM checklist_items WHERE checklist_run_id = ? ORDER BY sort_order, id`,
-      [run.id],
-    ),
-  })));
-}
-
-export async function reinsertChecklistRuns(snapshots: ChecklistRunSnapshot[]): Promise<void> {
-  const db = await getDb();
-  for (const run of snapshots) {
-    await db.execute(
-      `INSERT INTO checklist_runs
-        (id, scope_type, scope_id, stage_key, protocol_name, protocol_version, completed_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [run.id, run.scope_type, run.scope_id, run.stage_key, run.protocol_name,
-        run.protocol_version, run.completed_at, run.created_at],
-    );
-    for (const item of run.items) {
-      await db.execute(
-        `INSERT INTO checklist_items
-          (id, checklist_run_id, item_key, label, sort_order, is_required, is_complete,
-           completed_by, completed_at, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, item.checklist_run_id, item.item_key, item.label, item.sort_order,
-          item.is_required, item.is_complete, item.completed_by, item.completed_at, item.notes],
-      );
-    }
-  }
-}
-
 /** The loading rack for an agent, creating it if none is open. */
 async function getOrCreateStainRack(assayType: string, assayName: string): Promise<number> {
   const existing = await getOpenStainRack(assayType, assayName);
@@ -3190,20 +3089,6 @@ const STACK_STAGE_COLUMNS: Record<string, string> = {
   pictures_taken: "stage_pictures_taken_at",
   analyzed: "stage_analyzed_at",
 };
-
-const STACK_RESTORE_COLUMNS = [
-  "kind", "assay_type", "assay_name", "sample_id", "current_stage",
-  ...Object.values(STACK_STAGE_COLUMNS), "closed_at",
-] as const;
-
-export async function restoreSlideStack(snapshot: SlideStack): Promise<void> {
-  const db = await getDb();
-  const assignments = STACK_RESTORE_COLUMNS.map((column) => `${column} = ?`).join(", ");
-  const values = STACK_RESTORE_COLUMNS.map(
-    (column) => (snapshot as unknown as Record<string, unknown>)[column],
-  );
-  await db.execute(`UPDATE slide_stacks SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
 
 export async function listOpenSlideStacks(): Promise<SlideStack[]> {
   const db = await getDb();
@@ -5231,69 +5116,6 @@ export async function removeSectionRequestIfEmpty(id: number): Promise<boolean> 
     [id, id],
   );
   return result.rowsAffected > 0;
-}
-
-export async function reinsertSlide(snapshot: Slide): Promise<void> {
-  const db = await getDb();
-  const columns = [
-    "id", "section_request_id", "slide_ordinal", "slide_code", "purpose", "stain_name",
-    "stack_id",
-    "current_stage", "stage_cut_at", "stage_stain_requested_at", "stage_staining_started_at",
-    "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at", "stage_dried_at", "stage_ready_for_imaging_at",
-    "stage_pictures_taken_at", "stage_analyzed_at", "location", "notes",
-    "created_at", "slice_count", "control_agent", "assay_type", "assay_name",
-    "assignment_saved",
-  ];
-  const values = columns.map(
-    (column) => (snapshot as unknown as Record<string, unknown>)[column],
-  );
-  await db.execute(
-    `INSERT INTO slides (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-    values,
-  );
-}
-
-// Mutable slide columns a snapshot restore may overwrite (everything but id
-// and created_at). Used to undo extra-slide assignment.
-const SLIDE_RESTORE_COLUMNS = [
-  "section_request_id", "slide_ordinal", "slide_code",
-  "stack_id",
-  "purpose", "stain_name", "slice_count", "control_agent", "assay_type", "assay_name",
-  "assignment_saved", "current_stage", "stage_cut_at", "stage_stain_requested_at",
-  "stage_staining_started_at", "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at",
-  "stage_dried_at", "stage_ready_for_imaging_at", "stage_pictures_taken_at",
-  "stage_analyzed_at", "location", "notes",
-] as const;
-
-/** Restore a previously captured slide snapshot (for undo of assignment). */
-export async function restoreSlide(snapshot: Slide): Promise<void> {
-  const db = await getDb();
-  const assignments = SLIDE_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = SLIDE_RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`UPDATE slides SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
-
-export async function restoreSectionRequest(snapshot: SectionRequest): Promise<void> {
-  const db = await getDb();
-  const assignments = SECTION_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = SECTION_RESTORE_COLUMNS.map(
-    (c) => (snapshot as unknown as Record<string, unknown>)[c],
-  );
-  await db.execute(`UPDATE section_requests SET ${assignments} WHERE id = ?`, [
-    ...values,
-    snapshot.id,
-  ]);
-}
-
-export async function reinsertSectionRequest(snapshot: SectionRequest): Promise<void> {
-  const db = await getDb();
-  const cols = ["id", "sample_id", ...SECTION_RESTORE_COLUMNS, "created_at"];
-  const placeholders = cols.map(() => "?").join(", ");
-  const values = cols.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(
-    `INSERT INTO section_requests (${cols.join(", ")}) VALUES (${placeholders})`,
-    values,
-  );
 }
 
 /**

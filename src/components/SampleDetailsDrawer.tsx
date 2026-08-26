@@ -14,7 +14,7 @@ import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useActions } from "../hooks/useActions";
 import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useSampleSlides, useSampleTimelineEvents } from "../hooks/useData";
-import { cn, displayCode } from "../lib/utils";
+import { cn, displayCode, parseAgent, CATALOG_SEP } from "../lib/utils";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
@@ -367,7 +367,7 @@ export function SampleDetailsDrawer({
               className="px-2 py-1"
               disabled={!requestAgent}
               onClick={async () => {
-                const [assayType, assayName] = requestAgent.split("::");
+                const { assayType, assayName } = parseAgent(requestAgent, CATALOG_SEP);
                 // The request can be legitimately refused — e.g. an exhausted
                 // block with no extras left to fulfil it (#70). Surface the
                 // reason instead of failing silently.
