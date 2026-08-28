@@ -1,11 +1,6 @@
 # Changelog
 
-## 0.15.3 - unreleased
-
-Numbered inside the 0.15 line at the lab's request. Note that **0.16.0 is
-already published** — it went out before that preference was known, so this
-release is newer than 0.16.0 despite the lower number. Say the word and the
-0.16.0 release can be deleted so the line reads in order.
+## 0.16.1 - unreleased
 
 The Manifest gets its first test, and the test found a bug.
 
@@ -37,6 +32,11 @@ change (since #128 an unsigned session cannot write at all, so such rows exist
 only in databases written by older builds — one is planted as legacy data).
 
 ## 0.16.0 - 2026-08-28
+
+> **0.15.3 was published in error.** It carries the same code as 0.16.1 below,
+> tagged with a lower number by mistake while the release line was being
+> discussed. Use 0.16.1. Nothing is missing from either.
+
 
 No schema change: #134 writes to a column that has existed since 0001, and the
 sidebar work is browser-local view state. A 0.15 instance opens a 0.16 database
