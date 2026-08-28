@@ -36,6 +36,7 @@ import {
   revertSectionToStage,
   revertToStage,
   setBlockExhausted,
+  setSamplesProcessingType as setSamplesProcessingTypeDb,
   setSampleArchived,
   setSamplesArchived,
   setSampleNotes,
@@ -743,6 +744,18 @@ export function useActions() {
     [commit],
   );
 
+  // #134 — switch blocks between the Short and Long runs, in bulk, before they
+  // reach the processor. Returns how many actually moved: the data layer skips
+  // blocks past pre-processing, so "switch 11" can legitimately move 10, and the
+  // caller has to be able to say which happened.
+  const setSamplesProcessingType = useCallback(
+    (sampleIds: number[], processingType: "Short" | "Long") =>
+      commit(`Switch ${sampleIds.length} blocks to the ${processingType} run`, () =>
+        setSamplesProcessingTypeDb(sampleIds, processingType),
+      ),
+    [commit],
+  );
+
   // #74 — archiving is a reversible flag, not a delete, so it rides the normal
   // undo stack and never touches numbering.
   const setArchived = useCallback(
@@ -858,6 +871,7 @@ export function useActions() {
     markSectionAnalyzed: (sectionId: number) => moveSection(sectionId, "analyzed"),
     setExhausted,
     setExhaustedSamples,
+    setSamplesProcessingType,
     setArchived,
     setArchivedSamples,
     removeSamples,

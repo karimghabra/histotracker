@@ -22,6 +22,7 @@ import {
   SECTION_STAGE_COLUMNS,
   SECTION_STAGE_ORDER,
   PREPROCESSING_STAGES,
+  PROCESSING_OPTIONS,
   processingDurationHours,
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
@@ -1243,6 +1244,107 @@ export async function setSampleArchived(sampleId: number, archived: boolean): Pr
 
 export async function setSamplesArchived(sampleIds: number[], archived: boolean): Promise<void> {
   for (const id of sampleIds) await setSampleArchived(id, archived);
+}
+
+/**
+ * Move blocks between the Short and Long processing runs (#134).
+ *
+ * A lab decides how long a block needs in the processor when it is booked in,
+ * and then the tissue turns out denser than it looked. Until now the only way to
+ * change that answer was to book the block in again.
+ *
+ * Only blocks that have NOT reached the processor can be switched, which is the
+ * issue's own condition and also the honest one: `processing_type` decides a
+ * run's duration, so changing it under a block already in the machine would
+ * rewrite when a run that is happening is due to end. Ineligible ids are
+ * SKIPPED, not thrown on — this acts on a selection, and a technician switching
+ * eleven blocks with one already loaded should get the ten moved rather than an
+ * error and nothing (the rule `setSlidesDepthTag` already follows).
+ *
+ * Every switch writes a timeline event naming both ends, because the duration a
+ * block was processed for is part of its record, and "it says Long now" with no
+ * trace of it having been Short is the kind of silent rewrite this application
+ * exists not to do (#83).
+ *
+ * Returns how many blocks were actually switched, so the caller can say so.
+ */
+export async function setSamplesProcessingType(
+  sampleIds: number[],
+  processingType: "Short" | "Long",
+): Promise<number> {
+  if (sampleIds.length === 0) return 0;
+  // The column carries a CHECK constraint on exactly these two, so a bad value
+  // would otherwise fail at the write with a message nobody can read.
+  if (!PROCESSING_OPTIONS.includes(processingType)) {
+    throw new Error(`${processingType} is not a processing run.`);
+  }
+  const db = await getDb();
+  const stages = [...PREPROCESSING_STAGES];
+  const placeholders = sampleIds.map(() => "?").join(", ");
+  const rows = await db.select<
+    Array<{ id: number; current_stage: string; processing_type: string }>
+  >(
+    `SELECT id, current_stage, processing_type FROM samples WHERE id IN (${placeholders})`,
+    sampleIds,
+  );
+  // A block committed to a PLANNED batch is still in pre-processing, so the
+  // stage test above lets it through — and a planned batch carries its own
+  // `processing_type`, chosen when the batch was formed and enforced only then.
+  // Switching a member afterwards would leave the batch holding a block whose
+  // run no longer matches it, and `confirmProcessingBatchStart` stamps the ready
+  // time from the BATCH, so the block would be processed for the wrong duration
+  // with nothing on screen saying so. Take the block out of the batch first, or
+  // change the batch.
+  const committed = await db.select<Array<{ sample_code: string }>>(
+    `SELECT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${placeholders})
+        AND pb.status IN ('planned', 'processing')`,
+    sampleIds,
+  );
+  if (committed.length > 0) {
+    throw new Error(
+      `${committed.map((row) => row.sample_code).join(", ")} ${committed.length === 1 ? "is" : "are"} ` +
+        `already committed to a run — remove ${committed.length === 1 ? "it" : "them"} from the batch before switching.`,
+    );
+  }
+
+  const eligible = rows.filter(
+    (row) => PREPROCESSING_STAGES.has(row.current_stage) && row.processing_type !== processingType,
+  );
+  if (eligible.length === 0) return 0;
+
+  const timestamp = nowTimestamp();
+  let switched = 0;
+  for (const row of eligible) {
+    // The stage goes in the STATEMENT, not only in the filter above: a check and
+    // a write separated by an `await` is a window, and a block that entered the
+    // processor in between must not be switched. Same lesson as the coverslip
+    // guard in syncAssayStackWorkflowStep, which the swarm walked straight
+    // through before the condition moved into the SQL.
+    const result = await db.execute(
+      `UPDATE samples SET processing_type = ?
+        WHERE id = ? AND current_stage IN (${stages.map(() => "?").join(", ")})`,
+      [processingType, row.id, ...stages],
+    );
+    if ((result.rowsAffected ?? 0) === 0) continue;
+    switched += 1;
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'processing_type', ?, ?, ?)`,
+      [
+        row.id,
+        `Processing run changed from ${row.processing_type} to ${processingType}`,
+        JSON.stringify({ before: row.processing_type, after: processingType }),
+        timestamp,
+      ],
+    );
+  }
+  return switched;
 }
 
 export async function setBlockExhausted(sampleId: number, exhausted: boolean): Promise<void> {

@@ -821,6 +821,7 @@ export default function App() {
               projectFilterCode={
                 projects.find((project) => project.id === selectedProjectId)?.code ?? "all"
               }
+              projects={projects}
               samples={samples}
               sections={sections}
               stacks={stacks}

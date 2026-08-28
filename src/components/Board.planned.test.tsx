@@ -33,6 +33,7 @@ describe("Board — a planned run appears in the Processor window (issues #4, #2
       <Board
         projectFilterId="all"
         projectFilterCode="all"
+        projects={[]}
         samples={[]}
         sections={[]}
         stacks={[]}

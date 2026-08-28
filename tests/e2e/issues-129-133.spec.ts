@@ -205,6 +205,43 @@ test("#131: the sidebar selection filters the whole dashboard, and All Projects 
   await expect(extras.getByText("TT-2", { exact: true })).toHaveCount(0);
 });
 
+test("#131: a stage with none of the selected project's work shows NOTHING", async ({ page }) => {
+  await boot(page);
+  await addProject(page, "EE", "Enthesis Engineering");
+  await addProject(page, "TT", "Tendon Testing");
+
+  // TT has a block in Pre-processing. EE has none anywhere.
+  await page.getByRole("button", { name: "New Sample" }).click();
+  await page.getByLabel("Project for these samples").selectOption({ label: "TT · Tendon Testing" });
+  await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("tt block");
+  await page.getByRole("button", { name: /Create Sample/ }).click();
+  await expect(page.getByRole("button", { name: /Create Sample/ })).toHaveCount(0);
+
+  const preprocessing = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Pre-processing", exact: true }) })
+    .last();
+  await expect(preprocessing.getByText("TT-1", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // Select EE, which has nothing at all. The column must go EMPTY.
+  //
+  // It used to fall back to every project: each column offered only the projects
+  // it held, and a guard dropped the filter to "all" the moment the selection
+  // fell off that list — so asking for one project's work showed you everyone
+  // else's. The selected project stays on the menu now, and an empty column is
+  // allowed to be empty.
+  await page.getByRole("button", { name: /Enthesis Engineering/ }).first().click();
+  await expect(preprocessing.getByText("TT-1", { exact: true })).toHaveCount(0);
+
+  // And the control still says EE rather than silently reading "All Projects" —
+  // which is the #85 hazard the old guard existed to dodge, closed here by
+  // keeping the option rather than by clearing the filter.
+  const columnFilter = preprocessing.locator("select").first();
+  await expect(columnFilter).not.toHaveValue("all");
+  const label = await columnFilter.locator("option:checked").innerText();
+  expect(label).toContain("EE");
+});
+
 test("#131: All Projects survives a reload", async ({ page }) => {
   await boot(page);
   await addProject(page, "EE", "Enthesis Engineering");
@@ -273,9 +310,7 @@ async function seedEmbedded(page: Page): Promise<void> {
   await page.getByLabel("Signed-in user").selectOption({ label: USER });
 }
 
-test("#129: Embedded Inventory can be filtered and sorted by what needs cutting", async ({
-  page,
-}) => {
+test("#129: Embedded Inventory sorts by what needs cutting", async ({ page }) => {
   await boot(page);
   await seedEmbedded(page);
 
@@ -284,32 +319,28 @@ test("#129: Embedded Inventory can be filtered and sorted by what needs cutting"
     .filter({ has: page.getByRole("heading", { name: "Embedded Inventory", exact: true }) })
     .last();
   const codes = async () =>
-    (await embedded.locator("[aria-selected]").allInnerTexts()).map((t) => t.split("\n")[0].trim());
+    (await embedded.locator("[aria-selected]").allInnerTexts()).map((t) => t.split(String.fromCharCode(10))[0].trim());
 
-  // The flag is on screen — the filter and the sort must agree with THIS, which
-  // is why they share one predicate rather than each having their own.
+  // The flag is on screen, and the sort must agree with THIS — which is why they
+  // share one predicate rather than each having their own.
   await expect(embedded.getByText("⚑ needs cut")).toHaveCount(1);
   await expect(async () => {
     expect((await codes()).length).toBe(3);
   }).toPass({ timeout: 15_000 });
 
-  // Filter: only the block that owes a cut.
-  await embedded.getByLabel("Filter embedded inventory by cutting status").selectOption("needs_cut");
-  await expect(async () => {
-    const shown = await codes();
-    expect(shown.length).toBe(1);
-    expect(shown[0]).toContain("EE-2");
-  }).toPass({ timeout: 15_000 });
-
-  // Back to everything, then sort instead of filter: the flagged block comes
-  // first without the other two being hidden.
-  await embedded.getByLabel("Filter embedded inventory by cutting status").selectOption("all");
+  // Sorting brings the flagged block to the top WITHOUT hiding the other two.
+  // That is the whole of the follow-up on this issue: a block that owes a cut is
+  // a priority, not a category, and the drawer stays whole.
   await embedded.getByLabel("Sort embedded inventory").selectOption("needs_cut");
   await expect(async () => {
     const shown = await codes();
     expect(shown.length).toBe(3);
     expect(shown[0]).toContain("EE-2");
   }).toPass({ timeout: 15_000 });
+
+  // And there is no filter beside it — 0.15.0 shipped one and it was the wrong
+  // shape. Asserted so it cannot come back by habit.
+  await expect(embedded.getByLabel("Filter embedded inventory by cutting status")).toHaveCount(0);
 });
 
 test("#133: slides can be reassigned and removed from the Logs", async ({ page }) => {
@@ -390,4 +421,85 @@ test("#133: slides can be reassigned and removed from the Logs", async ({ page }
   await expect(removedRow).toBeVisible();
   await removedRow.click();
   await expect(page.getByText("dropped at the bench")).toBeVisible();
+});
+
+test("#134: blocks switch between the Short and Long runs, in bulk, before the processor", async ({
+  page,
+}) => {
+  await boot(page);
+  await addProject(page, "EE", "Enthesis Engineering");
+
+  // Three blocks on the Short run, sitting in Pre-processing.
+  for (const label of ["one", "two", "three"]) {
+    await page.getByRole("button", { name: "New Sample" }).click();
+    await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(label);
+    await page.getByRole("button", { name: /Create Sample/ }).click();
+    await expect(page.getByRole("button", { name: /Create Sample/ })).toHaveCount(0);
+  }
+
+  // Select two of them and move both to Long in one action — the "in batches"
+  // half of the issue.
+  await page.getByText("EE-1", { exact: true }).first().click();
+  await page.getByText("EE-2", { exact: true }).first().click({ modifiers: ["Control"] });
+  await page.getByRole("button", { name: "Switch to the Long run" }).click();
+
+  await expect(async () => {
+    const rows = (await page.evaluate(() =>
+      (
+        (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+          `SELECT sample_code AS code, processing_type AS run FROM samples ORDER BY sample_code`,
+        )
+      ) as Array<{ code: string; run: string }>,
+    )) as Array<{ code: string; run: string }>;
+    expect(rows.map((r) => `${r.code.replace(/-0*/, "-")}:${r.run}`)).toEqual([
+      "EE-1:Long",
+      "EE-2:Long",
+      "EE-3:Short",
+    ]);
+  }).toPass({ timeout: 15_000 });
+
+  // The switch is on the record, naming both ends — a block that was processed
+  // Short and now reads Long, with nothing saying when it changed, is the silent
+  // rewrite #83 forbids.
+  const events = (await page.evaluate(() =>
+    (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT summary FROM sample_timeline_events WHERE event_type = 'processing_type'`,
+      )
+    ) as Array<{ summary: string }>,
+  )) as Array<{ summary: string }>;
+  expect(events).toHaveLength(2);
+  expect(events[0].summary).toContain("from Short to Long");
+});
+
+test("#134: a block past the processor is not offered the switch", async ({ page }) => {
+  await boot(page);
+  await page.evaluate(async () => {
+    const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
+    const projectId = (await db.addProject({
+      code: "EE", name: "Enthesis Engineering", team_lead: "", is_active: true, lead_user_id: 0,
+    })) as number;
+    const id = (await db.addSample(
+      {
+        project_id: projectId, sample_description: "embedded already", processing_type: "Short",
+        fixative_agent: "Z-Fix", needs_decalcification: 0, cut_notes: "", slide_notes: "",
+        stains: "", preselected_stains: [], overall_notes: "",
+      },
+      "EE",
+    )) as number;
+    for (const stage of [
+      "in_fixative", "fixative_removed", "in_ethanol", "processing_started",
+      "processed", "picked_up", "needs_embedding", "embedded",
+    ]) await db.updateSampleStage(id, stage);
+  });
+  await page.goto("/");
+  await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
+  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+
+  await page.getByText("EE-1", { exact: true }).first().click();
+  // The drawer is open on a block that has been through the machine…
+  await expect(page.getByRole("heading", { name: "EE-1" })).toBeVisible();
+  // …and the control is not there at all. Its duration belongs to a run that has
+  // already happened.
+  await expect(page.getByRole("button", { name: "Switch to the Long run" })).toHaveCount(0);
 });

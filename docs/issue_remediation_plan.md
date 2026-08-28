@@ -44,6 +44,67 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## 0.16.0 — bench feedback on 0.15, and #134
+
+### #131 — an empty stage was showing every project
+
+Reported after using 0.15: "if no samples or slides from the selected project are
+in a particular stage, that stage simply shows all projects. instead, it should
+show nothing."
+
+Each column's `<select>` offered only the projects that column currently held,
+and a guard reset the filter to "all" the moment the selection fell off that
+list. So selecting a project and looking at a stage with none of its work handed
+you everyone else's — the opposite of filtering.
+
+**The guard was right about the hazard and wrong about the trigger.** A
+controlled `<select>` whose value is not among its options does not go blank:
+react-dom re-selects the first option and fires no change event, so the control
+and the state disagree silently (#85). Keeping an option for the CURRENT value
+closes that directly, and an empty column is then free to render empty. The reset
+now fires only for a project that no longer EXISTS — deleted or deactivated —
+which is the case the guard was written for.
+
+Two older specs asserted the behaviour being removed and were rewritten rather
+than deleted, because what they were really protecting still holds: `#85` and
+`#89` now assert that an empty column NAMES the project it is empty of, and that
+clearing the filter by hand brings the other work back. A column that is empty
+while its control reads "All Projects" remains the thing neither may do.
+
+**I had already met this and missed it.** During 0.15.0's own testing a column
+read "all" where I expected a project; I wrote around it in the test instead of
+recognising the defect. The lesson is the same one 0.15.1 taught: an assertion
+you have to weaken to make pass is evidence, not an obstacle.
+
+### #129 — a sort, not a filter
+
+0.15.0 shipped both. A block that owes a cut is a priority, not a category, and
+hiding the drawer's other contents to find the urgent ones costs the context of
+what else is in there. The filter is gone and its absence is asserted.
+
+### #131 — the sidebar control
+
+"It almost looks like 'ALL' is a project of its own." It was: the first version
+copied the project row exactly, badge and count pill included. It is a control
+that clears a filter, and now looks like one — icon, single line, plain count, a
+rule separating it from the list it acts on.
+
+### #134 — Short ⇄ Long before the processor
+
+`setSamplesProcessingType(ids, type)` switches blocks in bulk, skipping any that
+are past pre-processing rather than refusing the whole call. Every switch writes
+a timeline event naming both ends: the duration a block was processed for is part
+of its record.
+
+**One guard the issue does not ask for.** A block committed to a PLANNED batch is
+still in pre-processing, so the stage rule alone lets it through — and a planned
+batch carries its own `processing_type`, checked when the batch is formed and
+never again. `confirmProcessingBatchStart` stamps the ready time from the BATCH,
+so switching a member would process it for a duration it no longer has, silently.
+Refused, naming the block.
+
+---
+
 ## 0.15.0 — #129, #131, #132, #133
 
 ### #132 before #131, deliberately

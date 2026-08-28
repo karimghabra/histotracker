@@ -102,7 +102,7 @@ async function runProtocolOnLoneRack(page: Page) {
 // showing "All Projects" — and before the fix, React state still filtered to the
 // departed project, leaving the column empty even though the other project's
 // stack was sitting right there.
-test("#85: analyzing the last stack of a filtered project does not empty the queue", async ({
+test("#85: emptying a filtered project leaves a legible empty queue, not a lying one", async ({
   page,
 }) => {
   await signInAndProject(page);
@@ -163,11 +163,26 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
 
-  // EE is gone from the queue, so the filter must fall back to All Projects FOR
-  // REAL — ZZ's stack has to still be visible.
-  await expect(projectFilter).toHaveValue("all", { timeout: 20000 });
-  await expect(tiles).toHaveCount(1);
+  // EE is gone from the queue. This used to assert that the filter fell back to
+  // All Projects, and that ZZ's stack appeared — which #131's follow-up rejects:
+  // a queue filtered to EE must not answer with ZZ. It shows NOTHING.
+  await expect(tiles).toHaveCount(0, { timeout: 20000 });
+  await expect(imaging.getByText("ZZ-1")).toHaveCount(0);
+
+  // The hazard this test was written for is unchanged and still checked. A
+  // controlled <select> whose value leaves its option list does not go blank:
+  // react-dom re-selects the FIRST option and fires no change event, so the
+  // queue would filter to EE while the control read "All Projects" and nothing
+  // explained the empty column. EE stays on the menu and stays selected, so the
+  // emptiness is legible.
+  await expect(projectFilter).not.toHaveValue("all");
+  expect(await projectFilter.locator("option:checked").innerText()).toContain("EE");
+
+  // And clearing it by hand brings ZZ back — nothing is stranded behind a filter
+  // the user cannot see or undo, which was the real complaint in #85.
+  await projectFilter.selectOption("all");
   await expect(imaging.getByText("ZZ-1").first()).toBeVisible();
+  await expect(tiles).toHaveCount(1);
 });
 
 // #79 follow-up — the feature existed but was a 12px faint pencil next to a

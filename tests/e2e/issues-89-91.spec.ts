@@ -182,7 +182,7 @@ test("#89: Pre-processing filters by project and sorts", async ({ page }) => {
 // #89 — the stale-filter trap that produced bug #85: a <select> whose selected
 // option disappears keeps reporting the old value and fires no change event, so
 // the column silently filters itself down to nothing.
-test("#89: the pre-processing filter clears itself when its project empties", async ({ page }) => {
+test("#89: an emptied filter shows nothing, and says which project it is showing nothing of", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "enthesis one", "EE");
   await addProject(page, "CART", "Cartilage Repair");
@@ -204,9 +204,25 @@ test("#89: the pre-processing filter clears itself when its project empties", as
     await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 25000 });
 
-  // The filter must drop back to All Projects rather than hiding EE-1 forever.
-  await expect(page.getByLabel("Filter pre-processing by project")).toHaveValue("all", {
-    timeout: 15000,
-  });
+  // This used to assert the opposite: the filter dropped back to All Projects,
+  // and the column filled up with EE's work. That was the wrong half of the fix
+  // and #131's follow-up says so — asking for CART and being shown EE is not
+  // filtering. The column now shows NOTHING.
+  await expect(preprocessing.getByText("EE-1", { exact: true })).toHaveCount(0, { timeout: 15000 });
+  await expect(preprocessing.getByText("CART-1", { exact: true })).toHaveCount(0);
+
+  // What #85/#89 were actually protecting is still protected, and it is the
+  // part that matters: the control must not LIE. A controlled <select> whose
+  // value is off the menu silently re-selects the first option and fires no
+  // change event, so the board would filter to CART while the control read "All
+  // Projects" and nothing on screen explained the empty column. CART stays on
+  // the menu and stays selected, so the emptiness is legible and one click from
+  // being undone.
+  const filter = page.getByLabel("Filter pre-processing by project");
+  await expect(filter).not.toHaveValue("all");
+  expect(await filter.locator("option:checked").innerText()).toContain("CART");
+
+  // And clearing it by hand brings EE-1 back, so nothing is stranded.
+  await filter.selectOption("all");
   await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible();
 });

@@ -1,6 +1,64 @@
 # Changelog
 
-## 0.15.2 - unreleased
+## 0.16.0 - unreleased
+
+No schema change: #134 writes to a column that has existed since 0001, and the
+sidebar work is browser-local view state. A 0.15 instance opens a 0.16 database
+unchanged.
+
+Bench feedback on the 0.15 work, and one new issue.
+
+- **#129 is a sort, not a filter.** 0.15.0 shipped both, and the filter was the
+  wrong shape: a block that owes a cut is a priority, not a category, and hiding
+  the rest of the drawer to find the urgent ones costs you the context of what
+  else is in there. The filter is gone; the sort stays. Its absence is asserted,
+  so it does not come back by habit.
+
+- **A stage holding none of the selected project's work now shows NOTHING (#131).**
+  It showed everything instead, which is the opposite of filtering. Each column
+  offered only the projects it currently held, and a guard dropped the filter
+  back to "all" the moment the selection fell off that list — so asking for one
+  project's work handed you everyone else's.
+
+  The guard was right about the hazard and wrong about the trigger. A controlled
+  `<select>` whose value is not among its options does not go blank: react-dom
+  re-selects the first option and fires no change event, so control and state
+  silently disagree (#85). Keeping an option for the *current* value closes that
+  directly, and an empty column is then free to be empty. The guard now fires
+  only for a project that no longer EXISTS, which is the case it was written for.
+
+  Worth recording: I met this during 0.15.0's own testing — a column reading
+  "all" when I expected a project — and wrote around it in the test instead of
+  recognising it as the defect. The test now asserts the column is empty AND
+  that the control still names the project.
+
+- **The sidebar's All Projects is no longer shaped like a project (#131).** The
+  first version copied the project row exactly — same card, same Selected badge,
+  same count pill — and read as a project called "All". It is a control that
+  clears a filter, so it now says so: an icon no project has, one line instead of
+  two, a plain count rather than a pill, and a rule under it separating the
+  control from the things it acts on.
+
+- **Blocks can be switched between the Short and Long runs, in bulk (#134).**
+  The run is chosen when a block is booked in, and then the tissue turns out
+  denser than it looked; until now the only way to revise that was to book the
+  block in again. Offered only before the processor, which is the issue's own
+  condition and the honest one — `processing_type` decides a run's duration, so
+  changing it afterwards would rewrite how long a block that has already been
+  through the machine was in there. Every switch writes a timeline event naming
+  both ends (#83).
+
+  One guard the issue does not ask for and the feature needs: a block committed
+  to a **planned** batch is still in pre-processing, and a planned batch carries
+  its own protocol, checked when the batch was formed and never again. Switching
+  a member would leave the run stamping a ready time from a duration the block no
+  longer has. That is refused, and says which block and why.
+
+  Ineligible blocks in a selection are skipped rather than refused wholesale —
+  eleven ticked with one already loaded switches the ten, the rule
+  `setSlidesDepthTag` already follows.
+
+## 0.15.2 - 2026-08-26
 
 Dead code, and one latent bug found while removing it. No behaviour change and
 no schema change.

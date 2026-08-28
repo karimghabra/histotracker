@@ -10,7 +10,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { compareSampleCodes, compareSlideCodes } from "../lib/utils";
 import { useViewPref } from "../hooks/useViewPref";
-import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack } from "../lib/types";
+import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack, Project } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
   BOARD_LANES,
@@ -31,17 +31,51 @@ import { SectionCard } from "./SectionCard";
 import { StackCard } from "./StackCard";
 import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
-// #129 — "needs cut" joins the sort keys, and gets a filter of its own. A block
-// that owes somebody a cut is the only thing in this column with a deadline
-// attached; everything else is inventory sitting still.
+// #129 — "needs cut" is a SORT key and nothing else. It shipped in 0.15.0 with a
+// filter beside it, which was the wrong shape: a block that owes a cut is a
+// priority, not a category, and hiding the rest of the drawer to see the urgent
+// ones costs you the context of what else is in there. Sorting puts them at the
+// top and keeps the drawer whole.
 type EmbeddedSort = "needs_cut" | "embedded_date" | "name" | "sample_id";
-type EmbeddedFlagFilter = "all" | "needs_cut";
 type ExtraSlidesSort = "sample_id" | "name";
 // #89 — Pre-processing is where every sample enters, so it fills up fastest and
 // needs the same project filter and sort the downstream queues already have.
 type PreprocessingSort = "received_date" | "name" | "sample_id";
 type NeedsEmbeddingSort = "picked_up_date" | "name" | "sample_id";
 type NeedsSectioningSort = "queued_date" | "name" | "sample_id";
+
+/**
+ * Keep the SELECTED project on a column's menu even when that column is empty
+ * of it (#131 follow-up).
+ *
+ * Each column offered only the projects it currently holds, and a guard dropped
+ * the filter back to "all" the moment the selected one fell off that list. So
+ * choosing a project in the sidebar and looking at a stage with none of its work
+ * gave you every other project's work instead — the opposite of what filtering
+ * to a project should do.
+ *
+ * The guard was right about the underlying hazard and wrong about the trigger. A
+ * controlled `<select>` whose value is not among its options does not go blank:
+ * react-dom re-selects the FIRST option and fires no change event, so the
+ * control and the state silently disagree (#85). Keeping an option for the
+ * current value closes that off directly, and then an empty column can honestly
+ * render empty. The guard now fires only for a project that no longer EXISTS —
+ * deleted or deactivated — which is the case it was actually written for.
+ */
+function withSelectedProject(
+  present: Array<[number, string]>,
+  selected: number | "all",
+  projects: Project[],
+): Array<[number, string]> {
+  if (selected === "all" || present.some(([id]) => id === selected)) return present;
+  const project = projects.find((candidate) => candidate.id === selected);
+  return project ? [...present, [project.id, project.code] as [number, string]] : present;
+}
+
+function withSelectedCode(present: string[], selected: string, projects: Project[]): string[] {
+  if (selected === "all" || present.includes(selected)) return present;
+  return projects.some((candidate) => candidate.code === selected) ? [...present, selected] : present;
+}
 
 /** Shared empty list so an absent queue keeps a stable identity across renders. */
 const NO_STACKS: SlideStack[] = [];
@@ -233,6 +267,7 @@ export function Board({
   onToggleSamplePriority,
   projectFilterId,
   projectFilterCode,
+  projects,
   readOnly = false,
 }: {
   samples: Sample[];
@@ -272,6 +307,9 @@ export function Board({
    */
   projectFilterId: number | "all";
   projectFilterCode: string;
+  /** Every live project, so a column can offer the selected one even when it
+   *  holds none of its work (#131). */
+  projects: Project[];
   /** Viewer role: disable drag-to-move and the priority toggle. */
   readOnly?: boolean;
 }) {
@@ -288,7 +326,6 @@ export function Board({
   const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useViewPref<number | "all">("board.embeddedFilter", "all");
   const [embeddedSort, setEmbeddedSort] = useViewPref<EmbeddedSort>("board.embeddedSort", "embedded_date");
-  const [embeddedFlagFilter, setEmbeddedFlagFilter] = useViewPref<EmbeddedFlagFilter>("board.embeddedFlagFilter", "all");
   // Pre-processing gets the same two controls (#89).
   const [preprocessingFilter, setPreprocessingFilter] = useViewPref<number | "all">("board.preprocessingFilter", "all");
   const [preprocessingSort, setPreprocessingSort] = useViewPref<PreprocessingSort>("board.preprocessingSort", "received_date");
@@ -455,8 +492,8 @@ export function Board({
         seen.set(section.project_id, section.project_code);
       }
     }
-    return [...seen.entries()];
-  }, [needsSectioningGroups]);
+    return withSelectedProject([...seen.entries()], needsSectioningFilter, projects);
+  }, [needsSectioningGroups, needsSectioningFilter, projects]);
 
   const displayedSectionGroups = useMemo(() => {
     let items = needsSectioningGroups;
@@ -490,19 +527,16 @@ export function Board({
     for (const sample of blocksByQueue.embedded_inventory ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], embeddedFilter, projects);
+  }, [blocksByQueue, embeddedFilter, projects]);
 
   const displayedEmbeddedItems = useMemo(() => {
     let items = blocksByQueue.embedded_inventory ?? [];
     if (embeddedFilter !== "all") {
       items = items.filter((sample) => sample.project_id === embeddedFilter);
     }
-    // #129 — narrowing to the flagged blocks, for the morning where the question
-    // is "what am I cutting today?" rather than "what is in the drawer?".
-    if (embeddedFlagFilter === "needs_cut") items = items.filter(sampleNeedsCut);
     return sortEmbedded(items, embeddedSort);
-  }, [blocksByQueue, embeddedFilter, embeddedFlagFilter, embeddedSort]);
+  }, [blocksByQueue, embeddedFilter, embeddedSort]);
 
   // ---- Pre-processing filter + sort (#89) ----
   const projectsInPreprocessing = useMemo(() => {
@@ -510,8 +544,8 @@ export function Board({
     for (const sample of blocksByQueue.preprocessing ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], preprocessingFilter, projects);
+  }, [blocksByQueue, preprocessingFilter, projects]);
 
   const displayedPreprocessingItems = useMemo(() => {
     let items = blocksByQueue.preprocessing ?? [];
@@ -540,8 +574,8 @@ export function Board({
     for (const sample of blocksByQueue.needs_embedding ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], needsEmbeddingFilter, projects);
+  }, [blocksByQueue, needsEmbeddingFilter, projects]);
 
   const displayedNeedsEmbeddingItems = useMemo(() => {
     let items = blocksByQueue.needs_embedding ?? [];
@@ -571,8 +605,13 @@ export function Board({
   // don't re-run on every render just because `?? []` minted a new array.
   const imagingStacks = stacksByQueue.analysis_pending ?? NO_STACKS;
   const projectsInImaging = useMemo(
-    () => [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
-    [imagingStacks],
+    () =>
+      withSelectedCode(
+        [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
+        imagingProjectFilter,
+        projects,
+      ),
+    [imagingStacks, imagingProjectFilter, projects],
   );
   const stainsInImaging = useMemo(
     () => [...new Set(imagingStacks.flatMap(agentsOf))].sort((a, b) => a.localeCompare(b)),
@@ -612,8 +651,9 @@ export function Board({
   }, [imagingStainFilter, stainsInImaging]);
 
   const projectsInExtraSlides = useMemo(() => {
-    return [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
-  }, [extraSlides]);
+    const present = [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
+    return withSelectedCode(present, extraSlidesFilter, projects);
+  }, [extraSlides, extraSlidesFilter, projects]);
 
   const displayedExtraSlides = useMemo(() => {
     let items = extraSlides;
@@ -1163,17 +1203,6 @@ export function Board({
                               {projectsInEmbedded.map(([id, code]) => (
                                 <option key={id} value={id}>{code}</option>
                               ))}
-                            </select>
-                            <select
-                              aria-label="Filter embedded inventory by cutting status"
-                              className={selectClass}
-                              value={embeddedFlagFilter}
-                              onChange={(event) =>
-                                setEmbeddedFlagFilter(event.target.value as EmbeddedFlagFilter)
-                              }
-                            >
-                              <option value="all">All blocks</option>
-                              <option value="needs_cut">Needs cut</option>
                             </select>
                             <select
                               aria-label="Sort embedded inventory"

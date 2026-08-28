@@ -41,6 +41,24 @@ const MIGRATIONS_DIR = join(HERE, "..", "src-tauri", "migrations");
  * Parsing the real file means a reordering of the workflow surfaces here as a
  * failure, which is the whole reason to assert on it.
  */
+/**
+ * The stages a block occupies BEFORE the processor, read out of `stages.ts`.
+ *
+ * Same reasoning as SECTION_STAGE_ORDER_PORT below: a retyped copy would be a
+ * test of itself, and #134's whole rule is "only before the processor" — so if
+ * that set ever changes, this has to fail rather than quietly agree with a stale
+ * duplicate.
+ */
+function preprocessingStages() {
+  const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
+  const block = src.slice(src.indexOf("export const BOARD_QUEUES"));
+  const queue = block.slice(block.indexOf('key: "preprocessing"'));
+  const stages = queue.slice(queue.indexOf("stages: ["), queue.indexOf("]", queue.indexOf("stages: [")));
+  const keys = [...stages.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+  if (keys.length === 0) throw new Error("could not read the preprocessing stages out of stages.ts");
+  return keys;
+}
+
 const SECTION_STAGE_ORDER_PORT = (() => {
   const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
   const block = src.slice(src.indexOf("export const SECTION_STAGES"));
@@ -207,6 +225,41 @@ function makeApi(db) {
 
   // Port of startProcessingBatch() — src/lib/db.ts. There is no processor-busy
   // guard: two runs may overlap freely, entirely the technician's call (#23).
+  // Port of setSamplesProcessingType() — src/lib/db.ts (#134).
+  function setSamplesProcessingType(sampleIds, processingType) {
+    if (sampleIds.length === 0) return 0;
+    if (!["Short", "Long"].includes(processingType)) {
+      throw new Error(`${processingType} is not a processing run.`);
+    }
+    const ph = sampleIds.map(() => "?").join(", ");
+    // The pre-processor stages, read from stages.ts rather than retyped — a
+    // private copy would be a test of itself.
+    const stages = preprocessingStages();
+    const committed = all(
+      `SELECT s.sample_code FROM processing_batch_members pbm
+         JOIN processing_batches pb ON pb.id = pbm.batch_id
+         JOIN samples s ON s.id = pbm.sample_id
+        WHERE pbm.sample_id IN (${ph}) AND pb.status IN ('planned', 'processing')`, sampleIds);
+    if (committed.length) {
+      throw new Error(`${committed.map((r) => r.sample_code).join(", ")} already committed to a run`);
+    }
+    const rows = all(`SELECT id, current_stage, processing_type FROM samples WHERE id IN (${ph})`, sampleIds);
+    const eligible = rows.filter((r) => stages.includes(r.current_stage) && r.processing_type !== processingType);
+    let switched = 0;
+    for (const row of eligible) {
+      const res = run(
+        `UPDATE samples SET processing_type = ? WHERE id = ? AND current_stage IN (${stages.map(() => "?").join(", ")})`,
+        [processingType, row.id, ...stages]);
+      if (!res.changes) continue;
+      switched += 1;
+      run(`INSERT INTO sample_timeline_events (sample_id, user_id, event_type, summary, details, created_at)
+           VALUES (?, NULL, 'processing_type', ?, ?, ?)`,
+        [row.id, `Processing run changed from ${row.processing_type} to ${processingType}`,
+         JSON.stringify({ before: row.processing_type, after: processingType }), now()]);
+    }
+    return switched;
+  }
+
   function startProcessingBatch({ sampleIds, processingType, startedAt }) {
     if (sampleIds.length === 0) throw new Error("Select at least one sample.");
     const placeholders = sampleIds.map(() => "?").join(", ");
@@ -1332,6 +1385,7 @@ function makeApi(db) {
     db, run, all, get,
     seedProject, renameProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
     markEmbedded, createSectionRequests, sectionToAssignment, assignSlide,
+    setSamplesProcessingType,
     startAssayWork, assignExtraSlideToAssay, listExtraSlides, nextSampleNumber,
     updateProcessingBatchStart, moveSlideStack, tickStainedCheckbox, openStainRack,
     completeStackImaging, relabelSlideToSample, addSlideToSection,
@@ -3907,6 +3961,86 @@ invariant("an extra is not real until its cut group has been dispositioned", () 
 // made to fail, exactly like `rack-numbers-are-unique` in 0.14.3. The ordering
 // assertions above are what remain, because they are what makes the exclusions
 // read as one rule instead of three arbitrary strings.
+
+
+issue(134, "blocks switch between the Short and Long runs, in bulk, before the processor", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const short1 = api.addSample(p, "EE", "dense tissue", { processing_type: "Short" });
+  const short2 = api.addSample(p, "EE", "also dense", { processing_type: "Short" });
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [short1.id]).t, "Short",
+     "booked in on the Short run");
+
+  const moved = api.setSamplesProcessingType([short1.id, short2.id], "Long");
+  eq(moved, 2, "both blocks move in one call — the issue asks for batches");
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [short1.id]).t, "Long",
+     "and the switch lands");
+  eq(api.get(`SELECT COUNT(*) AS c FROM sample_timeline_events
+               WHERE sample_id = ? AND event_type = 'processing_type'`, [short1.id]).c, 1,
+     "with the change on the record, naming both ends (#83)");
+
+  // Idempotent, and honest about it: asking for the run a block is already on
+  // moves nothing and says nothing happened.
+  eq(api.setSamplesProcessingType([short1.id], "Long"), 0, "already on that run — nothing to do");
+  eq(api.get(`SELECT COUNT(*) AS c FROM sample_timeline_events
+               WHERE sample_id = ? AND event_type = 'processing_type'`, [short1.id]).c, 1,
+     "and no second event for a change that did not happen");
+});
+
+invariant("a block past the processor cannot have its run switched", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "already embedded", { processing_type: "Short" });
+  api.markEmbedded(id);
+
+  // The condition the issue states, and the reason for it: processing_type
+  // decides a run's DURATION, so changing it after the fact would rewrite how
+  // long a block that has already been through the machine was in there.
+  eq(api.setSamplesProcessingType([id], "Long"), 0, "skipped, not switched");
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [id]).t, "Short",
+     "and the record still says what actually happened to it");
+});
+
+invariant("a mixed selection switches the eligible blocks and skips the rest", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const fresh = api.addSample(p, "EE", "still in fixative", { processing_type: "Short" });
+  const done = api.addSample(p, "EE", "long since embedded", { processing_type: "Short" });
+  api.markEmbedded(done.id);
+
+  // A selection, not a single row: ten switchable blocks and one that is not
+  // should move ten, the same rule setSlidesDepthTag follows. Refusing the whole
+  // call would make the bulk action useless exactly when it is most wanted.
+  eq(api.setSamplesProcessingType([fresh.id, done.id], "Long"), 1, "one of the two was eligible");
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [fresh.id]).t, "Long", "the eligible one moved");
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [done.id]).t, "Short", "the other did not");
+});
+
+invariant("a block committed to a run cannot be switched out from under it", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "committed", { processing_type: "Short" });
+  api.completePreprocessing(id);
+  api.planProcessingBatch({
+    sampleIds: [id], processingType: "Short", operatorName: "Alex Rivera",
+    plannedStartAt: "2030-01-01 08:00",
+  });
+
+  // A PLANNED batch leaves its members in pre-processing, so the stage rule
+  // alone lets this through — and the batch carries its own processing_type,
+  // checked when the batch was formed and never again. Switching a member would
+  // leave the run stamping a ready time from a duration the block no longer
+  // has, with nothing on screen saying so.
+  let refused = false;
+  try {
+    api.setSamplesProcessingType([id], "Long");
+  } catch {
+    refused = true;
+  }
+  assert(refused, "the switch is refused while the block belongs to an open run");
+  eq(api.get(`SELECT processing_type AS t FROM samples WHERE id = ?`, [id]).t, "Short",
+     "and the block still matches the batch it is in");
+});
 
 
 issue(123, "a full staining rack is left alone and the next slide starts a fresh one", () => {
