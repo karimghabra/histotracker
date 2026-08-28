@@ -33,9 +33,11 @@ only in databases written by older builds — one is planted as legacy data).
 
 ## 0.16.0 - 2026-08-28
 
-> **0.15.3 was published in error.** It carries the same code as 0.16.1 below,
-> tagged with a lower number by mistake while the release line was being
-> discussed. Use 0.16.1. Nothing is missing from either.
+> A tag `app-v0.15.3` existed briefly on 2026-08-28 and has been withdrawn: it
+> was cut with a lower number than the 0.16.0 already published, and the release
+> line goes forward. Its code is exactly 0.16.1's. Kept as a line here rather
+> than erased, because the installer was downloadable for about twenty minutes
+> and anyone holding it should be able to find out what it was.
 
 
 No schema change: #134 writes to a column that has existed since 0001, and the
