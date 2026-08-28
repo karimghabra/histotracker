@@ -3963,6 +3963,100 @@ invariant("an extra is not real until its cut group has been dispositioned", () 
 // read as one rule instead of three arbitrary strings.
 
 
+// ---------------------------------------------------------------------------
+// #77 — "Manifest should show who made what changes".
+//
+// Flagged as untested since 0.7.0 and the oldest gap in the suite. Worth doing
+// HERE as well as in Playwright for one reason: this harness loads the real
+// migrations, so the triggers under test are the actual trigger SQL rather than
+// a port of it. Nothing about attribution is reimplemented below.
+// ---------------------------------------------------------------------------
+
+issue(77, "every change is attributed to whoever was signed in when it happened", () => {
+  const api = makeApi(freshDb());
+  const alex = Number(api.run(`INSERT INTO users (name, initials) VALUES ('Alex Rivera', 'ARI')`).lastInsertRowid);
+  const bo = Number(api.run(`INSERT INTO users (name, initials) VALUES ('Bo Chen', 'BCH')`).lastInsertRowid);
+  const signIn = (id) =>
+    api.run(`INSERT INTO app_settings (key, value) VALUES ('active_user_id', ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(id ?? "")]);
+
+  signIn(alex);
+  const p = api.seedProject();
+  const first = api.addSample(p, "EE", "Alex's block");
+
+  signIn(bo);
+  const second = api.addSample(p, "EE", "Bo's block");
+
+  const rows = api.all(
+    `SELECT ae.user_id, ae.action, ae.entity_type, ae.summary
+       FROM audit_events ae WHERE ae.entity_type = 'sample' AND ae.action = 'create' ORDER BY ae.id`);
+  eq(rows.length, 2, "one create row per sample");
+  eq(rows[0].user_id, alex, "the first block is attributed to Alex");
+  eq(rows[1].user_id, bo, "the second to Bo — not to whoever happened to be first");
+  assert(rows[0].summary.includes(first.code) && rows[1].summary.includes(second.code),
+    "and each row names the sample it is about");
+});
+
+invariant("a change made with nobody signed in is attributed to nobody", () => {
+  const api = makeApi(freshDb());
+  const alex = Number(api.run(`INSERT INTO users (name, initials) VALUES ('Alex Rivera', 'ARI')`).lastInsertRowid);
+  api.run(`INSERT INTO app_settings (key, value) VALUES ('active_user_id', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(alex)]);
+  const p = api.seedProject();
+  api.addSample(p, "EE", "signed in");
+
+  // Clearing it is what the app does at launch and on sign-out. The trigger's
+  // NULLIF turns "" into NULL rather than into user 0, so the row records the
+  // absence instead of inventing an attribution.
+  api.run(`UPDATE app_settings SET value = '' WHERE key = 'active_user_id'`);
+  api.addSample(p, "EE", "nobody signed in");
+
+  const rows = api.all(
+    `SELECT user_id FROM audit_events WHERE entity_type = 'sample' AND action = 'create' ORDER BY id`);
+  eq(rows[0].user_id, alex, "the signed-in change carries its user");
+  eq(rows[1].user_id, null, "the unsigned one carries NULL, not 0 and not the last user");
+});
+
+invariant("renaming a user corrects the manifest rather than forking it", () => {
+  const api = makeApi(freshDb());
+  const alex = Number(api.run(`INSERT INTO users (name, initials) VALUES ('Alex Rivera', 'ARI')`).lastInsertRowid);
+  api.run(`INSERT INTO app_settings (key, value) VALUES ('active_user_id', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(alex)]);
+  const p = api.seedProject();
+  api.addSample(p, "EE", "before the rename");
+
+  // The name is JOINED at read time, not copied onto the row — which is the
+  // whole reason a correction to a misspelled name fixes the history instead of
+  // leaving half of it under the old spelling. Asserted because it is a claim
+  // the code comment makes and nothing checked.
+  api.run(`UPDATE users SET name = 'Alexandra Rivera' WHERE id = ?`, [alex]);
+  const rows = api.all(
+    `SELECT COALESCE(NULLIF(u.name, ''), '') AS user_name
+       FROM audit_events ae LEFT JOIN users u ON u.id = ae.user_id
+      WHERE ae.entity_type = 'sample' AND ae.action = 'create'`);
+  assert(rows.length > 0, "there is a row to read");
+  assert(rows.every((r) => r.user_name === "Alexandra Rivera"),
+    "every one of that user's changes reads under the corrected name");
+});
+
+invariant("the manifest reads newest first", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "first in");
+  const b = api.addSample(p, "EE", "second in");
+
+  // Ordering is created_at DESC, id DESC. created_at comes from the trigger's
+  // CURRENT_TIMESTAMP, which has one-second resolution — so two changes in the
+  // same second tie, and the id is what breaks the tie. Without that second key
+  // the manifest would shuffle rows made in the same second on every read.
+  const rows = api.all(
+    `SELECT summary FROM audit_events WHERE entity_type = 'sample' AND action = 'create'
+      ORDER BY created_at DESC, id DESC`);
+  assert(rows[0].summary.includes(b.code), `newest first — got ${rows[0].summary}`);
+  assert(rows[rows.length - 1].summary.includes(a.code), "and oldest last");
+});
+
+
 issue(134, "blocks switch between the Short and Long runs, in bulk, before the processor", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();

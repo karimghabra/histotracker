@@ -1,6 +1,42 @@
 # Changelog
 
-## 0.16.0 - unreleased
+## 0.15.3 - unreleased
+
+Numbered inside the 0.15 line at the lab's request. Note that **0.16.0 is
+already published** — it went out before that preference was known, so this
+release is newer than 0.16.0 despite the lower number. Say the word and the
+0.16.0 release can be deleted so the line reads in order.
+
+The Manifest gets its first test, and the test found a bug.
+
+- **#77 had no automated coverage of any kind** — flagged since 0.7.0 and the
+  oldest such gap in the app. Covered now from both ends. The data-layer half is
+  in `scripts/workflow-test.mjs`, which loads the real migration SQL, so the
+  triggers under test are the actual triggers rather than a port: a change is
+  attributed to whoever was signed in for it, two people's changes do not
+  collapse onto one, a change made with nobody signed in records the ABSENCE
+  (NULL, not user 0 and not the last user), the name is joined rather than copied
+  so correcting a misspelling corrects the whole history, and the read is
+  newest-first with the id breaking ties inside a one-second timestamp.
+  `tests/e2e/manifest.spec.ts` covers what only a browser can: attribution as
+  rendered, the person/action/search filters, and the Unsigned bucket.
+
+- **Searching the Manifest for what is on the screen found nothing.** The table
+  renders codes through `displayCodesInText`, so a row reads `EE-2` while its
+  stored summary says `EE-0002` — and the search was a raw substring test against
+  the stored text. You had to guess the zero-padding to search your own manifest.
+  It now uses `matchesSearch`, the same smart match the Logs and the Extras
+  inventory have had since #120; the Manifest simply never got it. Found by the
+  first test this feature has ever had, which is the entire argument for writing
+  it.
+
+Two properties are deliberately NOT covered in the browser and say so in the
+spec: renaming a user (there is no UI for it — Manage renames assay agents only,
+so the property is data-layer and is asserted there), and performing an unsigned
+change (since #128 an unsigned session cannot write at all, so such rows exist
+only in databases written by older builds — one is planted as legacy data).
+
+## 0.16.0 - 2026-08-28
 
 No schema change: #134 writes to a column that has existed since 0001, and the
 sidebar work is browser-local view state. A 0.15 instance opens a 0.16 database

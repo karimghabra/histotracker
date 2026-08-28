@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Search, UserRound } from "lucide-react";
 import { useAuditEvents, useUsers } from "../hooks/useData";
-import { displayCodesInText } from "../lib/utils";
+import { displayCodesInText, matchesSearch } from "../lib/utils";
 
 // #77 — "Manifest should show who made what changes".
 //
@@ -27,19 +27,32 @@ export function ManifestView() {
   const [search, setSearch] = useState("");
 
   const rows = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const query = search.trim();
     return events.filter((event) => {
       if (who !== "all") {
         // "" is the unsigned bucket — changes made with nobody signed in.
         if (who === "__unsigned__" ? event.user_name !== "" : event.user_name !== who) return false;
       }
       if (action !== "all" && event.action !== action) return false;
-      if (query) {
-        const hay = [event.summary, event.entity_type, event.sample_code, event.project_code, event.user_name]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        if (!hay.includes(query)) return false;
+      // `matchesSearch`, not a raw `includes` — the same smart match the Logs
+      // and the Extras inventory use (#120).
+      //
+      // The table renders codes through `displayCodesInText`, so a row shows
+      // "EE-2" while the row's summary says "EE-0002". A plain substring test
+      // searches the STORED text, so typing what is on screen found nothing and
+      // you had to guess the zero-padding to search your own manifest. This was
+      // fixed everywhere else and never here; found by the first test #77 ever
+      // had.
+      if (
+        !matchesSearch(query, [
+          event.summary,
+          event.entity_type,
+          event.sample_code,
+          event.project_code,
+          event.user_name,
+        ])
+      ) {
+        return false;
       }
       return true;
     });
