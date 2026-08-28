@@ -226,3 +226,65 @@ test("#89: an emptied filter shows nothing, and says which project it is showing
   await filter.selectOption("all");
   await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible();
 });
+
+// #135 — the run with one sample in it could not be emptied. The remove control
+// was hidden on the last member, and the data layer refused an empty membership,
+// so the only way out was to start a run that was not happening and mark it done.
+test("#135: taking the last sample out cancels the run", async ({ page }) => {
+  await signInAndProject(page);
+  await addSample(page, "the only block", "EE");
+  await completePreprocessing(page, "EE-1");
+
+  await dragOnto(page, "EE-1", "Processor");
+  await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  await expect(async () => {
+    const btn = page.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 25000 });
+
+  await page.getByText("Batch 1", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Processing Batch 1" })).toBeVisible();
+  const drawer = page.locator("aside").filter({ hasText: "Processing Batch 1" });
+
+  // The control exists at all, which it did not before: the last member had no
+  // remove button, so a run of one was a dead end.
+  const remove = drawer.getByRole("button", { name: "Remove EE-1 from this run" });
+  await expect(remove).toBeVisible();
+  await remove.click();
+
+  // The run is gone from the board, and the block is back where it waits.
+  await expect(page.getByText("Batch 1", { exact: true })).toHaveCount(0, { timeout: 15_000 });
+  const preprocessing = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Pre-processing", exact: true }) });
+  await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // Cancelled, not deleted (#83): the row survives, flagged, with its start time
+  // — so "what happened to batch 1?" stays answerable.
+  await expect(async () => {
+    const row = (await page.evaluate(() =>
+      (
+        (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+          `SELECT status, started_at, (SELECT COUNT(*) FROM processing_batch_members m
+             WHERE m.batch_id = processing_batches.id) AS members
+             FROM processing_batches ORDER BY id LIMIT 1`,
+        )
+      ) as Array<{ status: string; started_at: string; members: number }>,
+    ))[0] as { status: string; started_at: string; members: number };
+    expect(row.status).toBe("cancelled");
+    expect(row.members).toBe(0);
+    expect(row.started_at, "it still remembers when it was started").toBeTruthy();
+  }).toPass({ timeout: 15_000 });
+
+  // And the block carries no start time for a run it is no longer in.
+  const stage = (await page.evaluate(() =>
+    (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT current_stage AS s, processing_started_at AS t FROM samples LIMIT 1`,
+      )
+    ) as Array<{ s: string; t: string | null }>,
+  ))[0] as { s: string; t: string | null };
+  expect(stage.s).toBe("in_ethanol");
+  expect(stage.t).toBeNull();
+});

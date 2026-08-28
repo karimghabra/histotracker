@@ -349,7 +349,6 @@ function makeApi(db) {
   // editable (#91); a running one also has to move samples between stages,
   // because its members are physically in the machine.
   function updateBatchMembers(batchId, sampleIds) {
-    if (!sampleIds.length) throw new Error("A run needs at least one sample.");
     const batch = get(
       `SELECT status, processing_type, started_at FROM processing_batches WHERE id = ?`, [batchId]);
     if (!batch) throw new Error("That processing batch no longer exists.");
@@ -357,14 +356,27 @@ function makeApi(db) {
       throw new Error("Only a planned or running batch's samples can be edited.");
     }
     const running = batch.status === "processing";
+
+    // Read before any rewrite — both the empty case and the join/leave diff
+    // need it.
+    const previousIds = all(
+      `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
+
+    // Taking the LAST sample out cancels the run (#135). Cancelled, never
+    // deleted: the row keeps its id and its history.
+    if (!sampleIds.length) {
+      run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+      run(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
+      if (running) for (const id of previousIds) revertToStage(id, "in_ethanol");
+      return;
+    }
+
     const placeholders = sampleIds.map(() => "?").join(", ");
     const samples = all(`SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`, sampleIds);
 
-    // Joiners and leavers, read before validation: the "still waiting" rule
-    // below applies only to newcomers, since an existing member of a running
-    // batch is past pre-processing by definition.
-    const previousIds = all(
-      `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
+    // Joiners and leavers: the "still waiting" rule below applies only to
+    // newcomers, since an existing member of a running batch is past
+    // pre-processing by definition.
     const next = new Set(sampleIds);
     const joined = sampleIds.filter((id) => !previousIds.includes(id));
     const left = previousIds.filter((id) => !next.has(id));
@@ -3963,7 +3975,78 @@ invariant("an extra is not real until its cut group has been dispositioned", () 
 // read as one rule instead of three arbitrary strings.
 
 
-// ---------------------------------------------------------------------------
+issue(135, "taking the last sample out of a run cancels the run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "the only block");
+  api.completePreprocessing(id);
+  const batch = api.startProcessingBatch({
+    sampleIds: [id], processingType: "Short", startedAt: "2026-01-02 09:00",
+  });
+  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "processing",
+     "the run is going");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "processing_started",
+     "and the block is in the machine");
+
+  // This used to throw "A run needs at least one sample" — true, and unhelpful.
+  // A run with nothing in it is not a run, and emptying it is how you say so.
+  api.updateBatchMembers(batch, []);
+
+  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "cancelled",
+     "the run is cancelled, not left half-empty");
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batch_members WHERE batch_id = ?`, [batch]).c, 0,
+     "with nothing left in it");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "in_ethanol",
+     "and the block back where it waits to be loaded");
+  eq(api.get(`SELECT processing_started_at AS t FROM samples WHERE id = ?`, [id]).t, null,
+     "carrying no start time for a run it is no longer in");
+});
+
+invariant("a cancelled run is kept, not deleted", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "the only block");
+  api.completePreprocessing(id);
+  const batch = api.startProcessingBatch({
+    sampleIds: [id], processingType: "Short", startedAt: "2026-01-02 09:00",
+  });
+  const before = api.get(`SELECT started_at AS t FROM processing_batches WHERE id = ?`, [batch]).t;
+
+  api.updateBatchMembers(batch, []);
+
+  // #83, applied to a run: the row survives with its id and its start time, so
+  // "batch 3 was cancelled" stays answerable. Deleting it would leave a gap in
+  // the numbering and no account of what happened.
+  const row = api.get(`SELECT id, status, started_at AS t FROM processing_batches WHERE id = ?`, [batch]);
+  assert(row, "the batch row is still there");
+  eq(row.status, "cancelled", "flagged rather than removed");
+  eq(row.t, before, "and it still remembers when it was started");
+});
+
+invariant("cancelling a PLANNED run leaves its samples where they were", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "planned block");
+  api.completePreprocessing(id);
+  const batch = api.planProcessingBatch({
+    sampleIds: [id], processingType: "Short", operatorName: "Alex Rivera",
+    plannedStartAt: "2030-01-01 08:00",
+  });
+  const stageBefore = api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s;
+
+  api.updateBatchMembers(batch, []);
+
+  // A planned run never moved anything, so cancelling it must not "revert" a
+  // sample to a stage it was already past — that would rewind real work on a
+  // block that merely had a run pencilled in.
+  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "cancelled",
+     "the plan is cancelled");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, stageBefore,
+     "and the block has not moved");
+});
+
+
+// ---------------------------------------------------------------------------
 // #77 — "Manifest should show who made what changes".
 //
 // Flagged as untested since 0.7.0 and the oldest gap in the suite. Worth doing

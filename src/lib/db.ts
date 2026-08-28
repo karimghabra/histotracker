@@ -1724,7 +1724,6 @@ export async function updateBatchMembers(
   batchId: number,
   sampleIds: number[],
 ): Promise<void> {
-  if (sampleIds.length === 0) throw new Error("A run needs at least one sample.");
   const db = await getDb();
   const batchRows = await db.select<
     Array<{ status: string; processing_type: string; started_at: string }>
@@ -1738,6 +1737,41 @@ export async function updateBatchMembers(
     throw new Error("Only a planned or running batch's samples can be edited.");
   }
   const running = batch.status === "processing";
+
+  // Read the membership before anything is rewritten. Both the empty case below
+  // and the join/leave diff further down need to know who was in it.
+  const previousIds = (
+    await db.select<Array<{ sample_id: number }>>(
+      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
+      [batchId],
+    )
+  ).map((r) => r.sample_id);
+
+  // Taking the LAST sample out cancels the run (#135).
+  //
+  // This used to throw "A run needs at least one sample", which is true and
+  // unhelpful: a run with nothing in it is not a run, and the technician
+  // emptying it is telling you so. Refusing left them with a batch they could
+  // not dissolve except by starting it and marking it done — a lie in the record
+  // about a machine that never ran.
+  //
+  // Cancelled, not deleted (#83). The row keeps its id, its start time and its
+  // history, and `audit_batches_update` records who cancelled it. `cancelled` is
+  // a new status and needs no migration: the column has no CHECK constraint, and
+  // every listing selects the statuses it wants, so a build that has never heard
+  // of it simply does not show the batch — the same way an unrecognised stage
+  // degrades in #83.
+  if (sampleIds.length === 0) {
+    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+    await db.execute(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
+    // Only a RUNNING batch moved its samples; a planned one leaves them in
+    // pre-processing, so there is nothing to put back.
+    if (running) {
+      for (const id of previousIds) await revertToStage(id, "in_ethanol");
+    }
+    return;
+  }
+
   const placeholders = sampleIds.map(() => "?").join(", ");
   const samples = await db.select<Sample[]>(
     `SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`,
@@ -1745,16 +1779,10 @@ export async function updateBatchMembers(
   );
   if (samples.length !== sampleIds.length) throw new Error("One or more samples no longer exist.");
 
-  // Who is joining and who is leaving — read BEFORE the membership is rewritten,
-  // and before validation, because the rules differ. A sample already IN the run
-  // is past pre-processing by definition once the run starts, so the "still
-  // waiting to be processed" check below can only be applied to newcomers.
-  const previousIds = (
-    await db.select<Array<{ sample_id: number }>>(
-      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
-      [batchId],
-    )
-  ).map((r) => r.sample_id);
+  // Who is joining and who is leaving. `previousIds` is read above, before any
+  // rewrite, because the rules differ: a sample already IN the run is past
+  // pre-processing by definition once the run starts, so the "still waiting to
+  // be processed" check below can only be applied to newcomers.
   const next = new Set(sampleIds);
   const joined = sampleIds.filter((id) => !previousIds.includes(id));
   const left = previousIds.filter((id) => !next.has(id));

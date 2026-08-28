@@ -574,7 +574,14 @@ export default function App() {
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
       candidates={batchCandidates}
       onEditMembers={(batchId, sampleIds) =>
-        void editBatchMembers(batchId, sampleIds).catch((error) => flash(String(error)))
+        void editBatchMembers(batchId, sampleIds)
+          // Say it out loud when the last sample leaves (#135): the run is
+          // cancelled and the drawer closes under you, which without a word
+          // reads as the app having lost the batch.
+          .then(() => {
+            if (sampleIds.length === 0) flash("Processing run cancelled");
+          })
+          .catch((error) => flash(String(error)))
       }
       onMove={moveBatchWithConfirmation}
       onEditStart={(batchId, startedAt) =>

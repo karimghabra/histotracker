@@ -1,6 +1,34 @@
 # Changelog
 
-## 0.16.1 - unreleased
+## 0.16.2 - unreleased
+
+No schema change. `cancelled` is a new value in a column that has never had a
+CHECK constraint, and every listing selects the statuses it wants — so a build
+that has never heard of it simply does not show the run, the same way an
+unrecognised stage degrades in #83. A 0.16.1 instance opens a 0.16.2 database
+unchanged.
+
+- **Taking the last sample out of a processing run now cancels the run (#135).**
+  It was impossible before, twice over: the remove control was hidden on the last
+  member, and the data layer refused an empty membership with "A run needs at
+  least one sample" — true, and unhelpful. A run with nothing in it is not a run,
+  and the technician emptying it is saying so. The only way out was to start a
+  run that was not happening and mark it done, which puts a lie in the record
+  about a machine that never ran.
+
+  **Cancelled, not deleted.** The batch row keeps its id, its start time and its
+  history, and the existing `audit_batches_update` trigger records who cancelled
+  it — so "what happened to batch 3?" stays answerable and the numbering has no
+  gap. A running batch's sample goes back to the end of pre-processing and drops
+  the start time it was carrying for a run it is no longer in; a planned batch
+  never moved its samples, so cancelling one leaves them exactly where they were,
+  which matters because "reverting" them would rewind real work on a block that
+  merely had a run pencilled in.
+
+  The cancellation is announced, because the drawer closes under you when the run
+  leaves the board and silence there reads as the app having lost the batch.
+
+## 0.16.1 - 2026-08-28
 
 The Manifest gets its first test, and the test found a bug.
 
