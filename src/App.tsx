@@ -576,10 +576,10 @@ export default function App() {
       onEditMembers={(batchId, sampleIds) =>
         void editBatchMembers(batchId, sampleIds)
           // Say it out loud when the last sample leaves (#135): the run is
-          // cancelled and the drawer closes under you, which without a word
-          // reads as the app having lost the batch.
+          // removed and the drawer closes under you, which without a word reads
+          // as the app having lost the batch.
           .then(() => {
-            if (sampleIds.length === 0) flash("Processing run cancelled");
+            if (sampleIds.length === 0) flash("Processing run removed — it had no samples left");
           })
           .catch((error) => flash(String(error)))
       }

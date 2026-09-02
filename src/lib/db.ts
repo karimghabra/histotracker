@@ -1747,28 +1747,57 @@ export async function updateBatchMembers(
     )
   ).map((r) => r.sample_id);
 
-  // Taking the LAST sample out cancels the run (#135).
+  // Taking the LAST sample out dissolves the run (#135).
   //
   // This used to throw "A run needs at least one sample", which is true and
   // unhelpful: a run with nothing in it is not a run, and the technician
-  // emptying it is telling you so. Refusing left them with a batch they could
-  // not dissolve except by starting it and marking it done — a lie in the record
-  // about a machine that never ran.
+  // emptying it is saying so. Refusing left them with a batch they could not get
+  // rid of except by starting it and marking it done — a lie in the record about
+  // a machine that never ran.
   //
-  // Cancelled, not deleted (#83). The row keeps its id, its start time and its
-  // history, and `audit_batches_update` records who cancelled it. `cancelled` is
-  // a new status and needs no migration: the column has no CHECK constraint, and
-  // every listing selects the statuses it wants, so a build that has never heard
-  // of it simply does not show the batch — the same way an unrecognised stage
-  // degrades in #83.
+  // The run is DELETED, and that is a deliberate exception to #83 rather than an
+  // oversight, so it is worth saying why. #83 protects the record of work that
+  // HAPPENED — glass that was cut, tissue that was processed. A run emptied of
+  // its samples is the opposite: a plan withdrawn. Nothing was cut, nothing was
+  // embedded, and for a planned run nothing physically moved at all.
+  //
+  // 0.16.2 shipped this as a `cancelled` status instead, and that was worse than
+  // either choice. It kept the batch row and deleted its membership, so the
+  // surviving record answered "did batch 3 exist?" — which nobody asks — and not
+  // "what was in it?", which is the only useful question. A shell is not a
+  // record.
+  //
+  // What actually happened is not lost. `audit_events` keeps the batch's
+  // creation and every stage transition its samples made, so "EE-1 went into a
+  // machine at 09:14 and came out at 09:20" is still answerable from the
+  // Manifest — which is where "who did what" belongs, and where it is now
+  // tested (#77). Ids are AUTOINCREMENT, so a deleted batch number is never
+  // handed to a later run.
   if (sampleIds.length === 0) {
-    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
-    await db.execute(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
-    // Only a RUNNING batch moved its samples; a planned one leaves them in
+    // Samples first: if the delete fails, they are at least out of a run that
+    // is about to stop existing, rather than pinned to one that already does not.
+    // Only a RUNNING batch moved them; a planned one leaves them in
     // pre-processing, so there is nothing to put back.
     if (running) {
       for (const id of previousIds) await revertToStage(id, "in_ethanol");
     }
+    // Same order as startProcessingBatch's abort unwind: children before parent,
+    // and members explicitly rather than relying on ON DELETE CASCADE, which
+    // needs `PRAGMA foreign_keys` to be on.
+    await db.execute(
+      `DELETE FROM checklist_items
+        WHERE checklist_run_id IN (
+          SELECT id FROM checklist_runs
+           WHERE scope_type = 'processing_batch' AND scope_id = ?
+        )`,
+      [batchId],
+    );
+    await db.execute(
+      `DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
+      [batchId],
+    );
+    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+    await db.execute(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
     return;
   }
 
@@ -2013,11 +2042,17 @@ export async function updateProcessingBatchStart(
   );
 }
 
-// deleteProcessingBatch() is GONE (#83). It erased a processing run, its members
-// and its protocol checklist — the evidence that the run happened and that its
-// steps were performed. Nothing ever called it, so it was a loaded gun with no
-// trigger; under "nothing is ever deleted" it should not be sitting there for a
-// future button to wire up either.
+// deleteProcessingBatch() is still GONE (#83). It erased ANY processing run — its
+// members and its protocol checklist with it — which for a run that happened is
+// the evidence that it happened and that its steps were performed. Nothing ever
+// called it, so it was a loaded gun with no trigger.
+//
+// One narrow delete replaced it in 0.16.3: `updateBatchMembers(id, [])` removes a
+// run that has been emptied of its samples (#135). That is a plan withdrawn
+// rather than work erased — nothing was cut, nothing was processed — and the
+// Manifest still holds the batch's creation and every stage transition its
+// samples made. The distinction is the whole of it: a run that RAN keeps its
+// record; a run that never had anything in it is not a record of anything.
 
 export async function listChecklistItems(
   scopeType: string,

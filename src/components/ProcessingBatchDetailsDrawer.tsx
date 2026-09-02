@@ -127,12 +127,12 @@ export function ProcessingBatchDetailsDrawer({
                   control on the last sample meant a run could be emptied down to
                   one and then never dissolved — the technician had to start a
                   run that was not happening and mark it done, which puts a lie
-                  in the record. Taking the last one out cancels the run. */}
+                  in the record. Taking the last one out removes the run. */}
               {canEditMembers && (
                 <button
                   title={
                     samples.length === 1
-                      ? `Take ${displayCode(sample.sample_code)} out — this cancels the run`
+                      ? `Take ${displayCode(sample.sample_code)} out — this removes the run`
                       : isRunning
                         ? `Take ${displayCode(sample.sample_code)} out of this run — it returns to pre-processing`
                         : "Remove from this planned run"

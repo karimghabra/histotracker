@@ -1,6 +1,42 @@
 # Changelog
 
-## 0.16.2 - unreleased
+## 0.16.3 - unreleased
+
+Reverses the shape of 0.16.2's fix. Same trigger, different outcome: emptying a
+processing run now **removes** it rather than parking it as `cancelled`.
+
+- **An emptied run is deleted (#135).** 0.16.2 kept the batch row with a
+  `cancelled` status and deleted its membership — which was worse than either
+  option on the table. The surviving record could say a run had existed and not
+  what was in it, and a shell is not a record. Asked at the bench which way to go,
+  the answer was delete, and the reasoning holds: #83 protects the record of work
+  that **happened**, and a run emptied of its samples is a plan withdrawn —
+  nothing cut, nothing processed, and for a planned run nothing that physically
+  moved at all.
+
+  What did happen is not lost. `audit_events` keeps the run's creation and every
+  stage transition its samples made, so "EE-1 went into a machine at 09:14 and
+  came out at 09:20" is still answerable from the Manifest — which is where "who
+  did what" belongs, and where it is now tested (#77).
+
+  **The block survives; only the run goes.** That distinction has its own
+  invariant, because deleting a sample along with the run it happened to be in
+  would be #83 exactly.
+
+- **The never-delete guard was updated, not worked around.** `db.ts` is scanned
+  for DELETEs against lab-record tables against a fixed allow-list, and this
+  change tripped it — which is the guard doing its job: it forces a new delete
+  into review instead of letting it arrive as the obvious way to make a button
+  work. The count moved from 3 to 4 and the entry says who added it and why. The
+  `deleteProcessingBatch()` tombstone is amended rather than removed: deleting an
+  arbitrary run is still forbidden; deleting one with nothing in it is not.
+
+- Run numbers are row ids and ids are `AUTOINCREMENT`, so a removed run's number
+  is retired rather than handed to the next run. That has an invariant too — it
+  is the one way deleting could genuinely corrupt the record, if a technician had
+  written "Batch 3" on a cassette.
+
+## 0.16.2 - 2026-08-28
 
 No schema change. `cancelled` is a new value in a column that has never had a
 CHECK constraint, and every listing selects the statuses it wants — so a build

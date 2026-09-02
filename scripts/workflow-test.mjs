@@ -362,12 +362,16 @@ function makeApi(db) {
     const previousIds = all(
       `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
 
-    // Taking the LAST sample out cancels the run (#135). Cancelled, never
-    // deleted: the row keeps its id and its history.
+    // Taking the LAST sample out removes the run (#135, 0.16.3). A deliberate
+    // exception to #83 — see the allow-list note in the never-delete invariant.
     if (!sampleIds.length) {
-      run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
-      run(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
       if (running) for (const id of previousIds) revertToStage(id, "in_ethanol");
+      run(`DELETE FROM checklist_items WHERE checklist_run_id IN (
+             SELECT id FROM checklist_runs
+              WHERE scope_type = 'processing_batch' AND scope_id = ?)`, [batchId]);
+      run(`DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batchId]);
+      run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+      run(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
       return;
     }
 
@@ -3297,13 +3301,27 @@ invariant("the new-sample dialog blocks Create until every sample has a descript
 invariant("no code path deletes a sample, cut group or slide", () => {
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   const RECORD_TABLES = ["samples", "slides", "section_requests", "processing_batches"];
-  // The ONLY legitimate delete: unwinding a multi-table write that failed
-  // part-way. Nothing was ever committed to the record, so there is nothing to
-  // preserve — and leaving the fragments behind is what created the phantom cut
-  // group 0.7.3 had to fix.
-  // Two call sites: createSectionRequests' catch block (slides +
-  // section_requests) and startProcessingBatch's (processing_batches).
-  const ALLOWED_ABORT_UNWIND = 3;
+  // The allow-list, and every entry has to earn its place in review.
+  //
+  //  · 3 abort unwinds — a multi-table write that failed part-way. Nothing was
+  //    ever committed to the record, so there is nothing to preserve, and
+  //    leaving the fragments behind is what created the phantom cut group 0.7.3
+  //    had to fix. Two call sites: createSectionRequests' catch block (slides +
+  //    section_requests) and startProcessingBatch's (processing_batches).
+  //
+  //  · 1 emptied processing run — updateBatchMembers(id, []) (#135, 0.16.3).
+  //    Taking the last sample out removes the run. This is a DELIBERATE
+  //    exception, decided at the bench: #83 protects the record of work that
+  //    happened, and a run emptied of its samples is a plan withdrawn — nothing
+  //    cut, nothing processed, and for a planned run nothing that ever moved.
+  //    What did happen survives in `audit_events`: the batch's creation and
+  //    every stage transition its samples made are still in the Manifest, which
+  //    is where "who did what" belongs and where it is now tested (#77).
+  //
+  //    0.16.2 tried a `cancelled` status instead and it was worse than either
+  //    choice — it kept the batch row and deleted its membership, leaving a
+  //    record that could say a run existed but not what was in it.
+  const ALLOWED_ABORT_UNWIND = 4;
   // Strip comments first. The tombstone notes left where deleteSample() and
   // deleteProcessingBatch() used to live NAME the statements they describe, so
   // scanning raw source counted the explanation as an offence.
@@ -3975,7 +3993,7 @@ invariant("an extra is not real until its cut group has been dispositioned", () 
 // read as one rule instead of three arbitrary strings.
 
 
-issue(135, "taking the last sample out of a run cancels the run", () => {
+issue(135, "taking the last sample out of a run removes the run", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "the only block");
@@ -3983,47 +4001,64 @@ issue(135, "taking the last sample out of a run cancels the run", () => {
   const batch = api.startProcessingBatch({
     sampleIds: [id], processingType: "Short", startedAt: "2026-01-02 09:00",
   });
-  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "processing",
-     "the run is going");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "processing_started",
-     "and the block is in the machine");
+     "the block is in the machine");
 
   // This used to throw "A run needs at least one sample" — true, and unhelpful.
   // A run with nothing in it is not a run, and emptying it is how you say so.
   api.updateBatchMembers(batch, []);
 
-  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "cancelled",
-     "the run is cancelled, not left half-empty");
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batches WHERE id = ?`, [batch]).c, 0,
+     "the run is gone");
   eq(api.get(`SELECT COUNT(*) AS c FROM processing_batch_members WHERE batch_id = ?`, [batch]).c, 0,
-     "with nothing left in it");
+     "and takes its membership with it");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "in_ethanol",
-     "and the block back where it waits to be loaded");
+     "the block is back where it waits to be loaded");
   eq(api.get(`SELECT processing_started_at AS t FROM samples WHERE id = ?`, [id]).t, null,
-     "carrying no start time for a run it is no longer in");
+     "carrying no start time for a run that no longer exists");
 });
 
-invariant("a cancelled run is kept, not deleted", () => {
+invariant("removing a run leaves the SAMPLE untouched", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
-  const { id } = api.addSample(p, "EE", "the only block");
+  const { id, code } = api.addSample(p, "EE", "the only block");
   api.completePreprocessing(id);
   const batch = api.startProcessingBatch({
     sampleIds: [id], processingType: "Short", startedAt: "2026-01-02 09:00",
   });
-  const before = api.get(`SELECT started_at AS t FROM processing_batches WHERE id = ?`, [batch]).t;
-
   api.updateBatchMembers(batch, []);
 
-  // #83, applied to a run: the row survives with its id and its start time, so
-  // "batch 3 was cancelled" stays answerable. Deleting it would leave a gap in
-  // the numbering and no account of what happened.
-  const row = api.get(`SELECT id, status, started_at AS t FROM processing_batches WHERE id = ?`, [batch]);
-  assert(row, "the batch row is still there");
-  eq(row.status, "cancelled", "flagged rather than removed");
-  eq(row.t, before, "and it still remembers when it was started");
+  // The #135 exception is narrow on purpose: the RUN goes, the block does not.
+  // Deleting a sample because the run it was in was dissolved would be #83
+  // exactly, and is the mistake this invariant exists to catch.
+  const sample = api.get(`SELECT id, sample_code AS c FROM samples WHERE id = ?`, [id]);
+  assert(sample, "the block survives");
+  eq(sample.c, code, "with its code, so the numbering is undisturbed");
 });
 
-invariant("cancelling a PLANNED run leaves its samples where they were", () => {
+invariant("a later run never inherits a removed run's number", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const a = api.addSample(p, "EE", "first block");
+  const b = api.addSample(p, "EE", "second block");
+  api.completePreprocessing(a.id);
+  api.completePreprocessing(b.id);
+  const first = api.startProcessingBatch({
+    sampleIds: [a.id], processingType: "Short", startedAt: "2026-01-02 09:00",
+  });
+  api.updateBatchMembers(first, []);
+  const second = api.startProcessingBatch({
+    sampleIds: [b.id], processingType: "Short", startedAt: "2026-01-02 10:00",
+  });
+
+  // The board labels a run "Batch <id>" and ids are AUTOINCREMENT, so a removed
+  // run's number is retired rather than handed to the next one. Without that, a
+  // technician who wrote "Batch 3" on a cassette would find a DIFFERENT Batch 3
+  // in the app — the one way deleting could actually corrupt the record.
+  assert(second > first, `a removed run's number is not reused (${first} then ${second})`);
+});
+
+invariant("removing a PLANNED run leaves its samples where they were", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "planned block");
@@ -4036,15 +4071,14 @@ invariant("cancelling a PLANNED run leaves its samples where they were", () => {
 
   api.updateBatchMembers(batch, []);
 
-  // A planned run never moved anything, so cancelling it must not "revert" a
+  // A planned run never moved anything, so removing it must not "revert" a
   // sample to a stage it was already past — that would rewind real work on a
   // block that merely had a run pencilled in.
-  eq(api.get(`SELECT status AS s FROM processing_batches WHERE id = ?`, [batch]).s, "cancelled",
-     "the plan is cancelled");
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batches WHERE id = ?`, [batch]).c, 0,
+     "the plan is gone");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, stageBefore,
      "and the block has not moved");
 });
-
 
 // ---------------------------------------------------------------------------
 // #77 — "Manifest should show who made what changes".
