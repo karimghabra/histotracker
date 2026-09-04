@@ -1,6 +1,59 @@
 # Changelog
 
-## 0.16.3 - unreleased
+## 0.17.0 - unreleased
+
+No schema change and nothing that syncs: a theme is eleven CSS variables in
+`localStorage`, so it stays on the machine and the person who chose it. A 0.16
+instance opens a 0.17 database unchanged.
+
+- **Build your own theme, and watch the board while you do it.** The theme
+  picker has always lived in the Settings modal, which covers the board — so
+  choosing a colour meant close, look, reopen. The customizer is a **docked
+  panel** in the same slot as the details drawers, with the same resize handle,
+  and every change paints `:root` on the keystroke. There is no preview pane
+  because the app is the preview.
+
+  **Start from** any of the 26 existing themes rather than from nothing — most
+  people want "our blue instead of that blue", which is one change to a palette
+  rather than eleven decisions from black. The theme values are read out of the
+  live stylesheet rather than copied into TypeScript, so "start from Night Shift"
+  cannot drift into something that is not Night Shift.
+
+  **Discard restores both halves** — the palette and the theme that was selected.
+  Restoring only the colours would leave the picker saying "Custom" for a theme
+  nobody saved.
+
+- **A contrast warning, which nobody asked for.** Eleven colours picked one at a
+  time, with only the last combination ever looked at, is a reliable way to build
+  something unreadable; `index.css` already carries a long note about a version
+  of this that shipped. The five pairs that actually carry text are checked
+  against WCAG, worst first, and the faint ink is judged at 3:1 rather than 4.5
+  because it only ever carries timestamps — a warning that always fires is one
+  nobody reads. **It warns and still lets you save.** A lab that wants a
+  low-contrast theme for a dark room can have one; it should just not get one by
+  accident.
+
+- **Dark custom themes get what built-in dark themes get.** A theme in
+  `index.css` is not only eleven variables: the dark ones also set
+  `color-scheme` and remap Tailwind's literal `bg-white` to the panel colour.
+  `bg-white` is on 42 elements — every text input and every subtle button — so a
+  dark palette without that remap renders white boxes on a dark board, and the
+  contrast check cannot see it because `#ffffff` is not a colour the user picked.
+  Dark is inferred from the surface luminance and applied by the same function
+  that paints the palette, so the two cannot disagree.
+
+Two things the tests caught that would otherwise have shipped:
+
+- The unit test that checks `THEME_VARS` against the stylesheet **failed on its
+  first run** — `--color-warn` is declared in a shared rule for all the dark
+  themes rather than inside each theme block, so reading one block found ten
+  variables, not eleven. The test now scans every theme rule.
+- Editing `index.css` with a script flipped the file's line endings and broke the
+  Tailwind build outright — the app served a plugin error instead of a page, and
+  all four browser tests failed at the first assertion. Reverted and re-applied
+  preserving CRLF; the change is 18 added lines.
+
+## 0.16.3 - 2026-09-01
 
 Reverses the shape of 0.16.2's fix. Same trigger, different outcome: emptying a
 processing run now **removes** it rather than parking it as `cancelled`.

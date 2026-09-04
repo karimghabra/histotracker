@@ -2,6 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { ALL_PROJECTS, Sidebar, type AppView } from "./components/Sidebar";
+import { ThemeCustomizerPanel } from "./components/ThemeCustomizerPanel";
+import {
+  applyPalette,
+  CUSTOM_THEME,
+  loadCustomPalette,
+  readThemePalette,
+  saveCustomPalette,
+  type Palette as ThemePalette,
+} from "./lib/theme";
 import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
 import { NewProjectDialog } from "./components/NewProjectDialog";
@@ -136,6 +145,15 @@ export default function App() {
   const [theme, setTheme] = useState(
     () => window.localStorage.getItem("histometer-theme") ?? "system",
   );
+  // The custom palette, and the customizer's live draft (#theme customizer).
+  //
+  // `draft` is what the board is CURRENTLY painted with while the panel is
+  // open; `saved` is what survives a reload. Keeping them apart is what makes
+  // Discard work: the panel can repaint the whole app on every keystroke and
+  // still put back exactly what was there.
+  const [customPalette, setCustomPalette] = useState<ThemePalette | null>(() => loadCustomPalette());
+  const [themeDraft, setThemeDraft] = useState<ThemePalette | null>(null);
+  const [themeBefore, setThemeBefore] = useState<{ theme: string; palette: ThemePalette | null } | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(
     () => Number(window.localStorage.getItem("histometer-drawer-width") ?? "416"),
   );
@@ -157,6 +175,16 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("histometer-theme", theme);
   }, [theme]);
+
+  // One place decides what the app is painted with, so the draft and the saved
+  // palette can never both be half-applied. The draft wins while the customizer
+  // is open; otherwise the saved palette applies only when `custom` is picked;
+  // otherwise the stylesheet is left to do its job.
+  useEffect(() => {
+    if (themeDraft) applyPalette(themeDraft);
+    else if (theme === CUSTOM_THEME) applyPalette(customPalette);
+    else applyPalette(null);
+  }, [theme, customPalette, themeDraft]);
 
   useEffect(() => {
     window.localStorage.setItem("histometer-drawer-width", String(drawerWidth));
@@ -533,7 +561,45 @@ export default function App() {
   // hazard applies to the timestamp draft and the stain-request agent, and to
   // any draft state added to these drawers later; keying by id retires the whole
   // class rather than resetting the three fields that exist today.
-  const activeDrawer = selectedSample ? (
+  function openThemeCustomizer() {
+    // Remember what to go back to BEFORE anything is painted, so Discard is
+    // exact rather than approximate — including which theme was selected, not
+    // just which colours were showing.
+    setThemeBefore({ theme, palette: customPalette });
+    setThemeDraft(customPalette ?? readThemePalette(theme));
+    setShowSettings(false);
+  }
+
+  function saveThemeCustomizer() {
+    if (!themeDraft) return;
+    saveCustomPalette(themeDraft);
+    setCustomPalette(themeDraft);
+    setTheme(CUSTOM_THEME);
+    setThemeDraft(null);
+    setThemeBefore(null);
+    flash("Theme saved");
+  }
+
+  function discardThemeCustomizer() {
+    // Put back both halves. Restoring only the palette would leave the picker
+    // saying "Custom" for a theme the user never saved.
+    if (themeBefore) {
+      setCustomPalette(themeBefore.palette);
+      setTheme(themeBefore.theme);
+    }
+    setThemeDraft(null);
+    setThemeBefore(null);
+  }
+
+  const activeDrawer = themeDraft ? (
+    <ThemeCustomizerPanel
+      palette={themeDraft}
+      onChange={setThemeDraft}
+      onSave={saveThemeCustomizer}
+      onCancel={discardThemeCustomizer}
+      width={drawerWidth}
+    />
+  ) : selectedSample ? (
     <SampleDetailsDrawer
       key={selectedSample.id}
       sample={selectedSample}
@@ -922,6 +988,7 @@ export default function App() {
         <SettingsDialog
           theme={theme}
           onThemeChange={setTheme}
+          onCustomizeTheme={openThemeCustomizer}
           // Close Settings when opening one of the dialogs it hands off to:
           // two stacked modals over the same backdrop is unreadable, and
           // Escape would only dismiss the top one.

@@ -22,12 +22,15 @@ import { useIsViewer, useReadOnly } from "../lib/readOnly";
 export function SettingsDialog({
   theme,
   onThemeChange,
+  onCustomizeTheme,
   onOpenManage,
   onOpenBackups,
   onClose,
 }: {
   theme: string;
   onThemeChange: (theme: string) => void;
+  /** Opens the docked customizer, which needs this dialog out of the way. */
+  onCustomizeTheme: () => void;
   onOpenManage: () => void;
   onOpenBackups: () => void;
   onClose: () => void;
@@ -169,6 +172,11 @@ export function SettingsDialog({
             ))}
           </select>
         </label>
+        {/* Opening the customizer CLOSES this dialog, which is the point: you
+            cannot tune a palette against a board you cannot see. */}
+        <Button variant="subtle" className="w-full" onClick={onCustomizeTheme}>
+          <Palette size={14} /> Customize colours…
+        </Button>
       </Section>
 
       {!isViewer && (

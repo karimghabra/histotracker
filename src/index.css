@@ -312,6 +312,24 @@
   background-color: var(--color-panel);
 }
 
+/* A CUSTOM dark theme needs the same two things every built-in dark theme gets,
+   and neither of them is one of the eleven colour variables:
+
+     · `color-scheme`, so native scrollbars and form controls follow;
+     · Tailwind's literal `bg-white` remapped to the panel colour.
+
+   `bg-white` is on 42 elements, including every text input and every subtle
+   button, so without this a dark custom palette renders white boxes on a dark
+   board — and the contrast check cannot see it, because #ffffff is not a value
+   the user picked. applyPalette() sets the flag from the surface colour, so it
+   cannot drift out of step with the palette it belongs to. */
+:root[data-custom-dark] {
+  color-scheme: dark;
+}
+:root[data-custom-dark] .bg-white {
+  background-color: var(--color-panel);
+}
+
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] .bg-white {
     background-color: var(--color-panel);
