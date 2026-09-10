@@ -375,6 +375,68 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #136–#137 — what the log could not tell you — status as of 0.14.0
+
+Both fixed. One schema change (0025, additive).
+
+### #137 — Embedding Notes
+
+**Reported:** "Embedding Notes. During sample creation add a box for embedding
+notes."
+
+**Root cause:** there was no such field. How a specimen is to be embedded —
+which face down, which end proximal, whether it is bisected — is decided at
+intake and read at the embedding station, one station *before* the microtome.
+The only places to write it were Sectioning / Cut Notes, which is read one
+station too late, and General Notes, where it is buried.
+
+**Fix:** migration `0025_sample_embedding_notes.sql` adds
+`samples.embedding_notes TEXT NOT NULL DEFAULT ''`; a box in `NewSampleDialog`;
+read-back in the board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the
+Logs CSV/XLSX. Added to `ensureRuntimeSchema()` (so a backup revert, an undo
+restore or a sync pull converges it) and to `RESTORE_COLUMNS` (so undoing an
+edit restores it rather than blanking it).
+
+**Coverage:** `npm run test:legacy` asserts the column DIRECTLY on the populated
+pre-0023 fixture, by both routes an update arrives — the migration applied to
+the existing file, and `ensureRuntimeSchema` converging a swapped-in image —
+with the pre-existing rows compared byte for byte before and after. That harness
+now applies *every* migration the fixture predates rather than naming 0023
+alone, which is how it quietly stopped covering "the update".
+
+### #136 — assigned stains did not reach the log
+
+**Reported:** "When Stains are assigned they do not show up on the log until
+they have been sectioned. Can they show up earlier in the process so that the
+log has the same info as the main screen. Example: the current fixing TE8-12
+samples have SafO assigned but I cannot tell that from the log."
+
+**Root cause:** the Logs derived a block's agents from its physical `slides`
+alone. The main screen never did — `SampleCard` flags the block from
+`pending_stains` and `SampleDetailsDrawer` lists a "Requested" row per
+outstanding agent. So a block in fixative with SafO assigned had nothing for the
+Logs to read.
+
+**Fix:** `src/lib/logStains.ts` — `outstandingStains()` and `logAgents()`.
+`LogsView` builds its Stains / IHC cell, stain filter, search haystack and stain
+sort from it, and `export.ts`'s `logRowCells()` emits one row per outstanding
+request (blank Slide ID, Slide Stage `requested (not cut)`).
+
+**The part that is easy to get wrong:** the ask was *consistency between the log
+and the main screen*, and the exported log is still the log. Fixing only the
+on-screen table leaves the CSV a technician takes to the bench disagreeing with
+the screen it came from — silently, in both the zero-slide case and the harder
+one where a block already has glass for one agent and owes a second. Both halves
+go through the one helper for exactly that reason.
+
+**Coverage:** `src/lib/logStains.test.ts`; `src/lib/logsCsv.test.ts` (both
+export shapes, red before the fix); `tests/e2e/issues-136-137.spec.ts`, which
+asserts the same facts on screen and in the CSV exported from that same view;
+harness gates `issue(136, …)` ×2 and `issue(137, …)` over a port of
+`logAgents()`.
+
+---
+
 ## 0.13.1 — what a second stress harness found
 
 Full write-up: `docs/stress_test_v2.md`. No schema change.

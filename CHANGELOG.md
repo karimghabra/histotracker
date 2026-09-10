@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.14.0 - unreleased
+
+Two things the log could not tell you.
+
+- **Embedding Notes (#137).** How a specimen should be embedded — which face
+  goes down, which end is proximal, whether it gets bisected — is decided when
+  the block is logged in, and read by whoever picks up the mould. It had nowhere
+  to live: it went into the cut notes, which are read one station later at the
+  microtome, or into General Notes with everything else about the block. There
+  is now a box for it at sample creation, and the note is shown wherever the
+  block is read — the board drawer, the expanded Logs row, and both exports.
+- **Assigned stains now show up in the log before anything is cut (#136).** The
+  main screen has always known a block owes a stain: the card flags it, and the
+  drawer lists it as "Requested". The Logs read physical slides only, so a block
+  sitting in fixative with Safranin O assigned read as having no stains at all —
+  and neither did a block already cut for one agent with a second still owed.
+  Both now appear, marked *(assigned)* so a plan is never mistaken for glass,
+  and the stain filter finds them.
+
+  This applies to the exported log too, which is the part worth saying out loud:
+  the CSV and Excel exports build their rows from the same helper the on-screen
+  table does, so the spreadsheet you take to the bench and the screen you took
+  it from cannot disagree about what a block owes.
+
+Schema: migration 0025 adds `samples.embedding_notes`. Additive — an existing
+database gains the column filled with the empty string, no row is rewritten, and
+an older build ignores it. Proven directly against a populated pre-existing
+database in `npm run test:legacy`, by both routes an update can arrive (the
+migration, and the runtime convergence a backup revert or sync pull takes).
+
 ## 0.13.2 - unreleased
 
 No schema change. Six more defects, found by pointing **many random walkers at
