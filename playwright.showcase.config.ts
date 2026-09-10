@@ -15,7 +15,15 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     viewport: { width: 1440, height: 900 },
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // Spread the device FIRST, then re-apply the viewport: devices["Desktop Chrome"]
+  // carries its own 1280x720 and would otherwise clobber the size set above,
+  // cropping the taller dialogs out of the tutorial screenshots.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+  ],
   webServer: {
     command: "npx vite --config vite.config.playwright.ts",
     url: `http://localhost:${PORT}`,

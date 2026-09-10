@@ -7,7 +7,7 @@ import { settleAfterDrop } from "../helpers/drag";
 //   npx playwright test --config playwright.showcase.config.ts
 //
 // Each shot() writes docs/tutorial/img/<name>.png. The flow is sequential: one
-// sample (EE-0001) is carried from intake all the way to imaging, then the Logs,
+// sample (EE-1) is carried from intake all the way to imaging, then the Logs,
 // depth-tagging, requests, exports and backups features are shown.
 
 const IMG = "docs/tutorial/img";
@@ -66,11 +66,11 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("2 week stretch, PLA scaffold");
   await shot(page, "04-new-sample");
   await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-0001")).toBeVisible();
+  await expect(page.getByText("EE-1")).toBeVisible();
   await shot(page, "05-board-intake");
 
   // ---- Sample drawer: preprocessing, project, request a stain -------------
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
   await shot(page, "06-sample-drawer");
   await page.getByRole("button", { name: "Placed in fixative" }).click();
@@ -79,7 +79,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await closeDrawer(page);
 
   // ---- Processing run ------------------------------------------------------
-  await dragOnto(page, "EE-0001", "Processor");
+  await dragOnto(page, "EE-1", "Processor");
   await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
   await shot(page, "07-processing-batch");
   await expect(async () => {
@@ -89,11 +89,11 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   }).toPass({ timeout: 15000 });
   await shot(page, "08-processor-running");
   await dragOnto(page, "Batch 1", "Needs Embedding");
-  await dragOnto(page, "EE-0001", "Embedded Inventory");
+  await dragOnto(page, "EE-1", "Embedded Inventory");
   await shot(page, "09-embedded");
 
   // ---- Send for Cutting ----------------------------------------------------
-  await page.getByText("EE-0001", { exact: true }).first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
   // Make slide #1 an H&E stain to show the mixed plan.
@@ -118,16 +118,16 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
-  await expect(col("Ready for Imaging").getByText("EE-0001").first()).toBeVisible({ timeout: 15000 });
+  await expect(col("Ready for Imaging").getByText("EE-1").first()).toBeVisible({ timeout: 15000 });
   await shot(page, "13-ready-for-imaging");
 
   // ---- Logs view -----------------------------------------------------------
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await expect(page.getByRole("cell", { name: "EE-0001", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   await shot(page, "14-logs", true);
 
   // Drill in, select slides, tag a depth.
-  await page.getByRole("cell", { name: "EE-0001", exact: true }).click();
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   const boxes = page.getByRole("checkbox", { name: /Select slide/ });
   await boxes.nth(0).check();
   await boxes.nth(1).check();
@@ -141,12 +141,10 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await expect(page.getByText("100µm deep").first()).toBeVisible();
   await shot(page, "17-depth-tag-applied", true);
 
-  // Request a stain from the Logs row.
-  await page.getByRole("button", { name: /Request stain for EE-0001/ }).click();
-  await expect(page.getByRole("heading", { name: "Request a stain" })).toBeVisible();
-  await page.getByLabel("Requested stain / IHC").selectOption({ label: "CD3 (ihc)" });
+  // Add a stain straight from the Logs row. #114 replaced the sync-request
+  // dialog here with an inline picker already scoped to the row's block.
+  await page.getByLabel("Add a stain to EE-1").selectOption({ label: "CD3 (ihc)" });
   await shot(page, "18-request-stain");
-  await page.keyboard.press("Escape");
 
   // ---- Exports + Backups ---------------------------------------------------
   await page.getByRole("button", { name: "Export" }).click();
