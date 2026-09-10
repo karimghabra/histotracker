@@ -171,7 +171,7 @@ function makeApi(db) {
         // #137 — asked for at intake, so the port writes it the same way db.ts
         // does. Coerced, matching addSample(): a caller that predates the field
         // stores an empty note rather than throwing.
-        String(opts.embeddingNotes ?? ""),
+        String(opts.embeddingNotes ?? "").trim(),
         opts.stains ?? "",
         preselected,
         now(),
@@ -3203,12 +3203,125 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
     // this build would break outright without them.
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_type"/,
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_name"/,
+    // 0025 — read on every sample row in the drawer, the Logs and both exports
+    // (#137). Missing it would break an image restored from an older backup.
+    /ensureColumn\(\s*db,\s*"samples",\s*"embedding_notes"/,
   ];
   for (const re of converged) {
     assert(re.test(db), `ensureRuntimeSchema must converge ${re}`);
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// 0.13.3 — the log says what the main screen says (#136), and the embedder gets
+// told what was decided at intake (#137).
+// ---------------------------------------------------------------------------
+
+/**
+ * Port of logAgents() — src/lib/logStains.ts.
+ *
+ * Both halves of the Logs go through that one helper: the on-screen table and
+ * the CSV/XLSX export. That is the point of #136 — the ask was CONSISTENCY
+ * between the log and the main screen, and two implementations that happen to
+ * agree today are what produced the bug in the first place.
+ */
+function logAgentsPort(api, sampleId) {
+  const out = [];
+  const seen = new Map();
+  const slides = api.all(
+    `SELECT sl.assay_name AS name FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.assay_name <> '' ORDER BY sl.id`,
+    [sampleId],
+  );
+  for (const slide of slides) {
+    const key = String(slide.name).toLowerCase();
+    if (seen.has(key)) continue;
+    const entry = { name: slide.name, requested: false };
+    seen.set(key, entry);
+    out.push(entry);
+  }
+  const row = api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
+  const outstanding = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+  for (const agent of outstanding) {
+    const key = String(agent.assay_name).toLowerCase();
+    const existing = seen.get(key);
+    if (existing) {
+      existing.requested = true;
+      continue;
+    }
+    const entry = { name: agent.assay_name, requested: true };
+    seen.set(key, entry);
+    out.push(entry);
+  }
+  return out;
+}
+
+// "The current fixing TE8-12 samples have SafO assigned but I cannot tell that
+// from the log." The block has no cut group and no glass, so everything the log
+// used to read about it was empty.
+issue(136, "a stain assigned to an uncut block is named in the log", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "TE8-12 fixing sample", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "Safranin O" }],
+  });
+  eq(api.all(`SELECT id FROM section_requests WHERE sample_id = ?`, [id]).length, 0,
+     "precondition: nothing has been cut, which is why the old log said nothing");
+
+  const assigned = logAgentsPort(api, id);
+  eq(assigned.length, 1, "the block names exactly the agent it owes");
+  eq(assigned[0].name, "Safranin O", "…by name, exactly as the board card does");
+  eq(assigned[0].requested, true, "marked as a plan, not as glass that exists");
+
+  // And once it IS cut, the same helper reports it as a fact rather than a
+  // request — the log must not go on calling a made slide "assigned".
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "Safranin O", assay_type: "stain", assay_name: "Safranin O" },
+  ]);
+  const cut = logAgentsPort(api, id);
+  eq(cut.length, 1, "one agent, not one per stage it passed through");
+  eq(cut[0].requested, false, "the cut fulfilled the request, so it is no longer outstanding");
+});
+
+// The harder half of #136, and the one with no existing path: a block that
+// already HAS glass, with a second agent still only assigned. Its slide rows
+// named every agent except the one still owed.
+issue(136, "a block with slides still names a second stain that is only assigned", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "cut but still owing a stain");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "Alcian Blue", assay_type: "stain", assay_name: "Alcian Blue" },
+  ]);
+  api.requestStainForSample(id, "stain", "Safranin O");
+
+  const agents = logAgentsPort(api, id);
+  eq(agents.map((a) => `${a.name}:${a.requested}`).join(", "),
+     "Alcian Blue:false, Safranin O:true",
+     "glass first, then what is still owed — and the owed one is not dropped");
+});
+
+// #137 — "During sample creation add a box for embedding notes."
+issue(137, "an embedding note given at intake is stored on the block", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "oriented block", {
+    embeddingNotes: "  cut face down, proximal end left  ",
+  });
+  eq(api.get(`SELECT embedding_notes AS n FROM samples WHERE id = ?`, [id]).n,
+     "cut face down, proximal end left",
+     "trimmed on the way in, exactly like the other intake notes");
+
+  // A block created without one must read as empty, never NULL — every screen
+  // that shows it tests the string.
+  const plain = api.addSample(p, "EE", "plain block");
+  eq(api.get(`SELECT embedding_notes AS n FROM samples WHERE id = ?`, [plain.id]).n, "",
+     "no note means an empty note, not a null");
+});
 
 // ---------------------------------------------------------------------------
 // 0.13.0 — the record must match the work that was actually done.
