@@ -107,12 +107,19 @@ on every push to a `claude/**` branch (and on `v*` tags). It publishes a GitHub
 Release tagged `app-v<version>`, where `<version>` comes from
 `src-tauri/tauri.conf.json`.
 
-- Keep the version in sync across `package.json`, `src-tauri/tauri.conf.json`,
-  `src-tauri/Cargo.toml` (and the `Cargo.lock` / `package-lock.json` entries).
-- **Every push to the branch republishes the release for the current version.**
-  Bump the version *before* pushing new work, or you'll overwrite a release a
-  tester is already using.
-- Record user-facing changes in `CHANGELOG.md`.
+- **Feature branches do not pick versions.** The build in use is cut from a
+  long-running `claude/**` release line that is ahead of `master` (check
+  `gh release list`); a bump on a branch off `master` names a version
+  *behind* what ships. Whoever cuts the release bumps it, in sync across
+  `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and the
+  `Cargo.lock` / `package-lock.json` entries). Put changelog prose under the
+  existing unreleased heading.
+- **Every push to a `claude/**` branch republishes the release for its
+  version**, so a release-line push must bump first or it overwrites a release
+  a tester is already using.
+- **Every PR states its compatibility with the version in use** (a standing
+  requirement from the lab): whether its schema change, if any, applies cleanly
+  to the release line's database, and how it merges onto that line.
 
 ## Maintaining this file
 
