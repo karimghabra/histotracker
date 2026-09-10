@@ -131,8 +131,9 @@ const ACTIONS: Action[] = [
       };
     },
     // "not been cut yet" is the 0.13.1 guard: a planned slide is a line in a
-    // plan, not glass, and cannot go on a stainer.
-    refusals: [/removed/i, /has not been cut yet/i],
+    // plan, not glass, and cannot go on a stainer. "already been imaged" is the
+    // 0.13.2 one: re-staining imaged glass would stamp staining after imaging.
+    refusals: [/removed/i, /has not been cut yet/i, /already been imaged/i],
   },
   {
     name: "send a slide back to extras",
