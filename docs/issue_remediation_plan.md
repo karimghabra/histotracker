@@ -375,7 +375,7 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
-## #136–#137 — what the log could not tell you — status as of 0.14.0
+## #136–#137 — what the log could not tell you — unreleased (master)
 
 Both fixed. One schema change (0025, additive).
 

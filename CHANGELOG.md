@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.14.0 - unreleased
+## 0.13.2 - unreleased
 
-Two things the log could not tell you.
+Two things the log could not tell you, and six more defects found by a stress
+harness.
+
+### Embedding notes, and a log that names assigned stains
 
 - **Embedding Notes (#137).** How a specimen should be embedded — which face
   goes down, which end is proximal, whether it gets bisected — is decided when
@@ -43,11 +46,10 @@ an older build ignores it. Proven directly against a populated pre-existing
 database in `npm run test:legacy`, by both routes an update can arrive (the
 migration, and the runtime convergence a backup revert or sync pull takes).
 
-## 0.13.2 - unreleased
+### Six defects from a swarm of walkers
 
-No schema change. Six more defects, found by pointing **many random walkers at
-one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
-after every move. Full account in `docs/stress_test_v2.md`.
+Six more defects, found by pointing **many random walkers at one large board**
+— 150 blocks, ~400 slides — and checking all 19 invariants after every move. Full account in `docs/stress_test_v2.md`.
 
 The walkers run in two modes, because they answer different questions. Taking
 strict turns, they explore *sequences* on a board big enough for the rules to
