@@ -90,6 +90,31 @@ function duplicateLabel(ordinal) {
   return label;
 }
 
+/**
+ * The columns getDb() converges on every open, read out of ensureRuntimeSchema
+ * in `src/lib/db.ts` rather than retyped — same reasoning as the stage lists
+ * above. Some columns exist ONLY there, with no numbered migration
+ * (`samples.embedding_notes`; see the note beside it in db.ts), so a schema
+ * built from the migrations alone is not the schema the app actually runs on.
+ */
+const RUNTIME_COLUMNS = (() => {
+  const src = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  const body = /async function ensureRuntimeSchema[\s\S]*?\n}/.exec(src)?.[0] ?? "";
+  const cols = [...body.matchAll(/ensureColumn\(\s*db,\s*"(\w+)",\s*"(\w+)",\s*"([^"]+)"\s*\)/g)]
+    .map(([, table, column, type]) => ({ table, column, type }));
+  if (cols.length === 0) throw new Error("could not read ensureRuntimeSchema out of db.ts");
+  return cols;
+})();
+
+// Port of ensureRuntimeSchema's column half — additive, a no-op when present.
+function convergeRuntimeColumns(db) {
+  for (const { table, column, type } of RUNTIME_COLUMNS) {
+    const have = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
+/** The database getDb() hands the app: every migration, then convergence. */
 function freshDb() {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
@@ -97,6 +122,7 @@ function freshDb() {
     if (!file.endsWith(".sql")) continue;
     db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
   }
+  convergeRuntimeColumns(db);
   return db;
 }
 
@@ -3203,8 +3229,8 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
     // this build would break outright without them.
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_type"/,
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_name"/,
-    // 0025 — read on every sample row in the drawer, the Logs and both exports
-    // (#137). Missing it would break an image restored from an older backup.
+    // #137 — read on every sample row in the drawer, the Logs and both exports.
+    // This line is its ONLY schema source: there is no numbered migration.
     /ensureColumn\(\s*db,\s*"samples",\s*"embedding_notes"/,
   ];
   for (const re of converged) {

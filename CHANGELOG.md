@@ -46,11 +46,13 @@ harness.
   simply had nothing in it. All three workbook writers now go through one
   function that uses the supported form.
 
-Schema: migration 0025 adds `samples.embedding_notes`. Additive — an existing
-database gains the column filled with the empty string, no row is rewritten, and
-an older build ignores it. Proven directly against a populated pre-existing
-database in `npm run test:legacy`, by both routes an update can arrive (the
-migration, and the runtime convergence a backup revert or sync pull takes).
+Schema: one new column, `samples.embedding_notes`, and **no numbered
+migration**. The app adds the column itself whenever it opens a database, filled
+with the empty string; no row is rewritten. That keeps the update two-way with
+the build in use (0.17.0): it can still open a database this build has opened,
+and reverting to any backup it took, then relaunching, is safe. A migration
+would have broken both. Proven on a populated pre-existing database in
+`npm run test:legacy`, including the revert-then-relaunch round trip.
 
 ### Six defects from a swarm of walkers
 

@@ -269,7 +269,7 @@ test("the published status workbook carries both sheets with real rows", async (
 // the column arrives with every row intact at the data layer; this drives the
 // same real pre-0023 image through the running app: the old rows are still
 // there, the NEW field works on it, and the log it exports carries both.
-test("a populated pre-0025 database gains embedding notes with its rows intact", async ({
+test("a populated database from before #137 gains embedding notes with its rows intact", async ({
   browser,
 }) => {
   const b64 = readFileSync(

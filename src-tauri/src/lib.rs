@@ -166,12 +166,6 @@ pub fn run() {
             sql: include_str!("../migrations/0024_slide_requested_assay.sql"),
             kind: MigrationKind::Up,
         },
-        Migration {
-            version: 25,
-            description: "sample_embedding_notes",
-            sql: include_str!("../migrations/0025_sample_embedding_notes.sql"),
-            kind: MigrationKind::Up,
-        },
     ];
 
     tauri::Builder::default()

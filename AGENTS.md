@@ -85,7 +85,10 @@ breaks at runtime. Update all of these in the same change:
   older image must stay openable). If the new column is read/written at runtime,
   also add it to `ensureRuntimeSchema()` in `src/lib/db.ts` — `getDb()` converges
   it on every DB (re)open, which is what keeps updates compatible with existing
-  databases and older backups. See `docs/shared_data_sync.md` §1a.
+  databases and older backups. See `docs/shared_data_sync.md` §1a. A column may
+  skip its numbered migration and live in `ensureRuntimeSchema()` alone when a
+  migration would break rollback to the build in use or a backup revert —
+  precedent `samples.embedding_notes` (#137, https://github.com/karimghabra/histotracker/pull/138).
 - `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.

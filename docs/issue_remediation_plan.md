@@ -377,7 +377,8 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ## #136–#137 — what the log could not tell you — unreleased (master)
 
-Both fixed. One schema change (0025, additive).
+Both fixed. One schema change: `samples.embedding_notes`, added at runtime with
+no numbered migration.
 
 ### #137 — Embedding Notes
 
@@ -390,19 +391,24 @@ intake and read at the embedding station, one station *before* the microtome.
 The only places to write it were Sectioning / Cut Notes, which is read one
 station too late, and General Notes, where it is buried.
 
-**Fix:** migration `0025_sample_embedding_notes.sql` adds
-`samples.embedding_notes TEXT NOT NULL DEFAULT ''`; a box in `NewSampleDialog`;
-read-back in the board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the
-Logs CSV/XLSX. Added to `ensureRuntimeSchema()` (so a backup revert, an undo
-restore or a sync pull converges it) and to `RESTORE_COLUMNS` (so undoing an
-edit restores it rather than blanking it).
+**Fix:** `samples.embedding_notes TEXT NOT NULL DEFAULT ''`, added by
+`ensureRuntimeSchema()` alone. It has no numbered migration: a migration would
+leave the build in use unable to open the database, and would re-run on top of
+the converged column after a backup revert, so the database would not open at the
+next launch (https://github.com/karimghabra/histotracker/pull/138). A box in
+`NewSampleDialog` (one note for a batch, or one per sample); read-back in the
+board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX; and
+`RESTORE_COLUMNS`, so undoing an edit restores it rather than blanking it.
 
 **Coverage:** `npm run test:legacy` asserts the column DIRECTLY on the populated
-pre-0023 fixture, by both routes an update arrives — the migration applied to
-the existing file, and `ensureRuntimeSchema` converging a swapped-in image —
-with the pre-existing rows compared byte for byte before and after. That harness
-now applies *every* migration the fixture predates rather than naming 0023
-alone, which is how it quietly stopped covering "the update".
+pre-0023 fixture, by every route an update arrives — launch, a swapped-in image,
+and PATH C, which models the real migrator (its record kept in the file) through
+upgrade, revert to the build in use's backup, and relaunch, and checks that the
+build in use can still open the upgraded file. PATH C fails with the old 0025
+migration in place. That harness now applies *every* migration the fixture
+predates rather than naming 0023 alone, which is how it quietly stopped
+covering "the update". `NewSampleDialog.test.tsx` and
+`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes.
 
 ### #136 — assigned stains did not reach the log
 

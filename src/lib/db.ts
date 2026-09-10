@@ -139,9 +139,15 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // them would break both.
   await ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
-  // 0025 — what the embedder is told (#137). Written at intake and read on every
-  // sample row in the drawer, the Logs and both exports, so an older image
-  // without it would break all of them.
+  // What the embedder is told (#137), read on every sample row in the drawer,
+  // the Logs and both exports. RUNTIME-ONLY — deliberately no numbered
+  // migration. A migration records its version in the file, and that record is
+  // what breaks compatibility here: the build in use (0.17.0) refuses to open a
+  // database carrying a version it does not know, and after a revert to any
+  // backup taken before this column existed, the next launch re-runs the
+  // migration's ADD COLUMN on top of the column this line already added
+  // ("duplicate column name") and the database will not open. Adding it here
+  // alone leaves neither record nor collision. See AGENTS.md.
   await ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(

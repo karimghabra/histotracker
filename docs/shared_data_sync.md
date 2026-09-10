@@ -53,6 +53,10 @@ Two rules keep updates compatible with existing databases:
    older image safe. **When you add such a column, add a matching line there** (and
    to the harness invariant "getDb converges late-added runtime columns"). This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
+3. **A column may skip its numbered migration** and live in
+   `ensureRuntimeSchema()` alone when a numbered migration would break rollback
+   to the build in use or a backup revert; precedent `samples.embedding_notes`
+   (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
 
 ### Safe to change (sync is unaffected)
 - All UI, components, board layout, styling, hooks

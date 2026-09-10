@@ -3,16 +3,19 @@
 //
 //   node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs
 //
-// Covers the two ways a live database reaches the new build:
-//   PATH A — tauri-plugin-sql runs migration 0023 against the existing file
-//            (the normal upgrade on app start).
+// Covers the ways a live database reaches the new build:
+//   PATH A — tauri-plugin-sql runs the migrations the file predates, then
+//            getDb() converges it (the normal upgrade on app start).
 //   PATH B — the file is swapped in at runtime (undo restore / viewer sync pull),
 //            where migrations do NOT re-run and ensureRuntimeSchema() is the only
 //            thing that converges it.
-// Both must end with the data intact and the new columns usable.
+//   PATH C — the round trip through the build IN USE: upgrade, revert to a
+//            backup that build took, relaunch; and that build opening the
+//            upgraded file. Modelled on the real migrator, record and all.
+// All must end with the data intact and the new columns usable.
 
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, readdirSync, copyFileSync } from "node:fs";
+import { readFileSync, readdirSync, copyFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,16 +72,19 @@ function ensureColumn(db, table, column, type) {
 // Port of ensureRuntimeSchema() — src/lib/db.ts. A FULL mirror, not just the
 // columns this fixture happens to lack: ensureColumn is idempotent, and keeping
 // the whole list here is what lets the drift guard below insist on a match.
-function ensureRuntimeSchema(db) {
-  ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
-  ensureColumn(db, "samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "slides", "depth_label", "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "slides", "depth_note", "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "samples", "slides_issued", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(db, "samples", "archived_at", "TEXT");
-  ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
-  ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
+const RUNTIME_COLUMNS = [
+  ["slides", "stage_deparaffinized_at", "TEXT"],
+  ["samples", "preselected_stains", "TEXT NOT NULL DEFAULT ''"],
+  ["slides", "depth_label", "TEXT NOT NULL DEFAULT ''"],
+  ["slides", "depth_note", "TEXT NOT NULL DEFAULT ''"],
+  ["samples", "slides_issued", "INTEGER NOT NULL DEFAULT 0"],
+  ["samples", "archived_at", "TEXT"],
+  ["slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''"],
+  ["slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''"],
+  ["samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''"],
+];
+function ensureRuntimeSchema(db, columns = RUNTIME_COLUMNS) {
+  for (const [table, column, type] of columns) ensureColumn(db, table, column, type);
 }
 
 /**
@@ -96,11 +102,10 @@ function assertPortMatchesSource() {
   if (!guard) throw new Error("could not find ensureRuntimeSchema in db.ts");
   const wanted = [...guard.matchAll(/ensureColumn\(\s*db,\s*"([^"]+)",\s*"([^"]+)"/g)]
     .map((m) => `${m[1]}.${m[2]}`);
-  const portSource = readFileSync(join(HERE, "legacy-db-upgrade-test.mjs"), "utf8");
-  const ported = /function ensureRuntimeSchema[\s\S]*?\n}/.exec(portSource)?.[0] ?? "";
+  const ported = JSON.stringify(RUNTIME_COLUMNS);
   const missing = wanted.filter((col) => {
     const [table, column] = col.split(".");
-    return !new RegExp(`"${table}",\\s*"${column}"`).test(ported);
+    return !ported.includes(`"${table}","${column}"`);
   });
   if (missing.length) {
     throw new Error(
@@ -177,6 +182,8 @@ console.log(`\nPATH A — plugin-sql applies ${PENDING_MIGRATIONS.join(", ")} to
   for (const file of PENDING_MIGRATIONS) {
     db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
   }
+  // …and then getDb() opens it, which is where a runtime-only column arrives.
+  ensureRuntimeSchema(db);
   check("this file's ensureRuntimeSchema port is still in step with db.ts", () => {
     assertPortMatchesSource();
   });
@@ -188,14 +195,15 @@ console.log(`\nPATH A — plugin-sql applies ${PENDING_MIGRATIONS.join(", ")} to
   // #137 — the column the captain's populated database gains with this update.
   // Asserted DIRECTLY on a real pre-existing image, not inferred from a suite
   // that passed on an empty one: adding a column is only safe if every row that
-  // was already there survives it, filled in place.
-  check("migration 0025 adds samples.embedding_notes to a populated database", () => {
+  // was already there survives it, filled in place. It has no numbered
+  // migration (see PATH C for why), so opening the file is what adds it.
+  check("the update adds samples.embedding_notes to a populated database", () => {
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("embedding_notes"), "embedding_notes added");
     const rows = db.prepare(`SELECT COUNT(*) AS n FROM samples WHERE embedding_notes = ''`).get().n;
     eq(rows, 3, "every existing sample gets the empty-string default, not NULL");
   });
-  check("the rows that were already there are untouched by 0025", () => {
+  check("the rows that were already there are untouched by the new column", () => {
     const after = db.prepare(
       `SELECT id, sample_code, sample_description, cut_notes, overall_notes FROM samples ORDER BY id`,
     ).all();
@@ -266,7 +274,7 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
     try { db.prepare(`SELECT archived_at FROM samples`).all(); } catch { threw = true; }
     assert(threw, "without convergence the archive query fails");
   });
-  check("a pre-0025 image is missing embedding_notes before convergence", () => {
+  check("an image from before #137 is missing embedding_notes before convergence", () => {
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(!cols.includes("embedding_notes"), "precondition: no embedding_notes");
   });
@@ -317,9 +325,157 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
   db.close();
 }
 
+// ---------------------------------------------------------------------------
+// PATH C — compatibility with the build IN USE, through the real migrator.
+// ---------------------------------------------------------------------------
+
+/**
+ * The migrations a build registers, read out of `src-tauri/src/lib.rs` — the
+ * list is explicit there, not discovered, and it is what actually runs.
+ */
+function registeredMigrations() {
+  const rs = readFileSync(join(HERE, "..", "src-tauri", "src", "lib.rs"), "utf8");
+  const found = [...rs.matchAll(/version:\s*(\d+),[\s\S]*?include_str!\("\.\.\/migrations\/([^"]+)"\)/g)]
+    .map(([, version, file]) => ({
+      version: Number(version),
+      file,
+      sql: readFileSync(join(MIGRATIONS_DIR, file), "utf8"),
+    }));
+  if (found.length === 0) throw new Error("could not read the migration list out of lib.rs");
+  return found;
+}
+
+/**
+ * The last migration the build in use registers. 0.17.0, cut from the
+ * long-running claude/** release line, registers 0001–0024 — the same files as
+ * master (checked 2026-09-10). Raise this when a release ships a new one.
+ */
+const IN_USE_LAST_MIGRATION = 24;
+
+/**
+ * A model of what tauri-plugin-sql does at launch, then getDb().
+ *
+ * The plugin hands the registered list to sqlx's Migrator (0.8, ignore_missing
+ * = false), which keeps the versions it has applied INSIDE the database file,
+ * in `_sqlx_migrations`. That record is the whole point of modelling it: a
+ * backup, a sync pull and an undo image all carry it with them, so a file can
+ * come back into a build holding a record that disagrees with its columns.
+ * sqlx then (1) refuses a file recording a version it does not know, and
+ * (2) runs every known version it has no record of — whatever the columns say.
+ */
+function launch(db, { migrations, runtimeColumns }) {
+  db.exec(`CREATE TABLE IF NOT EXISTS _sqlx_migrations (version INTEGER PRIMARY KEY)`);
+  const applied = new Set(
+    db.prepare(`SELECT version FROM _sqlx_migrations`).all().map((r) => Number(r.version)),
+  );
+  const known = new Set(migrations.map((m) => m.version));
+  for (const v of applied) {
+    if (!known.has(v)) {
+      throw new Error(`migration ${v} was previously applied but is missing in the resolved migrations`);
+    }
+  }
+  for (const m of migrations) {
+    if (applied.has(m.version)) continue;
+    db.exec("BEGIN");
+    try {
+      db.exec(m.sql);
+      db.prepare(`INSERT INTO _sqlx_migrations (version) VALUES (?)`).run(m.version);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw new Error(`migration ${m.file} failed at launch: ${err.message}`);
+    }
+  }
+  ensureRuntimeSchema(db, runtimeColumns);
+}
+
+/** A whole-file image of `db`, the way a backup is taken, opened as its own DB. */
+function imageOf(db, suffix) {
+  const path = FIXTURE.replace(/\.sqlite$/, `.${suffix}.sqlite`);
+  rmSync(path, { force: true });
+  db.exec(`VACUUM INTO '${path}'`);
+  return new DatabaseSync(path);
+}
+
+console.log("\nPATH C — upgrade from the build in use, revert to its backup, relaunch");
+{
+  const thisBuild = { migrations: registeredMigrations(), runtimeColumns: RUNTIME_COLUMNS };
+  // The build in use: its own migrations, and none of the columns this change
+  // adds at runtime (on master before #137, and on 0.17.0 today, the list is
+  // this one without samples.embedding_notes).
+  const inUseBuild = {
+    migrations: thisBuild.migrations.filter((m) => m.version <= IN_USE_LAST_MIGRATION),
+    runtimeColumns: RUNTIME_COLUMNS.filter(([t, c]) => `${t}.${c}` !== "samples.embedding_notes"),
+  };
+
+  check("lib.rs registers exactly the migration files on disk", () => {
+    // Both halves are hand-kept; a file left behind or a registration left
+    // pointing at nothing would make every path above test the wrong schema.
+    const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
+    eq(thisBuild.migrations.map((m) => m.file).sort().join(","), onDisk.join(","),
+       "registered migrations match src-tauri/migrations");
+  });
+
+  // The captain's database: the fixture predates 0023, so its record holds
+  // 1–22; the build in use brings it to its own last migration on launch.
+  const { db } = openCopy("pathc");
+  db.exec(`CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY)`);
+  for (let v = 1; v <= 22; v += 1) db.prepare(`INSERT INTO _sqlx_migrations VALUES (?)`).run(v);
+  launch(db, inUseBuild);
+  const inUseSamples = JSON.stringify(db.prepare(`SELECT * FROM samples ORDER BY id`).all());
+  // The backup the build in use took on its schedule, before anyone upgraded.
+  const backup = imageOf(db, "pathc-backup");
+  backup.close();
+
+  check("this build opens the in-use database and adds embedding_notes", () => {
+    launch(db, thisBuild);
+    const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
+    assert(cols.includes("embedding_notes"), "embedding_notes present after the upgrade launch");
+    assertDataIntact(db, "C-upgraded");
+  });
+
+  // Problem 1 — the upgrade must not be a one-way door. A version recorded by
+  // this build that the build in use does not know makes the build in use
+  // refuse the file outright; so does every sync viewer still running it.
+  check("the build in use can still open a database this build has opened", () => {
+    const image = imageOf(db, "pathc-rollback");
+    try {
+      launch(image, inUseBuild);
+      assertDataIntact(image, "C-rolled-back");
+    } finally {
+      image.close();
+    }
+  });
+
+  // Problem 2 — the one reproduced on this fixture. Reverting swaps the backup
+  // in WITHOUT migrating (revertToBackup → restoreDbPreservingSession), so
+  // getDb() converges the column onto a file whose record never heard of it.
+  // A migration that also adds the column then runs again at the next launch
+  // and fails on "duplicate column name": the app cannot open its database.
+  check("revert to the in-use build's backup, then relaunch: the database opens", () => {
+    db.close();
+    copyFileSync(FIXTURE.replace(/\.sqlite$/, ".pathc-backup.sqlite"),
+                 FIXTURE.replace(/\.sqlite$/, ".pathc.sqlite"));
+    const reverted = new DatabaseSync(FIXTURE.replace(/\.sqlite$/, ".pathc.sqlite"));
+    try {
+      ensureRuntimeSchema(reverted); // the revert, live
+      launch(reverted, thisBuild);   // the next launch
+      const cols = reverted.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
+      assert(cols.includes("embedding_notes"), "embedding_notes present after the relaunch");
+      const after = reverted.prepare(`SELECT * FROM samples ORDER BY id`).all()
+        .map(({ embedding_notes, ...rest }) => rest);
+      eq(JSON.stringify(after), inUseSamples,
+         "every sample the backup held comes back exactly, apart from the new empty column");
+      assertDataIntact(reverted, "C-reverted");
+    } finally {
+      reverted.close();
+    }
+  });
+}
+
 console.log(
   failures === 0
-    ? "\n✓ A live pre-0023 database upgrades cleanly by BOTH paths, with no data loss.\n"
+    ? "\n✓ A live pre-0023 database upgrades cleanly by every path, with no data loss,\n  and stays openable by the build in use.\n"
     : `\n✗ ${failures} check(s) failed — do not ship.\n`,
 );
 process.exit(failures === 0 ? 0 : 1);
