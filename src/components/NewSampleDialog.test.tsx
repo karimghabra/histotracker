@@ -93,7 +93,7 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
       expect(noteFor(code)).toHaveValue("cut face down");
     }
     // Every row still carries the shared note, so nothing is set aside.
-    expect(screen.queryByText(/kept, but not saved/)).toBeNull();
+    expect(screen.queryByText(/kept aside/)).toBeNull();
   });
 
   it("switching modes never discards typed notes, and says what will not be saved", async () => {
@@ -108,7 +108,7 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     await user.click(mode(/One note for all/));
     expect(screen.getByLabelText("Embedding Notes")).toHaveValue("cut face down");
     expect(
-      screen.getByText("1 separate note is kept, but not saved while one note applies to all."),
+      screen.getByText('1 separate note is kept aside — not saved unless you switch to "A note for each".'),
     ).toBeInTheDocument();
 
     // And forward again: the edited row is still there.
@@ -124,7 +124,7 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     }
     expect(
       screen.getByText(
-        "Your note for all samples is kept, but not saved while each sample has its own.",
+        'Your note for all samples is kept aside — not saved unless you switch back to "One note for all 3".',
       ),
     ).toBeInTheDocument();
 
@@ -146,7 +146,7 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.getByLabelText("Embedding Notes")).toHaveValue("");
     expect(
-      screen.getByText("1 separate note is kept, but not saved for a single sample."),
+      screen.getByText("1 separate note is kept aside for a batch — not saved for a single sample."),
     ).toBeInTheDocument();
     setQuantity(2);
     expect(noteFor("EE-1")).toHaveValue("cut face down");

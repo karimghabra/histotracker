@@ -155,15 +155,16 @@ export function NewSampleDialog({
   const keptRows = (quantity > 1 ? noteRows : notesEach).filter(
     (r) => r.trim() && r.trim() !== sharedNote,
   ).length;
+  const kept = `${keptRows} separate note${keptRows === 1 ? " is" : "s are"} kept aside`;
   const notSaved = eachNotes
     ? sharedNote && !noteRows.some((r) => r.trim() === sharedNote)
-      ? "Your note for all samples is kept, but not saved while each sample has its own."
+      ? `Your note for all samples is kept aside — not saved unless you switch back to "One note for all ${quantity}".`
       : null
-    : keptRows > 0
-      ? `${keptRows} separate note${keptRows === 1 ? " is" : "s are"} kept, but not saved ${
-          quantity > 1 ? "while one note applies to all" : "for a single sample"
-        }.`
-      : null;
+    : keptRows === 0
+      ? null
+      : quantity > 1
+        ? `${kept} — not saved unless you switch to "A note for each".`
+        : `${kept} for a batch — not saved for a single sample.`;
 
   function toggle(key: string) {
     setPicked((prev) => {
