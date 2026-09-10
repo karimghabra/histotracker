@@ -444,7 +444,7 @@ export function LogsView() {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const { sample, slides: sampleSlides, agents, phases: rowPhases } = row;
+      const { sample, slides: sampleSlides, agents, requested, phases: rowPhases } = row;
       // Archived samples stay out of the way unless explicitly asked for (#74).
       if (!showArchived && sample.archived_at) return false;
       // …and so do removed ones (#105, #96).
@@ -454,7 +454,16 @@ export function LogsView() {
       // slides are in staining is in both places, and the filters read as
       // inventories (#119).
       if (phases.size > 0 && ![...rowPhases].some((p) => phases.has(p))) return false;
-      if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
+      // #136 again: an assigned-but-uncut agent carries its type, so a block
+      // with an IHC only assigned is found by the type filter exactly as it is
+      // found by the stain filter and named in the Stains cell.
+      if (
+        assayType !== "all" &&
+        !sampleSlides.some((s) => s.assay_type === assayType) &&
+        !requested.some((a) => a.assay_type === assayType)
+      ) {
+        return false;
+      }
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       const added = (sample.date_added || "").slice(0, 10);
       if (fromDate && added && added < fromDate) return false;
@@ -962,7 +971,10 @@ function FragmentRow({
       ? listedSlides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
       : listedSlides;
   // Nothing cut yet, so every agent this block names is one it still owes.
-  const allAssigned = agentEntries.length > 0 && agentEntries.every((a) => a.requested);
+  // Gated on the absence of glass, NOT on every agent carrying a request: an
+  // agent that was cut and then re-requested is outstanding again, and saying
+  // "all assigned" over a block that already has slides would be a lie.
+  const allAssigned = agentEntries.length > 0 && slides.length === 0;
   // "Only matching" narrows the outstanding requests the same way it narrows the
   // glass — otherwise filtering to one agent still listed every other agent the
   // block owes, right under a slide list that had been filtered down to it.

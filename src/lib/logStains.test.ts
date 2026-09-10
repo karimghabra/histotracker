@@ -16,11 +16,6 @@ describe("outstandingStains", () => {
     ]);
   });
 
-  it("falls back to pending_stains, which the board's query publishes instead", () => {
-    const board = sample({ preselected_stains: "", pending_stains: assigned("Safranin O") });
-    expect(outstandingStains(board).map((a) => a.assay_name)).toEqual(["Safranin O"]);
-  });
-
   it("is empty for a block that owes nothing", () => {
     expect(outstandingStains(sample({}))).toEqual([]);
   });

@@ -30,13 +30,9 @@ export type AssignedStain = { assay_type: string; assay_name: string };
  * A multiset, not a set: two requests for the same agent are two slides owed,
  * so both are kept (#62/#66), and re-requesting an already-produced agent is a
  * genuine outstanding request again (#41).
- *
- * `listOpenSamples` republishes the same JSON as `pending_stains` for the board;
- * the Logs read `listAllSamples`, which carries the stored column. Read either,
- * so this works on a sample from either query.
  */
 export function outstandingStains(sample: Sample): AssignedStain[] {
-  return parsePreselectedStains(sample.preselected_stains || sample.pending_stains);
+  return parsePreselectedStains(sample.preselected_stains);
 }
 
 /** One entry per agent named on a block, in the order the log should read it. */
