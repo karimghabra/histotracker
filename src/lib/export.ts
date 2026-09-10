@@ -38,6 +38,7 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
       (s) => (s as unknown as Record<string, string | null>)[stage.column] ?? "",
     ],
   ),
+  ["Embedding Notes", (s) => s.embedding_notes],
   ["Cut Notes", (s) => s.cut_notes],
   ["Slide Notes", (s) => s.slide_notes],
   ["Stains / IHC", (s) => s.stains],
@@ -151,7 +152,7 @@ const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
-  "Slide Notes", "Sample Notes",
+  "Slide Notes", "Embedding Notes", "Sample Notes",
 ];
 
 // One array of cells (in LOGS_HEADERS order) per exported line — one row per
@@ -170,8 +171,13 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       (sample.date_added ?? "").slice(0, 10),
     ];
     if (slides.length === 0) {
-      // 9 empty slide-stage cells + empty Slide Notes, then Sample Notes.
-      out.push([...base, ...Array(10).fill(""), sample.overall_notes ?? ""]);
+      // 9 empty slide-stage cells + empty Slide Notes, then block-level notes.
+      out.push([
+        ...base,
+        ...Array(10).fill(""),
+        sample.embedding_notes ?? "",
+        sample.overall_notes ?? "",
+      ]);
       continue;
     }
     for (const sl of slides) {
@@ -187,6 +193,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
         sl.stage_pictures_taken_at ?? "",
         sl.stage_analyzed_at ?? "",
         sl.notes ?? "",
+        sample.embedding_notes ?? "",
         sample.overall_notes ?? "",
       ]);
     }

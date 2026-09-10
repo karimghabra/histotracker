@@ -159,14 +159,15 @@ function makeApi(db) {
     const r = run(
       `INSERT INTO samples (
          project_id, project_sample_number, sample_code, sample_description, date_added,
-         processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-         stains, preselected_stains, overall_notes, current_stage, stage_received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, '', 'received', ?)`,
+         processing_type, fixative_agent, needs_decalcification, embedding_notes, cut_notes,
+         slide_notes, stains, preselected_stains, overall_notes, current_stage, stage_received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, '', 'received', ?)`,
       [
         projectId, number, code, description, "2026-01-01",
         opts.processingType ?? "Short",
         opts.fixative ?? "PFA",
         opts.needsDecalc ? 1 : 0,
+        opts.embeddingNotes ?? "",
         opts.stains ?? "",
         preselected,
         now(),
@@ -3015,6 +3016,16 @@ issue(88, "a sample cannot be created without a description", () => {
      "refused attempts do not burn sample numbers");
 });
 
+issue(137, "embedding notes entered at intake are stored with the sample", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "orientation test", {
+    embeddingNotes: "Embed epidermis facing down",
+  });
+  eq(api.get(`SELECT embedding_notes AS notes FROM samples WHERE id = ?`, [id]).notes,
+     "Embed epidermis facing down", "embedding instructions persist on the sample");
+});
+
 // #88 — the dialog is the other half: it must refuse BEFORE the write, naming
 // which samples are blank. A batch of 20 rows in a scroll box makes "something
 // is missing" useless, and a thrown error after the fact loses the whole form.
@@ -3198,6 +3209,7 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
     // this build would break outright without them.
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_type"/,
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_name"/,
+    /ensureColumn\(\s*db,\s*"samples",\s*"embedding_notes"/,
   ];
   for (const re of converged) {
     assert(re.test(db), `ensureRuntimeSchema must converge ${re}`);

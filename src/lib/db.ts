@@ -139,6 +139,9 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // them would break both.
   await ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
+  // 0025 — instructions captured at intake and read from drawers, logs and
+  // exports. Older backups gain the field when they are opened (#137).
+  await ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(
     `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
@@ -767,9 +770,9 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
   const res = await db.execute(
     `INSERT INTO samples (
         project_id, project_sample_number, sample_code, sample_description, date_added,
-        processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-        stains, preselected_stains, overall_notes, current_stage, stage_received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
+        processing_type, fixative_agent, needs_decalcification, embedding_notes, cut_notes,
+        slide_notes, stains, preselected_stains, overall_notes, current_stage, stage_received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
     [
       input.project_id,
       number,
@@ -779,6 +782,7 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
       input.processing_type,
       input.fixative_agent,
       input.needs_decalcification ? 1 : 0,
+      input.embedding_notes.trim(),
       input.cut_notes.trim(),
       input.slide_notes.trim(),
       input.stains.trim(),
@@ -911,13 +915,15 @@ export async function updateSampleDetails(
   await db.execute(
     `UPDATE samples
         SET sample_description = ?, processing_type = ?, fixative_agent = ?,
-            needs_decalcification = ?, cut_notes = ?, slide_notes = ?, stains = ?, overall_notes = ?
+            needs_decalcification = ?, embedding_notes = ?, cut_notes = ?, slide_notes = ?,
+            stains = ?, overall_notes = ?
       WHERE id = ?`,
     [
       input.sample_description.trim(),
       input.processing_type,
       input.fixative_agent,
       input.needs_decalcification ? 1 : 0,
+      input.embedding_notes.trim(),
       input.cut_notes.trim(),
       input.slide_notes.trim(),
       input.stains.trim(),
@@ -945,7 +951,7 @@ export async function getSample(sampleId: number): Promise<Sample | null> {
 // Columns that a snapshot restore is allowed to overwrite (everything mutable).
 const RESTORE_COLUMNS = [
   "project_sample_number", "sample_code", "sample_description", "date_added",
-  "processing_type", "fixative_agent", "needs_decalcification", "cut_notes",
+  "processing_type", "fixative_agent", "needs_decalcification", "embedding_notes", "cut_notes",
   "slide_notes", "stains", "preselected_stains", "overall_notes", "sectioning_plan", "current_stage",
   "stage_received_at", "decalc_completed_at", "fixative_placed_at", "fixative_removed_at",
   "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",

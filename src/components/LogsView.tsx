@@ -16,6 +16,7 @@ import {
 } from "../lib/stages";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
+import { parsePreselectedStains } from "../lib/db";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
 // hold the accurate per-stage stamps) and — before any slides exist — its own
@@ -388,7 +389,28 @@ export function LogsView() {
     () =>
       samples.map((sample) => {
         const slidesForSample = slidesBySample.get(sample.sample_code) ?? [];
-        const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
+        // A selected/requested agent exists before its physical slide does.
+        // Merge those outstanding sample-level assignments with cut slides so
+        // the Log agrees with the board throughout the workflow (#136).
+        const assignedAgents = [
+          ...slidesForSample
+            .filter((slide) => Boolean(slide.assay_name))
+            .map((slide) => ({ name: slide.assay_name, type: slide.assay_type })),
+          ...parsePreselectedStains(sample.preselected_stains).map((agent) => ({
+            name: agent.assay_name,
+            type: agent.assay_type,
+          })),
+        ];
+        const seenAgents = new Set<string>();
+        const agents = assignedAgents
+          .map((agent) => agent.name.trim())
+          .filter((name) => {
+            const key = name.toLowerCase();
+            if (!key || seenAgents.has(key)) return false;
+            seenAgents.add(key);
+            return true;
+          });
+        const agentTypes = new Set(assignedAgents.map((agent) => agent.type).filter(Boolean));
         const phases = samplePhases(sample, slidesForSample);
         const phase = furthestPhase(phases);
         const progress = analyzedProgress(slidesForSample);
@@ -399,11 +421,14 @@ export function LogsView() {
         const removedCount = slidesForSample.filter(isRemoved).length;
         const extras = slidesForSample.length - removedCount - progress.total;
         const hasNotes =
-          Boolean(sample.overall_notes?.trim()) || slidesForSample.some((s) => Boolean(s.notes?.trim()));
+          Boolean(sample.embedding_notes?.trim()) ||
+          Boolean(sample.overall_notes?.trim()) ||
+          slidesForSample.some((s) => Boolean(s.notes?.trim()));
         return {
           sample,
           slides: slidesForSample,
           agents,
+          agentTypes,
           phase,
           phases,
           progress,
@@ -434,7 +459,7 @@ export function LogsView() {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const { sample, slides: sampleSlides, agents, phases: rowPhases } = row;
+      const { sample, slides: sampleSlides, agents, agentTypes, phases: rowPhases } = row;
       // Archived samples stay out of the way unless explicitly asked for (#74).
       if (!showArchived && sample.archived_at) return false;
       // …and so do removed ones (#105, #96).
@@ -444,7 +469,7 @@ export function LogsView() {
       // slides are in staining is in both places, and the filters read as
       // inventories (#119).
       if (phases.size > 0 && ![...rowPhases].some((p) => phases.has(p))) return false;
-      if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
+      if (assayType !== "all" && !agentTypes.has(assayType)) return false;
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       const added = (sample.date_added || "").slice(0, 10);
       if (fromDate && added && added < fromDate) return false;
@@ -459,6 +484,7 @@ export function LogsView() {
           sample.sample_description,
           sample.project_code,
           sample.project_name,
+          sample.embedding_notes,
           sample.overall_notes,
           ...agents,
           ...sampleSlides.map((s) => s.slide_code),
@@ -1175,6 +1201,17 @@ function FragmentRow({
                   ariaLabel={`Description for ${displayCode(sample.sample_code)}`}
                   onSave={(text) => void editSampleDescription(sample.id, text)}
                 />
+              </>
+            )}
+
+            {/* Intake instructions are part of the record but not a timeline
+                event; keep them visible beside the sample's other notes. */}
+            {sample.embedding_notes && (
+              <>
+                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Embedding notes
+                </h4>
+                <p className="whitespace-pre-wrap text-xs text-ink-soft">{sample.embedding_notes}</p>
               </>
             )}
 

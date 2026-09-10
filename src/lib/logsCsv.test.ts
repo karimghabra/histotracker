@@ -56,10 +56,15 @@ describe("buildLogsCsv", () => {
   });
 
   it("emits a single row for a sample with no slides", () => {
-    const csv = buildLogsCsv([{ sample: sample({ sample_code: "EE-0002" }), slides: [] }]);
+    const csv = buildLogsCsv([{
+      sample: sample({ sample_code: "EE-0002", embedding_notes: "Face epithelium down" }),
+      slides: [],
+    }]);
     const lines = csv.trim().split("\n");
     expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Embedding Notes");
     expect(lines[1]).toContain("EE-2");
+    expect(lines[1]).toContain("Face epithelium down");
   });
 
   it("labels an unstained extra and RFC-escapes commas/quotes", () => {

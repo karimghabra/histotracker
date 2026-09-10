@@ -255,6 +255,7 @@ export function SampleDetailsDrawer({
                   void withdrawStainRequest(sample.id, assayType, assayName)
           }
         />
+        {sample.embedding_notes && <Section title="Embedding Notes">{sample.embedding_notes}</Section>}
         {sample.cut_notes && <Section title="Cut Notes">{sample.cut_notes}</Section>}
         {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
         {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}

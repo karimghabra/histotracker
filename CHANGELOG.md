@@ -2,8 +2,17 @@
 
 ## 0.13.2 - unreleased
 
-No schema change. Six more defects, found by pointing **many random walkers at
-one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
+**Schema change (migration 0025) — every instance must be on this build.** The
+new additive `samples.embedding_notes` field is also restored when an older
+backup or sync image is opened.
+
+- Assigned stains and IHC agents now appear in the Logs immediately, before
+  their slides have been sectioned, and participate in stain/type filters.
+- Sample intake now captures embedding notes; they remain visible in the sample
+  drawer, expanded Logs row, search, and exports.
+
+The release also includes six defects found by pointing **many random walkers
+at one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
 after every move. Full account in `docs/stress_test_v2.md`.
 
 The walkers run in two modes, because they answer different questions. Taking

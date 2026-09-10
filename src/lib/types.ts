@@ -29,6 +29,7 @@ export interface Sample {
   processing_type: ProcessingType;
   fixative_agent: string;
   needs_decalcification: number; // 0 | 1
+  embedding_notes: string;
   cut_notes: string;
   slide_notes: string;
   stains: string;
@@ -300,6 +301,7 @@ export interface NewSampleInput {
   processing_type: ProcessingType;
   fixative_agent: string;
   needs_decalcification: boolean;
+  embedding_notes: string;
   cut_notes: string;
   slide_notes: string;
   stains: string;

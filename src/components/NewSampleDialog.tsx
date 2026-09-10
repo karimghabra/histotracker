@@ -69,6 +69,7 @@ export function NewSampleDialog({
   }, [pasted, quantity]);
   // Agents ticked for this sample (issue #1). Keyed "type::name".
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [embeddingNotes, setEmbeddingNotes] = useState("");
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
   const [overallNotes, setOverallNotes] = useState("");
@@ -133,6 +134,7 @@ export function NewSampleDialog({
         processing_type: processing,
         fixative_agent: fixative,
         needs_decalcification: needsDecalc,
+        embedding_notes: embeddingNotes,
         cut_notes: cutNotes,
         slide_notes: slideNotes,
         stains: preselectedStains.map((a) => a.assay_name).join(", "),
@@ -313,6 +315,14 @@ export function NewSampleDialog({
           Each ticked agent is preassigned a slide; the block auto-plans {autoExtras} extra
           {autoExtras === 1 ? "" : "s"} at embedding.
         </p>
+      </Field>
+      <Field label="Embedding Notes">
+        <TextArea
+          rows={2}
+          value={embeddingNotes}
+          onChange={(e) => setEmbeddingNotes(e.target.value)}
+          placeholder="Orientation or instructions for embedding"
+        />
       </Field>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />
