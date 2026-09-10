@@ -23,6 +23,13 @@ Two things the log could not tell you.
   the CSV and Excel exports build their rows from the same helper the on-screen
   table does, so the spreadsheet you take to the bench and the screen you took
   it from cannot disagree about what a block owes.
+- **The Excel exports were writing empty workbooks.** Every `.xlsx` this app
+  produced through a Save dialog — the Logs export and the full workbook export
+  — opened as a blank sheet: not one header, not one row. The spreadsheet
+  writer had dropped the old argument shape we were still calling it with, and
+  accepts it silently rather than failing, so the file was written and saved and
+  simply had nothing in it. All three workbook writers now go through one
+  function that uses the supported form.
 
 Schema: migration 0025 adds `samples.embedding_notes`. Additive — an existing
 database gains the column filled with the empty string, no row is rewritten, and
