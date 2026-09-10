@@ -227,6 +227,13 @@ test("#136: the expanded Logs row explains a stain with no slide", async ({ page
   await expect(page.getByText("EE-1")).toBeVisible();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  // Nothing is cut, so the block owes every agent it names — said once for the
+  // whole list rather than after each name, which pushed the last one out of the
+  // cell. "all", because a trailing "(assigned)" after a comma list reads as
+  // belonging only to the name in front of it.
+  await expect(
+    page.getByRole("row").filter({ has: page.getByRole("cell", { name: "EE-1", exact: true }) }),
+  ).toContainText("(all assigned)");
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
   // The drill-down used to list slides only, so a row whose Stains cell named an

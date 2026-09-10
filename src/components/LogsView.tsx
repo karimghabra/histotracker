@@ -961,6 +961,8 @@ function FragmentRow({
     stainFilter && onlyMatching
       ? listedSlides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
       : listedSlides;
+  // Nothing cut yet, so every agent this block names is one it still owes.
+  const allAssigned = agentEntries.length > 0 && agentEntries.every((a) => a.requested);
   // "Only matching" narrows the outstanding requests the same way it narrows the
   // glass — otherwise filtering to one agent still listed every other agent the
   // block owes, right under a slide list that had been filtered down to it.
@@ -1046,42 +1048,51 @@ function FragmentRow({
             )}
           </div>
         </td>
-        {/* The cell truncates at 14rem, so the full list — including which of
-            them are still only assigned — lives in the tooltip. */}
+        {/* An outstanding request is named in the same list as the glass — that
+            is #136 — but it is a plan, not a fact, so it is toned like the
+            board's "Awaiting stains" line rather than reading as a slide that
+            exists. The cell truncates, so the full list, and which of them are
+            still only assigned, is also in the tooltip.
+
+            A block that has not been cut owes EVERY agent it names, which is the
+            common case and the one in the report. Repeating "(assigned)" after
+            each of three names there was noise that pushed the third name out of
+            the cell entirely, so that case says it once for the whole list —
+            spelled "all assigned" when there is more than one, because a
+            trailing "(assigned)" after a comma list reads as belonging to the
+            last name alone. */}
         <td
-          className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft"
+          className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft"
           title={
             agentEntries.length
               ? agentEntries
-                  .map((a) => (a.requested ? `${a.name} (assigned, not cut)` : a.name))
+                  .map((a) => (a.requested ? `${a.name} (assigned, not cut yet)` : a.name))
                   .join(", ")
               : undefined
           }
         >
-          {agentEntries.length === 0
-            ? "—"
-            : agentEntries.map((agent, i) => (
-                <span key={`${agent.name}-${i}`}>
-                  {i > 0 && ", "}
-                  {/* An outstanding request is named in the same list as the
-                      glass — that is #136 — but it is a plan, not a fact, so it
-                      is toned like the board's "Awaiting stains" line rather
-                      than reading as a slide that exists. */}
-                  <span
-                    className={cn(agent.requested && "text-brand")}
-                    title={
-                      agent.requested
-                        ? `${agent.name} is assigned to this block and has not been cut yet`
-                        : undefined
-                    }
-                  >
-                    {agent.name}
-                    {agent.requested && (
-                      <span className="ml-0.5 text-[10px] text-brand">(assigned)</span>
-                    )}
-                  </span>
+          {agentEntries.length === 0 ? (
+            "—"
+          ) : allAssigned ? (
+            <span className="text-brand">
+              {agentEntries.map((a) => a.name).join(", ")}
+              <span className="ml-1 text-[10px]">
+                ({agentEntries.length > 1 ? "all assigned" : "assigned"})
+              </span>
+            </span>
+          ) : (
+            agentEntries.map((agent, i) => (
+              <span key={`${agent.name}-${i}`}>
+                {i > 0 && ", "}
+                <span className={cn(agent.requested && "text-brand")}>
+                  {agent.name}
+                  {agent.requested && (
+                    <span className="ml-0.5 text-[10px] text-brand">(assigned)</span>
+                  )}
                 </span>
-              ))}
+              </span>
+            ))
+          )}
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
           {liveSlideCount}
