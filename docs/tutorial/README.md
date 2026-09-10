@@ -46,8 +46,7 @@ stains you already know you want. It lands in **Pre‑processing**.
 With **Quantity** above 1, Embedding Notes gets a switch: **One note for all**
 saves the same note on every sample in the batch, and **A note for each** gives
 every sample code its own line (leave a line blank for none). Switching keeps
-what you typed in the other mode; if something typed would not be saved, the
-dialog says so under the box.
+what you typed in the other mode; only the mode on screen is saved.
 
 ![New sample](img/04-new-sample.png)
 

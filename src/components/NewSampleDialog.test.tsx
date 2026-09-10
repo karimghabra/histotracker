@@ -92,24 +92,18 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     for (const code of ["EE-1", "EE-2", "EE-3"]) {
       expect(noteFor(code)).toHaveValue("cut face down");
     }
-    // Every row still carries the shared note, so nothing is set aside.
-    expect(screen.queryByText(/kept aside/)).toBeNull();
   });
 
-  it("switching modes never discards typed notes, and says what will not be saved", async () => {
+  it("switching modes never discards typed notes, and saves the mode on screen", async () => {
     const user = await openBatch(3);
     await user.type(screen.getByLabelText("Embedding Notes"), "cut face down");
     await user.click(mode(/A note for each/));
     await user.clear(noteFor("EE-2"));
     await user.type(noteFor("EE-2"), "proximal end left");
 
-    // Back to one note: the shared note is exactly as typed, and the row that
-    // differs is named rather than silently dropped.
+    // Back to one note: the shared note is exactly as typed.
     await user.click(mode(/One note for all/));
     expect(screen.getByLabelText("Embedding Notes")).toHaveValue("cut face down");
-    expect(
-      screen.getByText('1 separate note is kept aside — not saved unless you switch to "A note for each".'),
-    ).toBeInTheDocument();
 
     // And forward again: the edited row is still there.
     await user.click(mode(/A note for each/));
@@ -117,18 +111,20 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     expect(noteFor("EE-2")).toHaveValue("proximal end left");
     expect(noteFor("EE-3")).toHaveValue("cut face down");
 
-    // Rows that no longer carry the shared note anywhere: now IT is set aside.
-    for (const code of ["EE-1", "EE-3"]) {
-      await user.clear(noteFor(code));
-      await user.type(noteFor(code), "other");
-    }
-    expect(
-      screen.getByText(
-        'Your note for all samples is kept aside — not saved unless you switch back to "One note for all 3".',
-      ),
-    ).toBeInTheDocument();
-
     // Whatever mode is showing is what gets saved.
+    await user.click(screen.getByRole("button", { name: "Create 3 Samples" }));
+    const [input, , , each] = createSamples.mock.calls[0];
+    expect(each.embeddingNotes).toEqual(["cut face down", "proximal end left", "cut face down"]);
+    expect(input.embedding_notes).toBe("");
+  });
+
+  it("saves the shared note after switching back from per-sample rows", async () => {
+    const user = await openBatch(3);
+    await user.type(screen.getByLabelText("Embedding Notes"), "cut face down");
+    await user.click(mode(/A note for each/));
+    await user.clear(noteFor("EE-2"));
+    await user.type(noteFor("EE-2"), "proximal end left");
+
     await user.click(mode(/One note for all/));
     await user.click(screen.getByRole("button", { name: "Create 3 Samples" }));
     const [input, , , each] = createSamples.mock.calls[0];
@@ -142,12 +138,9 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     await user.type(noteFor("EE-1"), "cut face down");
 
     setQuantity(1);
-    // One sample, one box — and the row typed for the batch is named, not lost.
+    // One sample, one box.
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.getByLabelText("Embedding Notes")).toHaveValue("");
-    expect(
-      screen.getByText("1 separate note is kept aside for a batch — not saved for a single sample."),
-    ).toBeInTheDocument();
     setQuantity(2);
     expect(noteFor("EE-1")).toHaveValue("cut face down");
 

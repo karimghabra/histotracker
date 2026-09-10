@@ -17,9 +17,7 @@ harness.
 
   A batch can carry **one note for all** its samples or **a note for each**,
   chosen with a switch above the box. Each mode keeps its own text, so switching
-  back and forth loses nothing; only the mode on screen is saved, and anything
-  typed that would not end up on a sample is named under the box rather than
-  quietly dropped.
+  back and forth loses nothing; only the mode on screen is saved.
 - **Assigned stains now show up in the log before anything is cut (#136).** The
   main screen has always known a block owes a stain: the card flags it, and the
   drawer lists it as "Requested". The Logs read physical slides only, so a block

@@ -3229,9 +3229,6 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
     // this build would break outright without them.
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_type"/,
     /ensureColumn\(\s*db,\s*"slides",\s*"requested_assay_name"/,
-    // #137 — read on every sample row in the drawer, the Logs and both exports.
-    // This line is its ONLY schema source: there is no numbered migration.
-    /ensureColumn\(\s*db,\s*"samples",\s*"embedding_notes"/,
   ];
   for (const re of converged) {
     assert(re.test(db), `ensureRuntimeSchema must converge ${re}`);

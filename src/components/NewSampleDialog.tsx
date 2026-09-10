@@ -83,8 +83,7 @@ export function NewSampleDialog({
   const [embeddingNotes, setEmbeddingNotes] = useState("");
   // A batch either shares ONE embedding note or gives each sample its own. Both
   // are held at once, so switching modes never throws away what was typed in
-  // the other: only the active mode is saved, and the inactive one is named
-  // under the switch whenever it holds something that would not be saved.
+  // the other: only the active mode is saved.
   const [noteMode, setNoteMode] = useState<"all" | "each">("all");
   const [notesEach, setNotesEach] = useState<string[]>([]);
   const [cutNotes, setCutNotes] = useState("");
@@ -148,23 +147,6 @@ export function NewSampleDialog({
     }
     setNoteMode(mode);
   }
-
-  // Typed text the active mode will NOT save, named rather than hidden. The
-  // test is "does it end up on any sample", so a shared note that the rows were
-  // started from, or rows that still repeat it, raise nothing.
-  const keptRows = (quantity > 1 ? noteRows : notesEach).filter(
-    (r) => r.trim() && r.trim() !== sharedNote,
-  ).length;
-  const kept = `${keptRows} separate note${keptRows === 1 ? " is" : "s are"} kept aside`;
-  const notSaved = eachNotes
-    ? sharedNote && !noteRows.some((r) => r.trim() === sharedNote)
-      ? `Your note for all samples is kept aside — not saved unless you switch back to "One note for all ${quantity}".`
-      : null
-    : keptRows === 0
-      ? null
-      : quantity > 1
-        ? `${kept} — not saved unless you switch to "A note for each".`
-        : `${kept} for a batch — not saved for a single sample.`;
 
   function toggle(key: string) {
     setPicked((prev) => {
@@ -456,7 +438,6 @@ export function NewSampleDialog({
             }
           />
         )}
-        {notSaved && <p className="mt-1 text-[11px] text-amber-700">{notSaved}</p>}
       </div>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />
