@@ -31,9 +31,8 @@ yourself and sign in — actions are attributed to the signed‑in user.
 ![Manage dialog](img/02-manage.png)
 
 Create a project (a short code + a name). Every sample is numbered within its
-project. The code is *stored* zero‑padded — that is the `EE‑0001` the New Sample
-dialog previews — but the board, the Logs and the exports all show it unpadded,
-as `EE‑1`.
+project, and shown as `EE‑1`, `EE‑2`, … everywhere in the app and in the
+exports.
 
 ![Add a project](img/03-add-project.png)
 

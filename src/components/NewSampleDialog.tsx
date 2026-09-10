@@ -21,10 +21,17 @@ function codeAt(first: string, index: number): string {
   return `${match[1]}${String(n).padStart(width, "0")}`;
 }
 
-/** Expand a single next code ("EE-22") into a range label for quantity > 1. */
+/**
+ * The label shown for the batch about to be created — the DISPLAY boundary.
+ *
+ * The arithmetic above deliberately works on the stored, zero-padded form; only
+ * here are the zeros stripped, so the dialog names a block the same way the
+ * board, the Logs and both exports do. Both ends of a range are formatted: a
+ * half-formatted "EE-1 – EE-0005" would be worse than either form alone.
+ */
 function codeRange(first: string, quantity: number): string {
-  if (quantity <= 1) return first;
-  return `${first} – ${codeAt(first, quantity - 1)}`;
+  if (quantity <= 1) return displayCode(first);
+  return `${displayCode(first)} – ${displayCode(codeAt(first, quantity - 1))}`;
 }
 
 export function NewSampleDialog({
@@ -82,7 +89,7 @@ export function NewSampleDialog({
     nextSampleCode(project.id, project.code).then(setPreviewCode);
   }, [project.id, project.code]);
 
-  // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
+  // For quantity > 1, preview the full "EE-22 – EE-26" range.
   const previewLabel = codeRange(previewCode, quantity);
 
   /**

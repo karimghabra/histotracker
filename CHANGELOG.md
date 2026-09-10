@@ -23,6 +23,12 @@ Two things the log could not tell you.
   the CSV and Excel exports build their rows from the same helper the on-screen
   table does, so the spreadsheet you take to the bench and the screen you took
   it from cannot disagree about what a block owes.
+- **New Sample previewed a different ID than the one you got.** The dialog
+  showed the stored, zero-padded code (`EE-0001`) while the board, the Logs and
+  both exports have shown the unpadded form (`EE-1`) since #87 — so the first
+  thing a new user does named the block one way and every screen after it named
+  the same block another. The preview, and both ends of the range shown for a
+  batch, now use the display form.
 - **The Excel exports were writing empty workbooks.** Every `.xlsx` this app
   produced through a Save dialog — the Logs export and the full workbook export
   — opened as a blank sheet: not one header, not one row. The spreadsheet
