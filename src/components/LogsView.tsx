@@ -961,6 +961,13 @@ function FragmentRow({
     stainFilter && onlyMatching
       ? listedSlides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
       : listedSlides;
+  // "Only matching" narrows the outstanding requests the same way it narrows the
+  // glass — otherwise filtering to one agent still listed every other agent the
+  // block owes, right under a slide list that had been filtered down to it.
+  const visibleRequested =
+    stainFilter && onlyMatching
+      ? requested.filter((a) => a.assay_name.toLowerCase() === stainFilter.toLowerCase())
+      : requested;
   const liveSlideCount = slides.length - removedCount;
   const slideTitle = [
     extras > 0 ? `${progress.total} assay · ${extras} extra` : `${liveSlideCount} slides`,
@@ -1039,7 +1046,18 @@ function FragmentRow({
             )}
           </div>
         </td>
-        <td className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft">
+        {/* The cell truncates at 14rem, so the full list — including which of
+            them are still only assigned — lives in the tooltip. */}
+        <td
+          className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft"
+          title={
+            agentEntries.length
+              ? agentEntries
+                  .map((a) => (a.requested ? `${a.name} (assigned, not cut)` : a.name))
+                  .join(", ")
+              : undefined
+          }
+        >
           {agentEntries.length === 0
             ? "—"
             : agentEntries.map((agent, i) => (
@@ -1249,13 +1267,14 @@ function FragmentRow({
                 the expanded row contradicted the Stains / IHC cell above it,
                 which now names them. Same list, same wording ("Requested") as
                 the board drawer. */}
-            {requested.length > 0 && (
+            {visibleRequested.length > 0 && (
               <>
                 <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                  Assigned — not cut yet ({requested.length})
+                  Assigned — not cut yet ({visibleRequested.length}
+                  {visibleRequested.length !== requested.length ? ` of ${requested.length}` : ""})
                 </h4>
                 <ul className="mb-1 space-y-0.5 rounded-md border border-line/60 px-2 py-1.5">
-                  {requested.map((agent, i) => (
+                  {visibleRequested.map((agent, i) => (
                     <li
                       key={`${agent.assay_type}-${agent.assay_name}-${i}`}
                       className="flex items-baseline gap-1.5 text-[11px]"
