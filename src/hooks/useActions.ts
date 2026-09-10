@@ -322,15 +322,24 @@ export function useActions() {
     [commit],
   );
 
-  // Create N samples that share the same details (issue #1) as a single undo.
   /**
    * Create N samples as ONE undo entry. `descriptions[i]` overrides the shared
    * description for sample i; a blank or missing entry keeps the shared one
    * (#86). The loop is sequential and awaited, so index i maps deterministically
    * to the i-th minted code.
+   *
+   * `embeddingNotes`, when given, is sample i's OWN embedding note and replaces
+   * `input.embedding_notes` outright — unlike a description it is not composed
+   * with the shared value, because "one note for all" and "a note for each" are
+   * two modes the dialog chooses between, not a prefix and a suffix (#137).
    */
   const createSamples = useCallback(
-    (input: NewSampleInput, projectCode: string, quantity: number, descriptions?: string[]) => {
+    (
+      input: NewSampleInput,
+      projectCode: string,
+      quantity: number,
+      each?: { descriptions?: string[]; embeddingNotes?: string[] },
+    ) => {
       const count = Math.max(1, Math.floor(quantity));
       return commit(count === 1 ? "Create sample" : `Create ${count} samples`, async () => {
         const ids: number[] = [];
@@ -338,8 +347,16 @@ export function useActions() {
           // The shared field is a PREFIX, not a fallback (#86) — see
           // composeDescription. Same helper the dialog previews with, so what
           // the technician reads in the row list is what gets stored.
-          const resolved = composeDescription(input.sample_description, descriptions?.[i] ?? "");
-          ids.push(await addSample({ ...input, sample_description: resolved }, projectCode));
+          const resolved = composeDescription(input.sample_description, each?.descriptions?.[i] ?? "");
+          const embedding = each?.embeddingNotes
+            ? (each.embeddingNotes[i] ?? "")
+            : input.embedding_notes;
+          ids.push(
+            await addSample(
+              { ...input, sample_description: resolved, embedding_notes: embedding },
+              projectCode,
+            ),
+          );
         }
         return ids;
       });

@@ -81,6 +81,12 @@ export function NewSampleDialog({
   // at the embedding station, so it is asked for here and kept apart from the
   // cut notes, which are read one station later at the microtome.
   const [embeddingNotes, setEmbeddingNotes] = useState("");
+  // A batch either shares ONE embedding note or gives each sample its own. Both
+  // are held at once, so switching modes never throws away what was typed in
+  // the other: only the active mode is saved, and the inactive one is named
+  // under the switch whenever it holds something that would not be saved.
+  const [noteMode, setNoteMode] = useState<"all" | "each">("all");
+  const [notesEach, setNotesEach] = useState<string[]>([]);
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
   const [overallNotes, setOverallNotes] = useState("");
@@ -124,6 +130,41 @@ export function NewSampleDialog({
     .filter((a) => picked.has(`${a.assay_type}::${a.name}`))
     .map((a) => ({ assay_type: a.assay_type, assay_name: a.name }));
 
+  // "A note for each" only means something for a batch; one sample has one box.
+  const eachNotes = quantity > 1 && noteMode === "each";
+  const noteRows = Array.from({ length: quantity }, (_, i) => notesEach[i] ?? "");
+  const sharedNote = embeddingNotes.trim();
+
+  function chooseNoteMode(mode: "all" | "each") {
+    // Splitting a shared note with nothing typed per sample yet starts every
+    // row from it, so "the same for all but one" is a single edit. A row that
+    // already holds text is never overwritten.
+    if (mode === "each" && sharedNote && noteRows.every((r) => !r.trim())) {
+      setNotesEach((prev) => {
+        const next = [...prev];
+        for (let i = 0; i < quantity; i += 1) next[i] = embeddingNotes;
+        return next;
+      });
+    }
+    setNoteMode(mode);
+  }
+
+  // Typed text the active mode will NOT save, named rather than hidden. The
+  // test is "does it end up on any sample", so a shared note that the rows were
+  // started from, or rows that still repeat it, raise nothing.
+  const keptRows = (quantity > 1 ? noteRows : notesEach).filter(
+    (r) => r.trim() && r.trim() !== sharedNote,
+  ).length;
+  const notSaved = eachNotes
+    ? sharedNote && !noteRows.some((r) => r.trim() === sharedNote)
+      ? "Your note for all samples is kept, but not saved while each sample has its own."
+      : null
+    : keptRows > 0
+      ? `${keptRows} separate note${keptRows === 1 ? " is" : "s are"} kept, but not saved ${
+          quantity > 1 ? "while one note applies to all" : "for a single sample"
+        }.`
+      : null;
+
   function toggle(key: string) {
     setPicked((prev) => {
       const next = new Set(prev);
@@ -147,7 +188,7 @@ export function NewSampleDialog({
         needs_decalcification: needsDecalc,
         cut_notes: cutNotes,
         slide_notes: slideNotes,
-        embedding_notes: embeddingNotes,
+        embedding_notes: eachNotes ? "" : embeddingNotes,
         stains: preselectedStains.map((a) => a.assay_name).join(", "),
         preselected_stains: preselectedStains,
         overall_notes: overallNotes,
@@ -158,7 +199,12 @@ export function NewSampleDialog({
       // Correcting Quantity back to 1 hides the rows, so their contents must
       // stop counting too — otherwise descriptions[0] silently overrode the
       // Description field the user could actually see.
-      quantity > 1 ? descriptions.slice(0, quantity) : undefined,
+      quantity > 1
+        ? {
+            descriptions: descriptions.slice(0, quantity),
+            embeddingNotes: eachNotes ? noteRows : undefined,
+          }
+        : undefined,
     );
     setSaving(false);
     onClose();
@@ -330,14 +376,87 @@ export function NewSampleDialog({
       {/* Embedding comes BEFORE sectioning at the bench, so it comes before the
           cut notes here — and it is its own box rather than a line in them,
           because the two are read by different people at different stations. */}
-      <Field label="Embedding Notes">
-        <TextArea
-          rows={2}
-          value={embeddingNotes}
-          onChange={(e) => setEmbeddingNotes(e.target.value)}
-          placeholder="e.g. cut face down, proximal end to the left"
-        />
-      </Field>
+      {/* Not a <Field>: that is a <label>, and a label wrapping the mode
+          switch would hand every click on it to the first control inside. */}
+      <div className="mb-3.5">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+          <label
+            htmlFor={eachNotes ? undefined : "embedding-notes"}
+            className="text-xs font-medium text-ink-soft"
+          >
+            Embedding Notes
+          </label>
+          {quantity > 1 && (
+            <div
+              role="radiogroup"
+              aria-label="Notes apply to"
+              className="inline-flex rounded-md border border-line bg-surface p-0.5 text-[11px]"
+            >
+              {(
+                [
+                  ["all", `One note for all ${quantity}`],
+                  ["each", "A note for each"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={noteMode === mode}
+                  onClick={() => chooseNoteMode(mode)}
+                  className={cn(
+                    "rounded px-2 py-0.5 font-medium transition",
+                    noteMode === mode
+                      ? "bg-brand text-white shadow-sm"
+                      : "text-ink-soft hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {eachNotes ? (
+          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
+            {noteRows.map((note, i) => {
+              const code = displayCode(codeAt(previewCode, i));
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="w-20 shrink-0 text-[11px] font-medium text-ink-soft">{code}</span>
+                  <TextInput
+                    aria-label={`Embedding note for ${code}`}
+                    value={note}
+                    placeholder="Leave blank for none"
+                    onChange={(e) =>
+                      setNotesEach((prev) => {
+                        const next = [...prev];
+                        while (next.length < quantity) next.push("");
+                        next[i] = e.target.value;
+                        return next;
+                      })
+                    }
+                    className="py-1 text-[11px]"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <TextArea
+            id="embedding-notes"
+            rows={2}
+            value={embeddingNotes}
+            onChange={(e) => setEmbeddingNotes(e.target.value)}
+            placeholder={
+              quantity > 1
+                ? `e.g. cut face down — saved on all ${quantity} samples`
+                : "e.g. cut face down, proximal end to the left"
+            }
+          />
+        )}
+        {notSaved && <p className="mt-1 text-[11px] text-amber-700">{notSaved}</p>}
+      </div>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />
       </Field>
