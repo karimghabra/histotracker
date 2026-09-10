@@ -17,7 +17,7 @@ Two things the log could not tell you.
   sitting in fixative with Safranin O assigned read as having no stains at all —
   and neither did a block already cut for one agent with a second still owed.
   Both now appear, marked *(assigned)* so a plan is never mistaken for glass,
-  and the stain filter finds them.
+  and the stain filter, the assay-type filter and the search all find them.
 
   This applies to the exported log too, which is the part worth saying out loud:
   the CSV and Excel exports build their rows from the same helper the on-screen

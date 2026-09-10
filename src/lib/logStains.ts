@@ -30,6 +30,9 @@ export type AssignedStain = { assay_type: string; assay_name: string };
  * A multiset, not a set: two requests for the same agent are two slides owed,
  * so both are kept (#62/#66), and re-requesting an already-produced agent is a
  * genuine outstanding request again (#41).
+ *
+ * The Logs assay-type filter reads this directly rather than `logAgents()`,
+ * because it matches on `assay_type`, which only survives here.
  */
 export function outstandingStains(sample: Sample): AssignedStain[] {
   return parsePreselectedStains(sample.preselected_stains);

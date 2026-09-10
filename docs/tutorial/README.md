@@ -38,8 +38,9 @@ project, e.g. `EE‑0001`.
 ## 3. Log a sample
 
 **New Sample** records a block: description, processing type (Short/Long),
-fixative, whether it needs decalcification, and any stains you already know you
-want. It lands in **Pre‑processing**.
+fixative, whether it needs decalcification, **embedding notes** for whoever
+picks up the mould (how it should be oriented, whether it is bisected), and any
+stains you already know you want. It lands in **Pre‑processing**.
 
 ![New sample](img/04-new-sample.png)
 
@@ -102,8 +103,11 @@ Dried**). Finishing the last step advances the slides to *Ready for Imaging*.
 
 Switch to **Logs** for a spreadsheet of every sample and slide. Sort by any
 column; filter by project, stain/IHC, stage, assay type, or date; search across
-codes, descriptions, stains and notes. A block marked exhausted shows an
-**Exhausted** badge. Export the current view as CSV or Excel.
+codes, descriptions, stains and notes. Stains that are assigned but not yet cut
+are listed too, marked *(assigned)*, so the log says what the board says — the
+stain and assay-type filters and the search find them, and the CSV/Excel export
+carries them as rows with no slide ID, stage `requested (not cut)`. A block marked exhausted shows an **Exhausted** badge. Export
+the current view as CSV or Excel.
 
 ![Logs](img/14-logs.png)
 

@@ -77,7 +77,7 @@ A sample stores:
 - Fixative.
 - Whether decalcification is required.
 - Processing protocol or short/long processing type.
-- Cut, slide, and general notes.
+- Embedding, cut, slide, and general notes.
 - Preliminary sectioning plan.
 - Planned stains, which are suggestions and requirements for later planning but are not slide assignments.
 

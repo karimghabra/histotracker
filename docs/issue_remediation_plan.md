@@ -418,9 +418,12 @@ outstanding agent. So a block in fixative with SafO assigned had nothing for the
 Logs to read.
 
 **Fix:** `src/lib/logStains.ts` — `outstandingStains()` and `logAgents()`.
-`LogsView` builds its Stains / IHC cell, stain filter, search haystack and stain
-sort from it, and `export.ts`'s `logRowCells()` emits one row per outstanding
-request (blank Slide ID, Slide Stage `requested (not cut)`).
+`LogsView` builds its Stains / IHC cell, stain filter, assay-type filter, search
+haystack and stain sort from it, and `export.ts`'s `logRowCells()` emits one row
+per outstanding request (blank Slide ID, Slide Stage `requested (not cut)`). The
+cell collapses to one "(all assigned)" marker only when the block has no glass
+at all; a block that has been cut marks each outstanding agent individually,
+because an agent that was cut and then re-requested is outstanding again.
 
 **The part that is easy to get wrong:** the ask was *consistency between the log
 and the main screen*, and the exported log is still the log. Fixing only the
@@ -429,11 +432,12 @@ the screen it came from — silently, in both the zero-slide case and the harder
 one where a block already has glass for one agent and owes a second. Both halves
 go through the one helper for exactly that reason.
 
-**Coverage:** `src/lib/logStains.test.ts`; `src/lib/logsCsv.test.ts` (both
-export shapes, red before the fix); `tests/e2e/issues-136-137.spec.ts`, which
-asserts the same facts on screen and in the CSV exported from that same view;
-harness gates `issue(136, …)` ×2 and `issue(137, …)` over a port of
-`logAgents()`.
+**Coverage:** `src/lib/logStains.test.ts`; `src/lib/logsCsv.test.ts` and
+`src/lib/logsXlsx.test.ts` (both export shapes, red before the fix);
+`src/components/LogsView.test.tsx` for the "(all assigned)" gate and the
+assay-type filter; `tests/e2e/issues-136-137.spec.ts`, which asserts the same
+facts on screen and in the CSV exported from that same view; harness gates
+`issue(136, …)` ×2 and `issue(137, …)` over a port of `logAgents()`.
 
 ---
 
