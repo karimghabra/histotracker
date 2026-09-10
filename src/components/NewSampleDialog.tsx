@@ -69,6 +69,11 @@ export function NewSampleDialog({
   }, [pasted, quantity]);
   // Agents ticked for this sample (issue #1). Keyed "type::name".
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // #137 — orientation and handling for the person embedding the block. It is
+  // decided at intake ("cut side down", "bisect through the enthesis") and read
+  // at the embedding station, so it is asked for here and kept apart from the
+  // cut notes, which are read one station later at the microtome.
+  const [embeddingNotes, setEmbeddingNotes] = useState("");
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
   const [overallNotes, setOverallNotes] = useState("");
@@ -135,6 +140,7 @@ export function NewSampleDialog({
         needs_decalcification: needsDecalc,
         cut_notes: cutNotes,
         slide_notes: slideNotes,
+        embedding_notes: embeddingNotes,
         stains: preselectedStains.map((a) => a.assay_name).join(", "),
         preselected_stains: preselectedStains,
         overall_notes: overallNotes,
@@ -313,6 +319,17 @@ export function NewSampleDialog({
           Each ticked agent is preassigned a slide; the block auto-plans {autoExtras} extra
           {autoExtras === 1 ? "" : "s"} at embedding.
         </p>
+      </Field>
+      {/* Embedding comes BEFORE sectioning at the bench, so it comes before the
+          cut notes here — and it is its own box rather than a line in them,
+          because the two are read by different people at different stations. */}
+      <Field label="Embedding Notes">
+        <TextArea
+          rows={2}
+          value={embeddingNotes}
+          onChange={(e) => setEmbeddingNotes(e.target.value)}
+          placeholder="e.g. cut face down, proximal end to the left"
+        />
       </Field>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />

@@ -160,13 +160,18 @@ function makeApi(db) {
       `INSERT INTO samples (
          project_id, project_sample_number, sample_code, sample_description, date_added,
          processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-         stains, preselected_stains, overall_notes, current_stage, stage_received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, '', 'received', ?)`,
+         embedding_notes, stains, preselected_stains, overall_notes, current_stage,
+         stage_received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, '', 'received', ?)`,
       [
         projectId, number, code, description, "2026-01-01",
         opts.processingType ?? "Short",
         opts.fixative ?? "PFA",
         opts.needsDecalc ? 1 : 0,
+        // #137 — asked for at intake, so the port writes it the same way db.ts
+        // does. Coerced, matching addSample(): a caller that predates the field
+        // stores an empty note rather than throwing.
+        String(opts.embeddingNotes ?? ""),
         opts.stains ?? "",
         preselected,
         now(),

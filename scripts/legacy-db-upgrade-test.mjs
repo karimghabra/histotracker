@@ -12,13 +12,26 @@
 // Both must end with the data intact and the new columns usable.
 
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { readFileSync, readdirSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(HERE, "..", "tests", "fixtures", "legacy-pre-0023.sqlite");
-const MIGRATION_0023 = join(HERE, "..", "src-tauri", "migrations", "0023_slide_sequence_and_archive.sql");
+const MIGRATIONS_DIR = join(HERE, "..", "src-tauri", "migrations");
+
+/**
+ * Every migration the fixture predates, in order.
+ *
+ * This used to name 0023 alone, which quietly stopped meaning "the update" the
+ * moment a 0024 existed: a later migration could be destructive on a populated
+ * database and this file — the one test whose whole job is to say otherwise —
+ * would not have run it. Discovered from the directory instead, so a new
+ * migration is covered here the day it is added, with no edit to remember.
+ */
+const PENDING_MIGRATIONS = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith(".sql") && Number(f.slice(0, 4)) >= 23)
+  .sort();
 
 let failures = 0;
 function check(name, fn) {
@@ -65,6 +78,7 @@ function ensureRuntimeSchema(db) {
   ensureColumn(db, "samples", "archived_at", "TEXT");
   ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
 }
 
 /**
@@ -151,11 +165,18 @@ function assertDataIntact(db, label) {
   );
 }
 
-console.log("\nPATH A — plugin-sql applies migration 0023 to the existing file");
+console.log(`\nPATH A — plugin-sql applies ${PENDING_MIGRATIONS.join(", ")} to the existing file`);
 {
   const { db } = openCopy("patha");
   const before = db.prepare(`SELECT COUNT(*) AS n FROM slides`).get().n;
-  db.exec(readFileSync(MIGRATION_0023, "utf8")); // must not throw on populated data
+  const samplesBefore = db.prepare(
+    `SELECT id, sample_code, sample_description, cut_notes, overall_notes FROM samples ORDER BY id`,
+  ).all();
+  // Every migration the fixture predates, in order — must not throw on
+  // populated data.
+  for (const file of PENDING_MIGRATIONS) {
+    db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+  }
   check("this file's ensureRuntimeSchema port is still in step with db.ts", () => {
     assertPortMatchesSource();
   });
@@ -163,6 +184,30 @@ console.log("\nPATH A — plugin-sql applies migration 0023 to the existing file
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("slides_issued"), "slides_issued added");
     assert(cols.includes("archived_at"), "archived_at added");
+  });
+  // #137 — the column the captain's populated database gains with this update.
+  // Asserted DIRECTLY on a real pre-existing image, not inferred from a suite
+  // that passed on an empty one: adding a column is only safe if every row that
+  // was already there survives it, filled in place.
+  check("migration 0025 adds samples.embedding_notes to a populated database", () => {
+    const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
+    assert(cols.includes("embedding_notes"), "embedding_notes added");
+    const rows = db.prepare(`SELECT COUNT(*) AS n FROM samples WHERE embedding_notes = ''`).get().n;
+    eq(rows, 3, "every existing sample gets the empty-string default, not NULL");
+  });
+  check("the rows that were already there are untouched by 0025", () => {
+    const after = db.prepare(
+      `SELECT id, sample_code, sample_description, cut_notes, overall_notes FROM samples ORDER BY id`,
+    ).all();
+    eq(JSON.stringify(after), JSON.stringify(samplesBefore),
+       "existing sample rows survive the new column byte for byte");
+  });
+  check("embedding notes are writable and readable on a pre-existing row", () => {
+    db.prepare(`UPDATE samples SET embedding_notes = ? WHERE sample_code = 'EE-0001'`)
+      .run("cut face down, proximal left");
+    eq(db.prepare(`SELECT embedding_notes AS n FROM samples WHERE sample_code = 'EE-0001'`).get().n,
+       "cut face down, proximal left", "the new column round-trips on an old row");
+    assertDataIntact(db, "A-after-embedding-note");
   });
   check("no rows were lost or altered by the migration", () => {
     assertDataIntact(db, "A");
@@ -221,11 +266,27 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
     try { db.prepare(`SELECT archived_at FROM samples`).all(); } catch { threw = true; }
     assert(threw, "without convergence the archive query fails");
   });
+  check("a pre-0025 image is missing embedding_notes before convergence", () => {
+    const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
+    assert(!cols.includes("embedding_notes"), "precondition: no embedding_notes");
+  });
   check("ensureRuntimeSchema converges the image", () => {
     ensureRuntimeSchema(db);
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("slides_issued") && cols.includes("archived_at"), "both columns present");
     db.prepare(`SELECT archived_at FROM samples`).all(); // no longer throws
+  });
+  // The path a backup revert or a sync pull takes: no migrations run, so this
+  // is the ONLY thing that makes the new column exist on the captain's file.
+  check("#137: embedding_notes converges too, with every row intact", () => {
+    const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
+    assert(cols.includes("embedding_notes"), "embedding_notes present after convergence");
+    eq(db.prepare(`SELECT COUNT(*) AS n FROM samples WHERE embedding_notes = ''`).get().n, 3,
+       "existing rows default to empty, not NULL");
+    db.prepare(`UPDATE samples SET embedding_notes = 'bisect' WHERE sample_code = 'EE-0002'`).run();
+    eq(db.prepare(`SELECT embedding_notes AS n FROM samples WHERE sample_code = 'EE-0002'`).get().n,
+       "bisect", "and the app can write to it straight away");
+    assertDataIntact(db, "B-embedding-notes");
   });
   check("convergence is a no-op the second time", () => {
     ensureRuntimeSchema(db);

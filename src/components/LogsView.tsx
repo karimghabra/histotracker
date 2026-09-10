@@ -14,6 +14,8 @@ import {
   STAGE_LABELS,
   STAGE_ORDER,
 } from "../lib/stages";
+import { logAgents, outstandingStains } from "../lib/logStains";
+import type { AssignedStain, LogAgent } from "../lib/logStains";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
@@ -388,7 +390,13 @@ export function LogsView() {
     () =>
       samples.map((sample) => {
         const slidesForSample = slidesBySample.get(sample.sample_code) ?? [];
-        const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
+        // #136 — the agents this block involves, NOT just the ones already on
+        // glass. A block in fixative with SafO assigned reads as "SafO" here
+        // exactly as it does on the board, and the same helper feeds the CSV /
+        // XLSX export so the two cannot disagree.
+        const agentEntries = logAgents(sample, slidesForSample);
+        const agents = agentEntries.map((a) => a.name);
+        const requested = outstandingStains(sample);
         const phases = samplePhases(sample, slidesForSample);
         const phase = furthestPhase(phases);
         const progress = analyzedProgress(slidesForSample);
@@ -403,7 +411,9 @@ export function LogsView() {
         return {
           sample,
           slides: slidesForSample,
+          agentEntries,
           agents,
+          requested,
           phase,
           phases,
           progress,
@@ -747,7 +757,8 @@ export function LogsView() {
                 <FragmentRow
                   key={row.sample.id}
                   sample={row.sample}
-                  agents={row.agents}
+                  agentEntries={row.agentEntries}
+                  requested={row.requested}
                   slides={row.slides}
                   // A removed block has no live slides, so the derived phase
                   // falls back to its stage column — which removal overwrote.
@@ -863,7 +874,8 @@ function DepthTagDialog({
 
 function FragmentRow({
   sample,
-  agents,
+  agentEntries,
+  requested,
   slides,
   phaseLabel,
   progress,
@@ -885,7 +897,10 @@ function FragmentRow({
   onToggleSlideSelect,
 }: {
   sample: Sample;
-  agents: string[];
+  /** Every agent named on the block — cut glass first, then still-assigned. */
+  agentEntries: LogAgent[];
+  /** The outstanding stain requests themselves, listed in the drill-down. */
+  requested: AssignedStain[];
   slides: Slide[];
   phaseLabel: string;
   progress: { done: number; total: number };
@@ -1025,7 +1040,30 @@ function FragmentRow({
           </div>
         </td>
         <td className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft">
-          {agents.length ? agents.join(", ") : "—"}
+          {agentEntries.length === 0
+            ? "—"
+            : agentEntries.map((agent, i) => (
+                <span key={`${agent.name}-${i}`}>
+                  {i > 0 && ", "}
+                  {/* An outstanding request is named in the same list as the
+                      glass — that is #136 — but it is a plan, not a fact, so it
+                      is toned like the board's "Awaiting stains" line rather
+                      than reading as a slide that exists. */}
+                  <span
+                    className={cn(agent.requested && "text-brand")}
+                    title={
+                      agent.requested
+                        ? `${agent.name} is assigned to this block and has not been cut yet`
+                        : undefined
+                    }
+                  >
+                    {agent.name}
+                    {agent.requested && (
+                      <span className="ml-0.5 text-[10px] text-brand">(assigned)</span>
+                    )}
+                  </span>
+                </span>
+              ))}
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
           {liveSlideCount}
@@ -1178,6 +1216,18 @@ function FragmentRow({
               </>
             )}
 
+            {/* Written at intake for whoever embeds the block (#137). Read-only
+                here, as it is in the board drawer — it describes a decision
+                made about the specimen, not a running commentary. */}
+            {sample.embedding_notes?.trim() && (
+              <>
+                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Embedding notes
+                </h4>
+                <p className="whitespace-pre-wrap text-[11px] text-ink">{sample.embedding_notes}</p>
+              </>
+            )}
+
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
@@ -1193,6 +1243,35 @@ function FragmentRow({
               placeholder="Notes about this sample…"
               onSave={(notes) => void editSampleNotes(sample.id, notes)}
             />
+
+            {/* #136 — the stains this block owes. They have no slide and no
+                timeline, so they cannot live in the list below; without them
+                the expanded row contradicted the Stains / IHC cell above it,
+                which now names them. Same list, same wording ("Requested") as
+                the board drawer. */}
+            {requested.length > 0 && (
+              <>
+                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Assigned — not cut yet ({requested.length})
+                </h4>
+                <ul className="mb-1 space-y-0.5 rounded-md border border-line/60 px-2 py-1.5">
+                  {requested.map((agent, i) => (
+                    <li
+                      key={`${agent.assay_type}-${agent.assay_name}-${i}`}
+                      className="flex items-baseline gap-1.5 text-[11px]"
+                    >
+                      {agent.assay_type && (
+                        <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
+                          {agent.assay_type}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-ink">{agent.assay_name}</span>
+                      <span className="shrink-0 text-[10px] text-brand">Requested</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
 
             {/* Slides — each with its own separate timeline. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">

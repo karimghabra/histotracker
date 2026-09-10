@@ -10,6 +10,7 @@ import {
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
+import { outstandingStains } from "./logStains";
 import { displayCode, slideCutAt, slideLetterOf, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
@@ -38,6 +39,7 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
       (s) => (s as unknown as Record<string, string | null>)[stage.column] ?? "",
     ],
   ),
+  ["Embedding Notes", (s) => s.embedding_notes ?? ""],
   ["Cut Notes", (s) => s.cut_notes],
   ["Slide Notes", (s) => s.slide_notes],
   ["Stains / IHC", (s) => s.stains],
@@ -151,11 +153,22 @@ const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
-  "Slide Notes", "Sample Notes",
+  "Slide Notes", "Embedding Notes", "Sample Notes",
 ];
 
+/**
+ * The Slide Stage written for an assigned stain that has no glass yet (#136).
+ *
+ * Deliberately not "assigned": that is a real slide stage (a cut slide waiting
+ * to be filed against an assay), and a spreadsheet column that used the same
+ * word for both would be unreadable. This row has no Slide ID and no Cut date,
+ * and says why.
+ */
+const REQUESTED_STAGE = "requested (not cut)";
+
 // One array of cells (in LOGS_HEADERS order) per exported line — one row per
-// slide, plus a single row for a sample with no slides. Shared by CSV and XLSX.
+// slide, then one per stain still only assigned (#136), and a single bare row
+// for a sample with neither. Shared by CSV and XLSX.
 function logRowCells(rows: LogExportRow[]): string[][] {
   const out: string[][] = [];
   for (const { sample, slides } of rows) {
@@ -169,11 +182,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       sample.block_exhausted ? "Yes" : "No",
       (sample.date_added ?? "").slice(0, 10),
     ];
-    if (slides.length === 0) {
-      // 9 empty slide-stage cells + empty Slide Notes, then Sample Notes.
-      out.push([...base, ...Array(10).fill(""), sample.overall_notes ?? ""]);
-      continue;
-    }
+    const tail = [sample.embedding_notes ?? "", sample.overall_notes ?? ""];
     for (const sl of slides) {
       out.push([
         ...base,
@@ -187,8 +196,31 @@ function logRowCells(rows: LogExportRow[]): string[][] {
         sl.stage_pictures_taken_at ?? "",
         sl.stage_analyzed_at ?? "",
         sl.notes ?? "",
-        sample.overall_notes ?? "",
+        ...tail,
       ]);
+    }
+    // #136 — a stain the block has been assigned but nobody has cut for yet.
+    // The Logs table names it and the main screen flags it, so the exported log
+    // has to carry it too, whether or not the block already has other glass.
+    // Without this, exporting a fixing block with SafO assigned produced either
+    // an empty stain column or (worse) three slide rows that mention every
+    // agent EXCEPT the one still outstanding.
+    const requested = outstandingStains(sample);
+    for (const agent of requested) {
+      out.push([
+        ...base,
+        "", // no slide exists yet — that is the whole point of the row
+        agent.assay_type,
+        agent.assay_name,
+        REQUESTED_STAGE,
+        "", "", "", "", "", // never cut, so no bench stamps
+        "", // no slide notes without a slide
+        ...tail,
+      ]);
+    }
+    if (slides.length === 0 && requested.length === 0) {
+      // Nothing cut and nothing owed: one row so the block still appears.
+      out.push([...base, ...Array(10).fill(""), ...tail]);
     }
   }
   return out;
