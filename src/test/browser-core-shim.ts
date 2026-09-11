@@ -10,6 +10,7 @@
 // the real image-based undo/redo path — snapshotDb() reads the DB file bytes and
 // restoreDb() overwrites them — runs unmodified against a genuine "file".
 import { readShimFile, writeShimFile } from "./shim-fs";
+import { migrateImageBytes } from "./browser-sql-shim";
 
 // Backups live in the same virtual FS under a fixed prefix so the real
 // backup.ts path (snapshotDb → backup_write → backup_list/read) runs unmodified.
@@ -165,6 +166,12 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
       }
       return undefined as unknown as T;
     }
+    // migrate.rs: bring a backup up to this build's migrations before a revert.
+    case "db_migrate_image": {
+      const bytes = Uint8Array.from((_args?.bytes as number[] | undefined) ?? []);
+      return Array.from(await migrateImageBytes(bytes)) as unknown as T;
+    }
+
     case "backup_prune": {
       const keep = Number(_args?.keep ?? 48);
       const all = backupList(); // ascending by name (oldest first)

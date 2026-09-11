@@ -176,7 +176,9 @@ export function getDb(): Promise<Database> {
 async function ensureRuntimeSchema(db: Database): Promise<void> {
   // Register EVERY additively-added column that current runtime queries read or
   // write. Anything missing here becomes a silent failure the moment an older
-  // image is opened (undo restore, sync pull, or a REVERT TO AN OLDER BACKUP).
+  // image is opened unmigrated (undo restore, sync pull). A backup revert runs
+  // the numbered migrations first (src-tauri/src/migrate.rs), so there it only
+  // matters for a column that has none.
   // A new migration that adds such a column MUST add a matching line below —
   // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
@@ -195,11 +197,11 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // the Logs and both exports. RUNTIME-ONLY — deliberately no numbered
   // migration. A migration records its version in the file, and that record is
   // what breaks compatibility here: the build in use (0.17.0) refuses to open a
-  // database carrying a version it does not know, and after a revert to any
-  // backup taken before this column existed, the next launch re-runs the
-  // migration's ADD COLUMN on top of the column this line already added
-  // ("duplicate column name") and the database will not open. Adding it here
-  // alone leaves neither record nor collision. See AGENTS.md.
+  // database carrying a version it does not know, and a viewer on this build
+  // that pulls a snapshot from a workstation still on 0.17.0 would, at its next
+  // launch, re-run the migration's ADD COLUMN on top of the column this line
+  // already added ("duplicate column name") and not open. Adding it here alone
+  // leaves neither record nor collision. See AGENTS.md.
   await ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(

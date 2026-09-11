@@ -38,7 +38,14 @@ raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file imag
 restore). All three swap a DB *file* under the live connection, and
 `tauri-plugin-sql` only runs migrations **once at startup** — a reopened file is
 never re-migrated. So an image that predates a column can go live under a newer
-build (e.g. reverting to an older backup after an update).
+build (e.g. a viewer on a new build pulling a snapshot from a workstation still on an old one).
+
+A backup revert is the exception.
+The migration record lives inside the image, so an older backup swapped in as it is would carry a record without the newer migrations, and the next launch would run them again on top of the columns `getDb()` had converged ("duplicate column name"), leaving a database the app cannot open.
+`revertToBackup()` therefore first passes the backup through `db_migrate_image` (`src-tauri/src/migrate.rs`), which runs this build's migrations on a copy with the same sqlx migrator the launch uses.
+The image goes live fully migrated, with a record sqlx itself wrote.
+A backup that cannot be brought up to date is refused before anything changes: one that is damaged or not a database, one the app did not write, one made by a newer build, and one a migration fails on.
+That last includes a backup taken after an older build's revert had already converged columns its record does not account for; it is refused, not patched over.
 
 Three rules keep updates compatible with existing databases:
 
@@ -49,15 +56,15 @@ Three rules keep updates compatible with existing databases:
 2. **Every additive column current code reads/writes is registered in
    `ensureRuntimeSchema()`** (`src/lib/db.ts`), which `getDb()` runs on *every*
    (re)open. It `PRAGMA table_info`-checks and `ADD COLUMN`s only what's missing —
-   a no-op on an up-to-date DB, and the thing that makes opening/reverting an
-   older image safe. **When you add such a column, add a matching line there**, and
+   a no-op on an up-to-date DB, and the thing that makes opening an older image
+   swapped in at runtime safe. **When you add such a column, add a matching line there**, and
    prove it with a harness gate that writes and reads it (as `issue(137)` does for
    `samples.embedding_notes`) — the harness's `freshDb()` converges every column
    parsed out of `ensureRuntimeSchema()`, so a regex over `db.ts` adds nothing. This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
 3. **A column may skip its numbered migration** and live in
    `ensureRuntimeSchema()` alone when a numbered migration would break rollback
-   to the build in use or a backup revert; precedent `samples.embedding_notes`
+   to the build in use or a sync pull; precedent `samples.embedding_notes`
    (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
 
 `pnpm test:compat` checks these rules against a real release rather than

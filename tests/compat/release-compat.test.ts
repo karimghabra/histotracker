@@ -17,6 +17,7 @@ import { currentBuild, releaseBuild, REPO_ROOT, type Build } from "./builds";
 import { type App, type Dump, columnsOf, dump, launch, ledger, lostOrChanged, newMachine, quit } from "./app";
 import { readEverything, runTheLab, skippedSteps, stored, workOnRows, type LabDay, type Reads } from "./lab";
 import { seedLedger } from "./sqlx-migrator";
+import { OLD_BACKUP_RELEASE } from "../../scripts/compat-releases.mjs";
 
 const RELEASE = process.env.COMPAT_RELEASE;
 if (!RELEASE) throw new Error("Set COMPAT_RELEASE to a release tag, or run `pnpm test:compat`.");
@@ -24,10 +25,13 @@ if (!RELEASE) throw new Error("Set COMPAT_RELEASE to a release tag, or run `pnpm
 /**
  * Migrations this branch registers that the release does not, accepted as a
  * ONE-WAY upgrade. Once this build opens a database, the release refuses it
- * ("migration N was previously applied but is missing"), so does every sync
- * viewer still running it, and a revert to a backup from before the update
- * re-runs the migration on the next launch. Empty is the normal state: a
- * column can be converged at runtime instead (AGENTS.md, embedding_notes).
+ * ("migration N was previously applied but is missing"), and so does every
+ * sync viewer still running it. A viewer on this build that pulls a snapshot
+ * from a workstation still on the release swaps it in unmigrated, so its next
+ * launch runs the migration on top of whatever getDb() converged. (A backup
+ * revert does not: it runs the migrations first, see src-tauri/src/migrate.rs.)
+ * Empty is the normal state: a column can be converged at runtime instead
+ * (AGENTS.md, embedding_notes).
  * Add a version only with the captain's sign-off, saying why; the stories
  * below then stop at the refusal instead of failing on it.
  */
@@ -126,10 +130,10 @@ describe("the migration ledger", () => {
     expect(
       refused,
       `this branch registers migration ${refused.join(", ")}, which ${release.ref} does not. After this ` +
-        `build opens the lab's database, ${release.ref} refuses to open it; after a revert to a backup ` +
-        `taken before the update, the next launch runs the migration again on top of the column ` +
-        `getDb() already converged. Converge the column at runtime only, or get a signed-off ` +
-        `ACCEPTED_ONE_WAY entry.`,
+        `build opens the lab's database, ${release.ref} refuses to open it, and so does every viewer ` +
+        `still on it; a viewer on this build that pulls a snapshot from a workstation still on ` +
+        `${release.ref} runs the migration again, at its next launch, on top of the column getDb() ` +
+        `converged. Converge the column at runtime only, or get a signed-off ACCEPTED_ONE_WAY entry.`,
     ).toEqual([]);
   });
 });
@@ -267,6 +271,58 @@ describe("backups across the version change", () => {
       await readEverything(app);
     });
     expect(lostOrChanged(atBackup, dump(lab.dbFile)).filter((d) => !SESSION_TABLES.test(d))).toEqual([]);
+  });
+});
+
+describe(`a backup from before a migration this branch registers (${OLD_BACKUP_RELEASE} took it)`, () => {
+  // A revert swaps the backup in mid-session, after this launch's migrations
+  // have run. It used to go in as it was: getDb() added the columns it lacked,
+  // its migration record still lacked their migrations, and the next launch ran
+  // them again on top of those columns ("duplicate column name") and could not
+  // open the database. The revert now runs this build's migrations on it first.
+  const bench = newMachine("bench with an old backup");
+  let old: Build;
+  let backup = "";
+  let atBackup: Dump;
+
+  it(`${OLD_BACKUP_RELEASE} lacks a migration this branch registers, so the revert has one to run`, () => {
+    old = releaseBuild(OLD_BACKUP_RELEASE);
+    const theirs = new Set(old.migrations.map((m) => m.version));
+    expect(
+      branch.migrations.filter((m) => !theirs.has(m.version)).map((m) => m.version),
+      `${OLD_BACKUP_RELEASE} registers every migration this branch does; point OLD_BACKUP_RELEASE in ` +
+        `scripts/compat-releases.mjs at an older release`,
+    ).not.toEqual([]);
+  });
+
+  it("the old build takes a backup; this branch, installed later, reverts to it", async () => {
+    await using(await launch(old, bench), async (app) => {
+      await runTheLab(app, `${OLD_BACKUP_RELEASE} on the bench`);
+      backup = (await app.backup.createBackup("scheduled", 48)).name;
+    });
+    atBackup = dump(bench.dbFile);
+    await using(await launch(branch, bench), async (app) => {
+      await runTheLab(app, "branch on the bench");
+      await app.backup.revertToBackup(backup);
+    });
+    // The record now says what the file holds: every migration, run on it.
+    expect(ledger(bench.dbFile)).toEqual(branch.migrations.map((m) => m.version).sort((a, b) => a - b));
+  });
+
+  it("the next launch opens it, and so does the one after, with everything the backup held", async () => {
+    for (const _launch of ["next", "after that"]) {
+      await using(await launch(branch, bench), async (app) => {
+        await readEverything(app);
+      });
+    }
+    expect(lostOrChanged(atBackup, dump(bench.dbFile)).filter((d) => !SESSION_TABLES.test(d))).toEqual([]);
+  });
+
+  it("the release opens what the revert left, and reads everything", async ({ skip }) => {
+    if (acceptedOneWay()) skip();
+    await using(await launch(release, bench), async (app) => {
+      await readEverything(app);
+    });
   });
 });
 

@@ -284,8 +284,8 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
     assert(cols.includes("slides_issued") && cols.includes("archived_at"), "both columns present");
     db.prepare(`SELECT archived_at FROM samples`).all(); // no longer throws
   });
-  // The path a backup revert or a sync pull takes: no migrations run, so this
-  // is the ONLY thing that makes the new column exist on the captain's file.
+  // The path a sync pull or an undo takes: no migrations run, so this is the
+  // ONLY thing that makes the new column exist on the captain's file.
   check("#137: embedding_notes converges too, with every row intact", () => {
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("embedding_notes"), "embedding_notes present after convergence");
@@ -440,18 +440,21 @@ console.log("\nPATH C — upgrade from the build in use, revert to its backup, r
     }
   });
 
-  // Problem 2 — the one reproduced on this fixture. Reverting swaps the backup
-  // in WITHOUT migrating (revertToBackup → restoreDbPreservingSession), so
-  // getDb() converges the column onto a file whose record never heard of it.
-  // A migration that also adds the column then runs again at the next launch
-  // and fails on "duplicate column name": the app cannot open its database.
+  // Problem 2 — the one reproduced on this fixture. A revert swaps the backup
+  // in mid-session, after this launch's migrations have run, and getDb() then
+  // converges its columns. Swapped in as it was, the file's record never heard
+  // of a migration that also adds one of those columns, so the next launch ran
+  // it again and failed on "duplicate column name": the app could not open its
+  // database. revertToBackup now runs the migrations on the backup first
+  // (db_migrate_image, src-tauri/src/migrate.rs), which `launch` models here.
   check("revert to the in-use build's backup, then relaunch: the database opens", () => {
     db.close();
     copyFileSync(FIXTURE.replace(/\.sqlite$/, ".pathc-backup.sqlite"),
                  FIXTURE.replace(/\.sqlite$/, ".pathc.sqlite"));
     const reverted = new DatabaseSync(FIXTURE.replace(/\.sqlite$/, ".pathc.sqlite"));
     try {
-      ensureRuntimeSchema(reverted); // the revert, live
+      launch(reverted, thisBuild);   // the revert: db_migrate_image on the backup
+      ensureRuntimeSchema(reverted); // the revert, live: getDb() reopens it
       launch(reverted, thisBuild);   // the next launch
       const cols = reverted.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
       assert(cols.includes("embedding_notes"), "embedding_notes present after the relaunch");

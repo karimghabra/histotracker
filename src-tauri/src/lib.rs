@@ -1,6 +1,7 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod backup;
+mod migrate;
 mod sync;
 
 /// Write raw bytes to an absolute path chosen by the user via the save dialog.
@@ -19,9 +20,11 @@ fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let migrations = vec![
+/// The numbered migrations, in order. tauri-plugin-sql runs them on the first
+/// open of each launch; `migrate::db_migrate_image` runs the very same list on a
+/// backup before a revert swaps it in. Append-only: never edit or remove one.
+fn migrations() -> Vec<Migration> {
+    vec![
         Migration {
             version: 1,
             description: "create_projects_and_samples",
@@ -166,14 +169,17 @@ pub fn run() {
             sql: include_str!("../migrations/0024_slide_requested_assay.sql"),
             kind: MigrationKind::Up,
         },
-    ];
+    ]
+}
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:histometer.db", migrations)
+                .add_migrations("sqlite:histometer.db", migrations())
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
@@ -185,6 +191,7 @@ pub fn run() {
             backup::backup_read,
             backup::backup_delete,
             backup::backup_prune,
+            migrate::db_migrate_image,
             sync::sync_config_get,
             sync::sync_config_set,
             sync::sync_set_last_version,

@@ -4,6 +4,8 @@
 //   read_file / save_file  - lib.rs: plain std::fs on the live database path
 //                            (snapshots, undo, sync publish and pull)
 //   backup_*               - backup.rs: validated, atomic, named backups
+//   db_migrate_image       - migrate.rs: the running build's migrations, run on a
+//                            staging copy of an image (a backup before a revert)
 //   sync_config_* / github_* - sync.rs: per-machine config plus ONE shared fake
 //                            remote, so a workstation and a viewer on different
 //                            builds really exchange the database file
@@ -11,8 +13,11 @@
 // Anything else throws, so a build that starts relying on a new command fails
 // loudly here instead of being silently answered.
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "./sqlite";
+import { assertSqliteImage, migrateImage } from "./sqlx-migrator";
 import { currentProcess, world } from "./world";
 
 const BACKUP_PREFIX = "histometer-backup-";
@@ -75,6 +80,26 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       rmSync(join(machine.backupsDir, name));
       return out(undefined);
     }
+    case "db_migrate_image": {
+      const bytes = Uint8Array.from((args.bytes as number[]) ?? []);
+      assertSqliteImage(bytes);
+      const dir = mkdtempSync(join(tmpdir(), "histometer-migrate-"));
+      try {
+        const file = join(dir, "staging.db");
+        writeFileSync(file, bytes);
+        const db = new DatabaseSync(file);
+        try {
+          db.exec("PRAGMA foreign_keys = ON;");
+          migrateImage(db, currentProcess().migrations);
+        } finally {
+          db.close();
+        }
+        return out(Array.from(readFileSync(file)));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     case "backup_prune": {
       const all = backupList(machine.backupsDir);
       const keep = Number(args.keep ?? 48);

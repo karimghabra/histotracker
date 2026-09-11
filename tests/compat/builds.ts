@@ -7,7 +7,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RegisteredMigration } from "./sqlx-migrator";
+import { checksum, type RegisteredMigration } from "./sqlx-migrator";
+import { parseMigrationList } from "../../src/test/sqlx-migrator";
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 /** Extracted release trees, cached by commit. Git-ignored. */
@@ -61,22 +62,11 @@ function resolveCommit(ref: string): string {
  * what the migrator runs. Down migrations are dropped, as the plugin does.
  */
 export function registeredMigrations(root: string): RegisteredMigration[] {
-  const rs = readFileSync(join(root, "src-tauri", "src", "lib.rs"), "utf8");
-  const blocks = rs.match(/Migration\s*\{[\s\S]*?\}/g) ?? [];
-  const parsed = blocks.map((block) => {
-    const m = /version:\s*(\d+),\s*description:\s*"([^"]*)",\s*sql:\s*include_str!\("\.\.\/migrations\/([^"]+)"\),\s*kind:\s*MigrationKind::(\w+)/.exec(block);
-    if (!m) throw new Error(`[compat] cannot read this migration entry in ${root}/src-tauri/src/lib.rs:\n${block}`);
-    return { version: Number(m[1]), description: m[2], file: m[3], kind: m[4] };
+  const librs = join(root, "src-tauri", "src", "lib.rs");
+  return parseMigrationList(readFileSync(librs, "utf8"), `[compat] ${librs}`).map((m) => {
+    const sql = readFileSync(join(root, "src-tauri", "migrations", m.file), "utf8");
+    return { ...m, sql, checksum: checksum(sql) };
   });
-  if (parsed.length === 0) throw new Error(`[compat] no migrations registered in ${root}/src-tauri/src/lib.rs`);
-  return parsed
-    .filter((m) => m.kind === "Up")
-    .map((m) => ({
-      version: m.version,
-      description: m.description,
-      file: m.file,
-      sql: readFileSync(join(root, "src-tauri", "migrations", m.file), "utf8"),
-    }));
 }
 
 function lockedVersion(root: string, crate: string): string {
@@ -87,7 +77,7 @@ function lockedVersion(root: string, crate: string): string {
 }
 
 /**
- * sqlx-migrator.ts is a port of sqlx 0.8's migrator driven by tauri-plugin-sql
+ * src/test/sqlx-migrator.ts is a port of sqlx 0.8's migrator driven by tauri-plugin-sql
  * 2.x. A build on anything else must not be judged by it: re-read that
  * version's migrator source, update the port, then widen this check.
  */
@@ -97,7 +87,7 @@ function assertMigratorModelApplies(build: Build): void {
   if (!/^0\.8\./.test(sqlx) || !/^2\./.test(plugin)) {
     throw new Error(
       `[compat] ${build.label} ships sqlx-core ${sqlx} / tauri-plugin-sql ${plugin}; ` +
-        `tests/compat/sqlx-migrator.ts models sqlx 0.8 under tauri-plugin-sql 2. ` +
+        `src/test/sqlx-migrator.ts models sqlx 0.8 under tauri-plugin-sql 2. ` +
         `Re-check the port against that version before trusting this harness.`,
     );
   }

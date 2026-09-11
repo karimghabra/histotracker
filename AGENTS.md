@@ -93,14 +93,18 @@ breaks at runtime. Update all of these in the same change:
   build still reads (backups, sync, and undo all restore raw DB *images*, so an
   older image must stay openable). If the new column is read/written at runtime,
   also add it to `ensureRuntimeSchema()` in `src/lib/db.ts` — `getDb()` converges
-  it on every DB (re)open, which is what keeps updates compatible with existing
-  databases and older backups. See `docs/shared_data_sync.md` §1a. A column may
-  skip its numbered migration and live in `ensureRuntimeSchema()` alone when a
-  migration would break rollback to the build in use or a backup revert —
+  it on every DB (re)open, which is what keeps an older image swapped in at
+  runtime (undo, sync pull) working. See `docs/shared_data_sync.md` §1a. A column
+  may skip its numbered migration and live in `ensureRuntimeSchema()` alone when
+  a migration would break rollback to the build in use or a sync pull —
   precedent `samples.embedding_notes` (#137, https://github.com/karimghabra/histotracker/pull/138).
 - `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
+  A revert first runs the backup through this build's migrations
+  (`src-tauri/src/migrate.rs`, `db_migrate_image`) so the migration record in
+  the file stays true; the test harnesses model that command in
+  `src/test/sqlx-migrator.ts`, refusal wording included.
 
 ## Docs worth reading
 
