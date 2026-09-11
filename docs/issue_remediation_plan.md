@@ -574,7 +574,7 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
-## #136–#137 — what the log could not tell you — unreleased (master)
+## #136–#137 — what the log could not tell you — 0.18.0, unreleased
 
 Both fixed. One schema change: `samples.embedding_notes`, added at runtime with
 no numbered migration.
@@ -596,8 +596,11 @@ leave the build in use unable to open the database, and would re-run on top of
 the converged column after a backup revert, so the database would not open at the
 next launch (https://github.com/karimghabra/histotracker/pull/138). A box in
 `NewSampleDialog` (one note for a batch, or one per sample); read-back in the
-board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX; and
-`RESTORE_COLUMNS`, so undoing an edit restores it rather than blanking it.
+board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX.
+Undo restores whole database images, so undoing an edit restores the note with
+everything else. (On master before the 0.18.0 reconciliation it was also listed
+in `RESTORE_COLUMNS`, which the release line had already deleted as unused;
+see `docs/release_line_reconciliation.md`.)
 
 **Coverage:** `npm run test:legacy` asserts the column DIRECTLY on the populated
 pre-0023 fixture, by every route an update arrives — launch, a swapped-in image,
