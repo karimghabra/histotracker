@@ -19,6 +19,18 @@ describe("outstandingStains", () => {
   it("is empty for a block that owes nothing", () => {
     expect(outstandingStains(sample({}))).toEqual([]);
   });
+
+  it("is empty for a block that can no longer be cut", () => {
+    const safO = assigned("Safranin O");
+    expect(outstandingStains(sample({ preselected_stains: safO, current_stage: "removed" }))).toEqual([]);
+    expect(outstandingStains(sample({ preselected_stains: safO, block_exhausted: 1 }))).toEqual([]);
+  });
+
+  it("keeps the requests of an archived block, which can still be cut", () => {
+    expect(
+      outstandingStains(sample({ preselected_stains: assigned("Safranin O"), archived_at: "2026-09-01 10:00" })),
+    ).toEqual([{ assay_type: "stain", assay_name: "Safranin O" }]);
+  });
 });
 
 describe("logAgents", () => {
@@ -55,6 +67,14 @@ describe("logAgents", () => {
     );
     expect(agents).toHaveLength(1);
     expect(agents[0].name).toBe("Safranin O"); // the glass's spelling wins
+  });
+
+  it("keeps a removed block's cut glass but drops what it was still owed", () => {
+    const agents = logAgents(
+      sample({ preselected_stains: assigned("Safranin O"), current_stage: "removed" }),
+      [slide("Alcian Blue")],
+    );
+    expect(agents).toEqual([{ name: "Alcian Blue", requested: false }]);
   });
 
   it("ignores slides with no agent — an extra is not a stain", () => {

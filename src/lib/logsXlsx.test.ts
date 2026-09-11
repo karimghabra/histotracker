@@ -164,4 +164,24 @@ describe("buildLogsXlsxBytes", () => {
       "Embed cut side down",
     ]);
   });
+
+  it("writes no request row for a block removed before it was cut", async () => {
+    const safO = assigned(["stain", "Safranin O"]);
+    const grid = readSheet(
+      await buildLogsXlsxBytes([
+        { sample: sample({ sample_code: "EE-0001", preselected_stains: safO }), slides: [] },
+        {
+          sample: sample({ sample_code: "EE-0002", current_stage: "removed", preselected_stains: safO }),
+          slides: [],
+        },
+      ]),
+    );
+
+    expect(grid).toHaveLength(3);
+    expect(grid[1][1]).toBe("EE-1");
+    expect(grid[1][10]).toBe("requested (not cut)");
+    expect(grid[2][1]).toBe("EE-2");
+    expect(grid[2][9] ?? "").toBe("");
+    expect(grid[2][10] ?? "").toBe("");
+  });
 });

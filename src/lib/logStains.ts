@@ -33,8 +33,18 @@ export type AssignedStain = { assay_type: string; assay_name: string };
  *
  * The Logs assay-type filter reads this directly rather than `logAgents()`,
  * because it matches on `assay_type`, which only survives here.
+ *
+ * Nothing is outstanding on a block that can no longer be sectioned. An
+ * outstanding request says something is still owed; a removed block (#96)
+ * cannot be cut, and neither can an exhausted one — it has no tissue left, which
+ * is why requestStain refuses it a fresh cut (#70). A row saying "assigned, not
+ * cut yet" about either, or a "requested (not cut)" line in the exported
+ * spreadsheet, would assert an obligation that can never be met. Glass that was
+ * cut is unaffected. An archived block keeps its requests: archiving is a
+ * reversible hide (#74) and the tissue is still there to cut.
  */
 export function outstandingStains(sample: Sample): AssignedStain[] {
+  if (sample.current_stage === "removed" || sample.block_exhausted === 1) return [];
   return parsePreselectedStains(sample.preselected_stains);
 }
 

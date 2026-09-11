@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { addStainFromLogs, openBlockDrawer } from "../helpers/stains";
 import { settleAfterDrop } from "../helpers/drag";
+import { readSheet } from "../helpers/xlsx";
 
 /**
  * #136 — "when Stains are assigned they do not show up on the log until they
@@ -244,6 +245,71 @@ test("#136: the expanded Logs row explains a stain with no slide", async ({ page
   await expect(owed).toHaveCount(2);
   await expect(owed.filter({ hasText: "Safranin O" })).toHaveCount(1);
   await expect(owed.filter({ hasText: "CD68" })).toHaveCount(1);
+});
+
+// A removed block cannot be cut, so nothing it was assigned is still owed — not
+// on screen, not in the drill-down, not in either export.
+test("#136: a block removed before it was cut owes nothing, on screen or exported", async ({
+  page,
+}) => {
+  await boot(page);
+  await newSample(page, { description: "still owed", stains: ["Safranin O"] });
+  await expect(page.getByText("EE-1")).toBeVisible();
+  await newSample(page, { description: "removed before the cut", stains: ["Safranin O"] });
+  await expect(page.getByText("EE-2")).toBeVisible();
+
+  await page.getByText("EE-2", { exact: true }).first().click();
+  await page.getByRole("button", { name: "Delete EE-2" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove this block" });
+  await dialog.getByLabel("Reason for removal").fill("logged against the wrong animal");
+  await dialog.getByRole("button", { name: "Remove block" }).click();
+  await expect(page.getByText("EE-2", { exact: true })).toHaveCount(0, { timeout: 15000 });
+
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await page.getByLabel("Show removed").check();
+  const rowOf = (code: string) =>
+    page.getByRole("row").filter({ has: page.getByRole("cell", { name: code, exact: true }) });
+  await expect(rowOf("EE-1")).toContainText("Safranin O");
+  await expect(rowOf("EE-1")).toContainText("(assigned)");
+  await expect(rowOf("EE-2")).toBeVisible();
+  await expect(rowOf("EE-2")).not.toContainText("Safranin O");
+  await expect(rowOf("EE-2")).not.toContainText("assigned");
+
+  await page.getByRole("cell", { name: "EE-2", exact: true }).click();
+  await expect(page.getByText("logged against the wrong animal")).toBeVisible();
+  await expect(page.getByText(/Assigned — not cut yet/)).toHaveCount(0);
+  await page.getByRole("cell", { name: "EE-2", exact: true }).click(); // collapse
+
+  const csv = await exportedLogsCsv(page);
+  const csvHeader = cells(csv.trim().split("\n")[0]);
+  const csvCol = (row: string[], name: string) => row[csvHeader.indexOf(name)];
+  expect(rowsFor(csv, "EE-1").map((r) => csvCol(r, "Slide Stage"))).toEqual(["requested (not cut)"]);
+  const removedCsv = rowsFor(csv, "EE-2");
+  expect(removedCsv).toHaveLength(1);
+  expect(csvCol(removedCsv[0], "Stain / IHC")).toBe("");
+  expect(csvCol(removedCsv[0], "Slide Stage")).toBe("");
+
+  await page.getByRole("button", { name: "Excel", exact: true }).click();
+  const savedXlsx = () =>
+    page.evaluate(() => {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".xlsx")) {
+          return localStorage.getItem(k) as string;
+        }
+      }
+      return "";
+    });
+  await expect.poll(savedXlsx, { timeout: 15000 }).not.toBe("");
+  const b64 = await savedXlsx();
+  const grid = readSheet(Uint8Array.from(Buffer.from(b64, "base64")));
+  const xlsxCol = (row: string[], name: string) => row[grid[0].indexOf(name)] ?? "";
+  const xlsxRowsFor = (code: string) => grid.slice(1).filter((r) => xlsxCol(r, "Sample ID") === code);
+  expect(xlsxRowsFor("EE-1").map((r) => xlsxCol(r, "Slide Stage"))).toEqual(["requested (not cut)"]);
+  const removedXlsx = xlsxRowsFor("EE-2");
+  expect(removedXlsx).toHaveLength(1);
+  expect(xlsxCol(removedXlsx[0], "Stain / IHC")).toBe("");
+  expect(xlsxCol(removedXlsx[0], "Slide Stage")).toBe("");
 });
 
 test("#137: a block created without embedding notes says nothing about them", async ({ page }) => {

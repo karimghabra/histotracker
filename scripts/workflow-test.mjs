@@ -3265,8 +3265,12 @@ function logAgentsPort(api, sampleId) {
     seen.set(key, entry);
     out.push(entry);
   }
-  const row = api.get(`SELECT preselected_stains FROM samples WHERE id = ?`, [sampleId]);
-  const outstanding = row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+  const row = api.get(
+    `SELECT preselected_stains, current_stage, block_exhausted FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const cuttable = row.current_stage !== "removed" && row.block_exhausted !== 1;
+  const outstanding = cuttable && row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
   for (const agent of outstanding) {
     const key = String(agent.assay_name).toLowerCase();
     const existing = seen.get(key);
@@ -3326,6 +3330,27 @@ issue(136, "a block with slides still names a second stain that is only assigned
   eq(agents.map((a) => `${a.name}:${a.requested}`).join(", "),
      "Alcian Blue:false, Safranin O:true",
      "glass first, then what is still owed — and the owed one is not dropped");
+});
+
+// A block that can no longer be cut owes nothing: the log must not keep saying
+// "assigned, not cut yet" about a removed or exhausted block.
+issue(136, "a removed or exhausted block lists no assigned stain", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const safO = { preselectedStains: [{ assay_type: "stain", assay_name: "Safranin O" }] };
+  const live = api.addSample(p, "EE", "still owed", safO);
+  const removed = api.addSample(p, "EE", "removed before the cut", safO);
+  api.removeSample(removed.id);
+  const spent = api.addSample(p, "EE", "exhausted before the cut", safO);
+  api.run(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [spent.id]);
+
+  eq(logAgentsPort(api, live.id).map((a) => `${a.name}:${a.requested}`).join(", "),
+     "Safranin O:true", "a live block still names what it owes");
+  eq(logAgentsPort(api, removed.id).length, 0, "a removed block owes nothing");
+  eq(logAgentsPort(api, spent.id).length, 0, "an exhausted block owes nothing");
+
+  api.run(`UPDATE samples SET block_exhausted = 0 WHERE id = ?`, [spent.id]);
+  eq(logAgentsPort(api, spent.id).length, 1, "restoring the block brings the request back");
 });
 
 // #137 — "During sample creation add a box for embedding notes."

@@ -136,6 +136,27 @@ describe("buildLogsCsv", () => {
       ]);
       expect(csv.trim().split("\n")).toHaveLength(3);
     });
+
+    it("writes no request row for a block removed before it was cut", () => {
+      const safO = assigned(["stain", "Safranin O"]);
+      const csv = buildLogsCsv([
+        { sample: sample({ sample_code: "EE-0001", preselected_stains: safO }), slides: [] },
+        {
+          sample: sample({ sample_code: "EE-0002", current_stage: "removed", preselected_stains: safO }),
+          slides: [],
+        },
+      ]);
+      const lines = csv.trim().split("\n");
+      const header = cells(lines[0]);
+      expect(lines).toHaveLength(3);
+      const live = cells(lines[1]);
+      expect(live[header.indexOf("Sample ID")]).toBe("EE-1");
+      expect(live[header.indexOf("Slide Stage")]).toBe("requested (not cut)");
+      const removed = cells(lines[2]);
+      expect(removed[header.indexOf("Sample ID")]).toBe("EE-2");
+      expect(removed[header.indexOf("Stain / IHC")]).toBe("");
+      expect(removed[header.indexOf("Slide Stage")]).toBe("");
+    });
   });
 
   it("carries the block's embedding notes on every one of its rows (#137)", () => {

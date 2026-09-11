@@ -107,6 +107,29 @@ describe("LogsView — the Stains / IHC cell", () => {
   });
 });
 
+describe("LogsView — a block removed before it was cut", () => {
+  // A removed block cannot be cut, so nothing it was assigned is still owed.
+  it("names no assigned stain in its row or its expanded row", async () => {
+    const safO = assigned(["stain", "Safranin O"]);
+    data.samples = [
+      sample({ sample_code: "EE-0005", current_stage: "fixation", preselected_stains: safO }),
+      sample({ sample_code: "EE-0006", current_stage: "removed", preselected_stains: safO }),
+    ];
+    render(<LogsView />);
+    await userEvent.click(screen.getByLabelText("Show removed"));
+
+    expect(stainsCell("EE-5").textContent).toMatch(/Safranin O.*assigned/);
+    const removedCell = stainsCell("EE-6");
+    expect(removedCell.textContent).not.toMatch(/Safranin O|assigned/);
+
+    await userEvent.click(screen.getByText("EE-5"));
+    expect(screen.getAllByText(/Assigned — not cut yet/)).toHaveLength(1);
+    await userEvent.click(screen.getByText("EE-5"));
+    await userEvent.click(screen.getByText("EE-6"));
+    expect(screen.queryByText(/Assigned — not cut yet/)).toBeNull();
+  });
+});
+
 describe("LogsView — the Assay Type filter", () => {
   // #136 for the type filter: an IHC that is assigned but not yet cut is named
   // in the Stains cell and found by the stain filter, so "IHC" must find it too.

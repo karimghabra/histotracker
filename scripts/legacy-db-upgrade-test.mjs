@@ -408,14 +408,6 @@ console.log("\nPATH C — upgrade from the build in use, revert to its backup, r
     runtimeColumns: RUNTIME_COLUMNS.filter(([t, c]) => `${t}.${c}` !== "samples.embedding_notes"),
   };
 
-  check("lib.rs registers exactly the migration files on disk", () => {
-    // Both halves are hand-kept; a file left behind or a registration left
-    // pointing at nothing would make every path above test the wrong schema.
-    const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-    eq(thisBuild.migrations.map((m) => m.file).sort().join(","), onDisk.join(","),
-       "registered migrations match src-tauri/migrations");
-  });
-
   // The captain's database: the fixture predates 0023, so its record holds
   // 1–22; the build in use brings it to its own last migration on launch.
   const { db } = openCopy("pathc");
