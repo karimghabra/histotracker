@@ -74,12 +74,11 @@ Hygiene that the merge made visible, fixed in the same change:
 
 ### The changelog, as merged
 
-`CHANGELOG.md` currently attributes PR 138's #136 and #137 features and the Excel export fix to 0.13.2, inside the "0.13.2 - 2026-08-13" section, although they first ship in 0.18.0.
-Its 0.17.0 heading still reads "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
-Both are wrong.
+The merge left `CHANGELOG.md` attributing PR 138's entries (#136, #137, the New Sample ID preview, the Excel export fix and `pnpm test:compat`) to 0.13.2, inside the "0.13.2 - 2026-08-13" section, although they first ship in 0.18.0.
+It also left the 0.17.0 heading reading "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
 The lab owner's standing order that agents never hand-edit `CHANGELOG.md` prevented the agent doing this merge from correcting them.
-`scripts/release-check.mjs plan` now refuses to cut 0.18.0 until `CHANGELOG.md` has a 0.18.0 section, but it does not check which section an entry sits in.
-That section now exists and holds PR 138's schema note and its `pnpm test:compat` entry; the rest has to be moved by hand before 0.18.0 is cut.
+Both were corrected in the change that fixed the backup-revert brick, before 0.18.0 was cut: PR 138's entries now sit under 0.18.0, the 0.13.2 section reads as it was released, and 0.17.0 carries its publication date.
+`scripts/release-check.mjs plan` refuses to cut a release until `CHANGELOG.md` has a section for it, but it does not check which section an entry sits in.
 
 ## How releases work now
 

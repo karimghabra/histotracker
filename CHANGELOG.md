@@ -9,6 +9,31 @@ The backup-revert and sync-pull fixes below add no column and no migration.
 A 0.17.0 instance opens every database this version writes, a reverted backup and a pulled snapshot included.
 Proven on a populated pre-existing database by `pnpm test:legacy`, including a revert and relaunch, and against the real 0.17.0 by `pnpm test:compat`.
 
+- **Embedding Notes (#137).**
+  How a specimen should be embedded (which face goes down, which end is proximal, whether it gets bisected) is decided when the block is logged in, and read by whoever picks up the mould.
+  It had nowhere to live: it went into the cut notes, which are read one station later at the microtome, or into General Notes with everything else about the block.
+  There is now a box for it at sample creation, and the note is shown wherever the block is read: the board drawer, the expanded Logs row, and both exports.
+
+  A batch can carry **one note for all** its samples or **a note for each**, chosen with a switch above the box.
+  Each mode keeps its own text, so switching back and forth loses nothing; only the mode on screen is saved.
+
+- **Assigned stains now show up in the log before anything is cut (#136).**
+  The main screen has always known a block owes a stain: the card flags it, and the drawer lists it as "Requested".
+  The Logs read physical slides only, so a block sitting in fixative with Safranin O assigned read as having no stains at all, and neither did a block already cut for one agent with a second still owed.
+  Both now appear, marked *(assigned)* so a plan is never mistaken for glass, and the stain filter, the assay-type filter and the search all find them.
+  A removed or exhausted block lists none: it can no longer be cut, so nothing is owed.
+
+  This applies to the exported log too, which is the part worth saying out loud: the CSV and Excel exports build their rows from the same helper the on-screen table does, so the spreadsheet you take to the bench and the screen you took it from cannot disagree about what a block owes.
+
+- **New Sample previewed a different ID than the one you got.**
+  The dialog showed the stored, zero-padded code (`EE-0001`) while the board, the Logs and both exports have shown the unpadded form (`EE-1`) since #87, so the first thing a new user does named the block one way and every screen after it named the same block another.
+  The preview, and both ends of the range shown for a batch, now use the display form.
+
+- **The Excel exports were writing empty workbooks.**
+  Every `.xlsx` this app produced through a Save dialog (the Logs export and the full workbook export) opened as a blank sheet: not one header, not one row.
+  The spreadsheet writer had dropped the old argument shape we were still calling it with, and accepts it silently rather than failing, so the file was written and saved and simply had nothing in it.
+  All three workbook writers now go through one function that uses the supported form.
+
 - **Reverting to an older backup no longer leaves an app that will not start.**
   Reverting to a backup taken before 0.13.0 worked for the rest of that session, and then the next launch showed an empty board, "No projects yet", "Not signed in", and a "Sync error" about a duplicate column.
   Every launch after that did the same.
@@ -40,7 +65,7 @@ Proven on a populated pre-existing database by `pnpm test:legacy`, including a r
   It checks 0.17.0 today, and any other release by name (`pnpm test:compat app-v0.18.0`).
   CI runs it on every push.
 
-## 0.17.0 - unreleased
+## 0.17.0 - 2026-09-04
 
 No schema change and nothing that syncs: a theme is eleven CSS variables in
 `localStorage`, so it stays on the machine and the person who chose it. A 0.16
@@ -599,54 +624,9 @@ reading the screen.
 
 ## 0.13.2 - 2026-08-13
 
-Two things the log could not tell you, and six more defects found by a stress
-harness.
-
-### Embedding notes, and a log that names assigned stains
-
-- **Embedding Notes (#137).** How a specimen should be embedded — which face
-  goes down, which end is proximal, whether it gets bisected — is decided when
-  the block is logged in, and read by whoever picks up the mould. It had nowhere
-  to live: it went into the cut notes, which are read one station later at the
-  microtome, or into General Notes with everything else about the block. There
-  is now a box for it at sample creation, and the note is shown wherever the
-  block is read — the board drawer, the expanded Logs row, and both exports.
-
-  A batch can carry **one note for all** its samples or **a note for each**,
-  chosen with a switch above the box. Each mode keeps its own text, so switching
-  back and forth loses nothing; only the mode on screen is saved.
-- **Assigned stains now show up in the log before anything is cut (#136).** The
-  main screen has always known a block owes a stain: the card flags it, and the
-  drawer lists it as "Requested". The Logs read physical slides only, so a block
-  sitting in fixative with Safranin O assigned read as having no stains at all —
-  and neither did a block already cut for one agent with a second still owed.
-  Both now appear, marked *(assigned)* so a plan is never mistaken for glass,
-  and the stain filter, the assay-type filter and the search all find them.
-  A removed or exhausted block lists none: it can no longer be cut, so nothing
-  is owed.
-
-  This applies to the exported log too, which is the part worth saying out loud:
-  the CSV and Excel exports build their rows from the same helper the on-screen
-  table does, so the spreadsheet you take to the bench and the screen you took
-  it from cannot disagree about what a block owes.
-- **New Sample previewed a different ID than the one you got.** The dialog
-  showed the stored, zero-padded code (`EE-0001`) while the board, the Logs and
-  both exports have shown the unpadded form (`EE-1`) since #87 — so the first
-  thing a new user does named the block one way and every screen after it named
-  the same block another. The preview, and both ends of the range shown for a
-  batch, now use the display form.
-- **The Excel exports were writing empty workbooks.** Every `.xlsx` this app
-  produced through a Save dialog — the Logs export and the full workbook export
-  — opened as a blank sheet: not one header, not one row. The spreadsheet
-  writer had dropped the old argument shape we were still calling it with, and
-  accepts it silently rather than failing, so the file was written and saved and
-  simply had nothing in it. All three workbook writers now go through one
-  function that uses the supported form.
-
-### Six defects from a swarm of walkers
-
-Six more defects, found by pointing **many random walkers at one large board**
-— 150 blocks, ~400 slides — and checking all 19 invariants after every move. Full account in `docs/stress_test_v2.md`.
+No schema change. Six more defects, found by pointing **many random walkers at
+one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
+after every move. Full account in `docs/stress_test_v2.md`.
 
 The walkers run in two modes, because they answer different questions. Taking
 strict turns, they explore *sequences* on a board big enough for the rules to
