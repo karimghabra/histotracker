@@ -12,9 +12,24 @@ import type { App } from "./app";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-async function step<T>(app: App, what: string, fn: () => Promise<T>): Promise<T> {
+/** Steps a release was too old to take, reported once at the end of a run. */
+export const skippedSteps = new Set<string>();
+
+/**
+ * Call the build's own `fn`. A release that predates it skips the step and
+ * says so, which is what lets one lab run against any release; this branch
+ * must have every function the lab uses, or the lab is out of date.
+ */
+async function act(app: App, what: string, fn: string, ...args: unknown[]): Promise<Any> {
+  if (typeof app.db[fn] !== "function") {
+    if (app.build.ref === "working tree") {
+      throw new Error(`this branch's data layer has no ${fn}() — update tests/compat/lab.ts (${what})`);
+    }
+    skippedSteps.add(`${app.build.label} has no ${fn}(), so it skipped ${what}`);
+    return undefined;
+  }
   try {
-    return await fn();
+    return await app.db[fn](...args);
   } catch (err) {
     throw new Error(`${app.build.label} on ${app.machine.name}: ${what} failed — ${(err as Error).message}`);
   }
@@ -31,19 +46,18 @@ const EMBED_PATH = [
   "embedded",
 ];
 
-export async function embed(app: App, sampleId: number): Promise<void> {
+async function embed(app: App, sampleId: number): Promise<void> {
   for (const stage of EMBED_PATH) {
-    await step(app, `moving sample ${sampleId} to ${stage}`, () => app.db.updateSampleStage(sampleId, stage));
+    await act(app, `moving sample ${sampleId} to ${stage}`, "updateSampleStage", sampleId, stage);
   }
 }
 
 async function project(app: App, code: string, name: string): Promise<Any> {
-  const existing = (await app.db.listProjects()).find((p: Any) => p.code === code);
+  const find = async () => ((await act(app, "listing projects", "listProjects")) as Any[]).find((p) => p.code === code);
+  const existing = await find();
   if (existing) return existing;
-  await step(app, `adding project ${code}`, () =>
-    app.db.addProject({ code, name, team_lead: "", is_active: true, lead_user_id: 0 }),
-  );
-  return (await app.db.listProjects()).find((p: Any) => p.code === code);
+  await act(app, `adding project ${code}`, "addProject", { code, name, team_lead: "", is_active: true, lead_user_id: 0 });
+  return find();
 }
 
 async function newSample(
@@ -52,32 +66,31 @@ async function newSample(
   description: string,
   opts: { embedding_notes?: string; stains?: Array<[string, string]> } = {},
 ): Promise<number> {
-  return step(app, `adding sample "${description}"`, () =>
-    app.db.addSample(
-      {
-        project_id: proj.id,
-        sample_description: description,
-        processing_type: "Short",
-        fixative_agent: "Z-Fix",
-        needs_decalcification: false,
-        cut_notes: "trim to 5 um",
-        slide_notes: "",
-        // #137. A release that predates the field never reads it.
-        embedding_notes: opts.embedding_notes ?? "",
-        stains: "",
-        preselected_stains: (opts.stains ?? []).map(([assay_type, assay_name]) => ({ assay_type, assay_name })),
-        overall_notes: "",
-      },
-      proj.code,
-    ),
+  return act(
+    app,
+    `adding sample "${description}"`,
+    "addSample",
+    {
+      project_id: proj.id,
+      sample_description: description,
+      processing_type: "Short",
+      fixative_agent: "Z-Fix",
+      needs_decalcification: false,
+      cut_notes: "trim to 5 um",
+      slide_notes: "",
+      // #137. A release that predates the field never reads it.
+      embedding_notes: opts.embedding_notes ?? "",
+      stains: "",
+      preselected_stains: (opts.stains ?? []).map(([assay_type, assay_name]) => ({ assay_type, assay_name })),
+      overall_notes: "",
+    },
+    proj.code,
   );
 }
 
 export interface LabDay {
   /** Blocks in fixative with an agent assigned and a note for the embedder. */
   fixing: number[];
-  processing: number[];
-  cut: number[];
 }
 
 /**
@@ -87,14 +100,13 @@ export interface LabDay {
  * a removed block. `who` tags the rows so each build's writes can be told apart.
  */
 export async function runTheLab(app: App, who: string): Promise<LabDay> {
-  const db = app.db;
-
-  if ((await db.listUsers()).length === 0) {
-    const kg = await step(app, "adding a user", () => db.addUser({ name: "Karim Ghabra", initials: "KG" }));
-    await step(app, "adding a second user", () => db.addUser({ name: "Bench Tech", initials: "BT" }));
-    await step(app, "signing in", () => db.setActiveUser(kg));
+  if (((await act(app, "listing users", "listUsers")) ?? []).length === 0) {
+    const kg = await act(app, "adding a user", "addUser", { name: "Karim Ghabra", initials: "KG" });
+    await act(app, "adding a second user", "addUser", { name: "Bench Tech", initials: "BT" });
+    await act(app, "signing in", "setActiveUser", kg);
   }
-  await step(app, "saving workstation settings", async () => db.saveAppSettings(await db.getAppSettings()));
+  const settings = await act(app, "reading settings", "getAppSettings");
+  if (settings) await act(app, "saving workstation settings", "saveAppSettings", settings);
 
   const te = await project(app, "TE", "Tendon Engineering");
   const ee = await project(app, "EE", "Enthesis");
@@ -107,28 +119,26 @@ export async function runTheLab(app: App, who: string): Promise<LabDay> {
       embedding_notes: `${who}: cut face down, proximal left`,
       stains: [["stain", "SafO"]],
     });
-    await step(app, "placing in fixative", () => db.updateSampleStage(id, "in_fixative"));
+    await act(app, "placing in fixative", "updateSampleStage", id, "in_fixative");
     fixing.push(id);
   }
 
   // A processor run.
-  const processing: number[] = [];
+  const run: number[] = [];
   for (let i = 0; i < 2; i += 1) {
     const id = await newSample(app, ee, `${who} EE run ${i + 1}`, { embedding_notes: `${who}: on edge` });
     for (const stage of ["in_fixative", "fixative_removed", "in_ethanol"]) {
-      await step(app, `moving to ${stage}`, () => db.updateSampleStage(id, stage));
+      await act(app, `moving to ${stage}`, "updateSampleStage", id, stage);
     }
-    processing.push(id);
+    run.push(id);
   }
-  await step(app, "starting a processor run", () =>
-    db.startProcessingBatch({
-      sampleIds: processing,
-      processingType: "Short",
-      operatorName: "KG",
-      startedAt: "2026-09-10 08:30",
-      checklistLabels: ["Reagents checked"],
-    }),
-  );
+  await act(app, "starting a processor run", "startProcessingBatch", {
+    sampleIds: run,
+    processingType: "Short",
+    operatorName: "KG",
+    startedAt: "2026-09-10 08:30",
+    checklistLabels: ["Reagents checked"],
+  });
 
   // Blocks embedded and cut: an H&E group sent to staining, an unstained group,
   // and the H&E rack taken through to imaging.
@@ -136,46 +146,47 @@ export async function runTheLab(app: App, who: string): Promise<LabDay> {
   for (let i = 0; i < 2; i += 1) {
     const id = await newSample(app, ee, `${who} EE cut ${i + 1}`, { stains: [["stain", "H&E"]] });
     await embed(app, id);
-    const sections: number[] = await step(app, "cutting", () =>
-      db.createSectionRequests(id, [
-        { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
-        { duplicates: 2, stains: "" },
-      ]),
-    );
-    await step(app, "sectioning", () => db.updateSectionStage(sections[0], "sectioned"));
-    await step(app, "sending for stain", () => db.updateSectionStage(sections[0], "stain_requested"));
+    const sections: number[] = await act(app, "cutting", "createSectionRequests", id, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+      { duplicates: 2, stains: "" },
+    ]);
+    await act(app, "sectioning", "updateSectionStage", sections[0], "sectioned");
+    await act(app, "sending for stain", "updateSectionStage", sections[0], "stain_requested");
     cut.push(id);
   }
-  const rack = (await db.listOpenSlideStacks()).find(
-    (s: Any) => s.kind === "stain" && s.assay_name === "H&E" && s.current_stage === "stain_requested",
-  );
-  if (!rack) throw new Error(`${app.build.label}: sending H&E for stain opened no rack`);
-  for (const stage of ["stained", "coverslipped", "ready_for_imaging"]) {
-    await step(app, `rack to ${stage}`, () => db.updateSlideStackStage(rack.id, stage));
+  const stacks: Any[] = (await act(app, "listing racks", "listOpenSlideStacks")) ?? [];
+  const rack = stacks.find((s) => s.kind === "stain" && s.assay_name === "H&E" && s.current_stage === "stain_requested");
+  if (!rack && typeof app.db.listOpenSlideStacks === "function") {
+    throw new Error(`${app.build.label}: sending H&E for stain opened no rack`);
+  }
+  for (const stage of rack ? ["stained", "coverslipped", "ready_for_imaging"] : []) {
+    await act(app, `moving the rack to ${stage}`, "updateSlideStackStage", rack.id, stage);
   }
 
   // #136's harder case: a block that already has glass for one agent and a
   // second agent still only asked for.
-  await step(app, "requesting a second stain on a cut block", () =>
-    db.requestStainForSample({ sampleId: cut[0], assayType: "stain", assayName: "SafO" }),
-  );
+  await act(app, "requesting a second stain on a cut block", "requestStainForSample", {
+    sampleId: cut[0],
+    assayType: "stain",
+    assayName: "SafO",
+  });
 
   // Everything else a record carries.
-  const slides = await db.listSlidesForSample(cut[1]);
-  await step(app, "tagging depth", () => db.setSlidesDepthTag([slides[0].id], "L2", `${who} 200 um`));
-  await step(app, "writing sample notes", () => db.setSampleNotes(cut[1], `${who}: re-cut if folded`));
-  await step(app, "writing slide notes", () => db.setSlideNotes(slides[0].id, `${who}: small fold`));
-  await step(app, "flagging priority", () => db.setSamplePriority(fixing[0], true));
+  const slides: Any[] = (await act(app, "listing a block's slides", "listSlidesForSample", cut[1])) ?? [];
+  if (slides[0]) {
+    await act(app, "tagging depth", "setSlidesDepthTag", [slides[0].id], "L2", `${who} 200 um`);
+    await act(app, "writing slide notes", "setSlideNotes", slides[0].id, `${who}: small fold`);
+  }
+  await act(app, "writing sample notes", "setSampleNotes", cut[1], `${who}: re-cut if folded`);
+  await act(app, "flagging priority", "setSamplePriority", fixing[0], true);
 
-  const archived = await newSample(app, te, `${who} TE archived`);
-  await step(app, "archiving", () => db.setSampleArchived(archived, true));
+  await act(app, "archiving", "setSampleArchived", await newSample(app, te, `${who} TE archived`), true);
   const exhausted = await newSample(app, te, `${who} TE exhausted`);
   await embed(app, exhausted);
-  await step(app, "marking a block exhausted", () => db.setBlockExhausted(exhausted, true));
-  const removed = await newSample(app, ee, `${who} EE removed`);
-  await step(app, "removing a sample", () => db.removeSample(removed, "entered twice"));
+  await act(app, "marking a block exhausted", "setBlockExhausted", exhausted, true);
+  await act(app, "removing a sample", "removeSample", await newSample(app, ee, `${who} EE removed`), "entered twice");
 
-  return { fixing, processing, cut };
+  return { fixing };
 }
 
 /**
@@ -183,35 +194,30 @@ export async function runTheLab(app: App, who: string): Promise<LabDay> {
  * them. Anything a release rewrites wholesale would drop what it cannot see.
  */
 export async function workOnRows(app: App, ids: number[], who: string): Promise<void> {
-  const db = app.db;
   const [first, second] = ids;
   await embed(app, first);
-  const sections: number[] = await step(app, "cutting a block this branch logged", () =>
-    db.createSectionRequests(first, [{ duplicates: 1, stains: "SafO", assay_type: "stain", assay_name: "SafO" }]),
-  );
-  await step(app, "sectioning it", () => db.updateSectionStage(sections[0], "sectioned"));
-  const sample = await db.getSample(second);
-  await step(app, "editing a sample's details", () =>
-    db.updateSampleDetails(second, {
-      sample_description: `${sample.sample_description} (${who} edited)`,
-      processing_type: sample.processing_type,
-      fixative_agent: sample.fixative_agent,
-      needs_decalcification: Boolean(sample.needs_decalcification),
-      cut_notes: sample.cut_notes ?? "",
-      slide_notes: sample.slide_notes ?? "",
-      // A release that predates #137 has no idea this field exists and
-      // ignores it; this branch writes back what it read.
-      embedding_notes: sample.embedding_notes ?? "",
-      stains: sample.stains ?? "",
-      preselected_stains: [],
-      overall_notes: `${who} was here`,
-    }),
-  );
-  await step(app, "setting notes", () => db.setSampleNotes(second, `${who}: checked`));
-  await step(app, "archiving and restoring", async () => {
-    await db.setSampleArchived(second, true);
-    await db.setSampleArchived(second, false);
+  const sections: number[] = await act(app, "cutting a block this branch logged", "createSectionRequests", first, [
+    { duplicates: 1, stains: "SafO", assay_type: "stain", assay_name: "SafO" },
+  ]);
+  await act(app, "sectioning it", "updateSectionStage", sections[0], "sectioned");
+  const sample = await act(app, "reading a sample", "getSample", second);
+  // What the edit dialog sends back: every field it shows. A release that
+  // predates #137 has no embedding_notes field and ignores it if handed one.
+  await act(app, "editing a sample's details", "updateSampleDetails", second, {
+    sample_description: `${sample.sample_description} (${who} edited)`,
+    processing_type: sample.processing_type,
+    fixative_agent: sample.fixative_agent,
+    needs_decalcification: Boolean(sample.needs_decalcification),
+    cut_notes: sample.cut_notes ?? "",
+    slide_notes: sample.slide_notes ?? "",
+    embedding_notes: sample.embedding_notes ?? "",
+    stains: sample.stains ?? "",
+    preselected_stains: [],
+    overall_notes: `${who} was here`,
   });
+  await act(app, "setting notes", "setSampleNotes", second, `${who}: checked`);
+  await act(app, "archiving", "setSampleArchived", second, true);
+  await act(app, "restoring from the archive", "setSampleArchived", second, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +227,6 @@ export async function workOnRows(app: App, ids: number[], who: string): Promise<
 export interface Reads {
   /** What every zero-argument list or get reader the data layer exports returned, by name. */
   results: Record<string, unknown>;
-  csv: string;
-  workbookBytes: number;
 }
 
 async function call(failures: string[], label: string, fn: () => Promise<unknown>): Promise<unknown> {
@@ -242,7 +246,7 @@ async function call(failures: string[], label: string, fn: () => Promise<unknown
  * record when the build has them.
  */
 export async function readEverything(app: App): Promise<Reads> {
-  const db = app.db;
+  const { db, exporter } = app;
   const failures: string[] = [];
   const results: Record<string, unknown> = {};
 
@@ -253,10 +257,8 @@ export async function readEverything(app: App): Promise<Reads> {
 
   const perRecord = async (list: unknown, readers: string[]) => {
     for (const record of (list as Array<{ id: number }>) ?? []) {
-      for (const reader of readers) {
-        if (typeof db[reader] === "function") {
-          await call(failures, `${reader}(${record.id})`, () => db[reader](record.id));
-        }
+      for (const reader of readers.filter((r) => typeof db[r] === "function")) {
+        await call(failures, `${reader}(${record.id})`, () => db[reader](record.id));
       }
     }
   };
@@ -265,24 +267,25 @@ export async function readEverything(app: App): Promise<Reads> {
   await perRecord(results.listOpenSlideStacks, ["getSlideStack", "listSlidesForStack", "listStackSampleIds"]);
   await perRecord(results.listAllProcessingBatches, ["getProcessingBatchSamples", "getBatchMemberIds"]);
 
-  // The Logs export, built the way the Logs screen hands it rows.
+  // The Logs export as the Logs screen hands it rows, and the full workbook
+  // the sync publishes alongside the database.
   const slides = (results.listAllSlides as Array<{ sample_id: number }>) ?? [];
   const rows = ((results.listAllSamples as Array<{ id: number }>) ?? []).map((sample) => ({
     sample,
     slides: slides.filter((s) => s.sample_id === sample.id),
   }));
-  const csv = (await call(failures, "buildLogsCsv", async () => app.exporter.buildLogsCsv(rows))) as string;
-  if (typeof app.exporter.buildLogsXlsxBytes === "function") {
-    await call(failures, "buildLogsXlsxBytes", () => app.exporter.buildLogsXlsxBytes(rows));
+  for (const [name, args] of [
+    ["buildLogsCsv", [rows]],
+    ["buildLogsXlsxBytes", [rows]],
+    ["buildStatusWorkbookBytes", []],
+  ] as const) {
+    if (typeof exporter[name] === "function") await call(failures, name, async () => exporter[name](...args));
   }
-  const workbook = (await call(failures, "buildStatusWorkbookBytes", () =>
-    app.exporter.buildStatusWorkbookBytes(),
-  )) as Uint8Array | undefined;
 
   if (failures.length) {
     throw new Error(`${app.build.label} could not read the database:\n  ${failures.join("\n  ")}`);
   }
-  return { results, csv: csv ?? "", workbookBytes: workbook?.length ?? 0 };
+  return { results };
 }
 
 /**

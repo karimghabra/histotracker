@@ -15,6 +15,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/compat/**/*.test.ts"],
+    // Every check by name, so a run reads as the proof it is.
+    reporters: ["verbose"],
     setupFiles: ["./tests/compat/setup.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,

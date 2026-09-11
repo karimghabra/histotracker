@@ -9,13 +9,13 @@
 //   pnpm test:compat                 the release in use, and the newest release
 //   pnpm test:compat app-v0.18.0     any release, by tag
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "./sqlite";
 import { currentBuild, releaseBuild, REPO_ROOT, type Build } from "./builds";
 import { type App, type Dump, columnsOf, dump, launch, ledger, lostOrChanged, newMachine, quit } from "./app";
-import { readEverything, runTheLab, stored, workOnRows, type LabDay, type Reads } from "./lab";
+import { readEverything, runTheLab, skippedSteps, stored, workOnRows, type LabDay, type Reads } from "./lab";
 import { seedLedger } from "./sqlx-migrator";
 
 const RELEASE = process.env.COMPAT_RELEASE;
@@ -69,6 +69,10 @@ async function using<T>(app: App, fn: (app: App) => Promise<T>): Promise<T> {
 
 function sameStoredRecords(a: Reads, b: Reads, reference: Dump): void {
   for (const [list, table] of RECORDS) {
+    if (!a.results[list] || !b.results[list]) {
+      skippedSteps.add(`${list}() is missing from one build, so its records were not compared`);
+      continue;
+    }
     const columns = reference[table].columns;
     expect(stored(a.results[list], columns), `${list}(), stored columns`).toEqual(stored(b.results[list], columns));
   }
@@ -96,6 +100,10 @@ beforeAll(() => {
     `\n  release:     ${release.ref}, version ${release.version}, commit ${release.commit.slice(0, 12)}` +
       `\n  this branch: version ${branch.version}, commit ${branch.commit.slice(0, 12)} plus the working tree\n`,
   );
+});
+
+afterAll(() => {
+  if (skippedSteps.size) console.log(`\n  steps the release is too old for:\n    ${[...skippedSteps].join("\n    ")}\n`);
 });
 
 describe("the migration ledger", () => {
