@@ -189,12 +189,14 @@ React Query is invalidated only when new data actually arrives.
 
 `pullSnapshotIfNewer()` performs, in order:
 
-1. `getDbFilePath()` — resolve the live SQLite path via
+1. `bringImageUpToDate(downloadedBytes)` runs this build's migrations on the snapshot (§1a).
+   A snapshot it refuses stops the pull here with a sync error: the live file, the connection and `last_synced_version` are untouched.
+2. `getDbFilePath()` — resolve the live SQLite path via
    `PRAGMA database_list` (never hardcode the plugin's storage dir).
-2. `resetDb()` — close the pooled connection and drop the memoized promise so
+3. `resetDb()` — close the pooled connection and drop the memoized promise so
    the file isn't locked.
-3. `save_file(dbPath, downloadedBytes)` — overwrite the SQLite file (Rust command).
-4. `setLastSyncedVersion(version)` — the next `getDb()` reopens the new file.
+4. `save_file(dbPath, migratedBytes)` — overwrite the SQLite file (Rust command).
+5. `setLastSyncedVersion(version)` — the next `getDb()` reopens the new file.
 
 **Known limitation:** there is a small window between `resetDb()` and the
 overwrite where a background query could reopen the old file. It matches the
@@ -222,6 +224,7 @@ bites, pause React Query during the swap. The viewer write guard
   `install_id` generation, `SyncConfigPublic`.
 - `src/lib.rs` — `read_file` / `save_file` commands, migration registration,
   invoke-handler registration.
+- `src/migrate.rs`: `db_migrate_image`, which a pull runs on the downloaded snapshot (§1a, §7).
 - `migrations/0014_stain_requests.sql` — the durable request record.
 - `Cargo.toml` — `reqwest` (feature `rustls`, **not** `rustls-tls`) + `base64`.
 
@@ -232,7 +235,7 @@ bites, pause React Query during the swap. The viewer write guard
   helpers; `isNewer`.
 - `lib/export.ts` — `buildStatusWorkbookBytes()` + exported column sets.
 - `lib/db.ts` — `stain_requests` queries, `getDbFilePath()`, `resetDb()`,
-  `setViewerReadOnly()` write guard.
+  `bringImageUpToDate()`, `setViewerReadOnly()` write guard.
 - `lib/types.ts` — `StainRequest`.
 - `hooks/useSync.ts` — the periodic + manual sync loop.
 - `hooks/useData.ts` — `useStainRequests`, `useStainRequestMutations`.

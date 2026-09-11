@@ -170,7 +170,9 @@ and block exhaustion — is included.
 **Backups** keeps robust, point‑in‑time copies of the whole database. The
 workstation saves one automatically every few hours during the working day (all
 configurable), and you can **Back up now** or **Revert** to any snapshot at any
-time — a revert first takes a safety backup, so it's itself reversible.
+time.
+A revert first brings the backup up to this version of Histometer, then takes a safety backup, so it's itself reversible.
+A backup it cannot bring up to date, such as one made by a newer version, is refused with the reason, and nothing changes.
 
 ![Backups](img/20-backups.png)
 
