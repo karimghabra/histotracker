@@ -43,7 +43,10 @@ const applied = [];
 for (const file of readdirSync(MIGRATIONS_DIR).sort()) {
   if (!file.endsWith(".sql")) continue;
   if (file.slice(0, 4) > STOP_AFTER) continue;
-  db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+  // CRLF, whatever the checkout has: the committed fixture has always been
+  // built from a Windows checkout, and the schema text SQLite stores is the
+  // migration's own, so this keeps it the same whichever OS regenerates it.
+  db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8").replace(/\r?\n/g, "\r\n"));
   applied.push(file);
 }
 console.log(`applied ${applied.length} migrations, up to ${applied.at(-1)}`);
@@ -57,26 +60,34 @@ if (sampleCols.includes("slides_issued") || sampleCols.includes("archived_at")) 
 const run = (sql, args = []) => db.prepare(sql).run(...args);
 const one = (sql, args = []) => db.prepare(sql).get(...args);
 
+// Every created_at is this, not the clock, so re-running writes the same bytes
+// and `pnpm test:legacy` leaves the committed .b64 alone. Rows in a table with
+// audit triggers are given it when inserted, since updating them afterwards
+// would add audit events; the rest are pinned at the end.
+const CREATED = "2026-07-01 08:00:00";
+
 // ---- Realistic bench data ---------------------------------------------------
-run(`INSERT INTO projects (code, name, team_lead) VALUES ('EE', 'Enthesis Engineering', 'Alex Rivera')`);
+run(`INSERT INTO projects (code, name, team_lead, created_at) VALUES ('EE', 'Enthesis Engineering', 'Alex Rivera', ?)`, [CREATED]);
 const projectId = one(`SELECT id FROM projects WHERE code = 'EE'`).id;
 run(`INSERT INTO users (name, initials) VALUES ('Alex Rivera', 'AR')`);
 
 function addSample(number, description, stage) {
   run(
     `INSERT INTO samples (project_id, project_sample_number, sample_code, sample_description,
-                          date_added, processing_type, fixative_agent, current_stage, stage_received_at)
-     VALUES (?, ?, ?, ?, '2026-07-01', 'Short', 'Z-Fix', ?, '2026-07-01 09:00')`,
-    [projectId, number, `EE-${String(number).padStart(4, "0")}`, description, stage],
+                          date_added, processing_type, fixative_agent, current_stage, stage_received_at,
+                          created_at)
+     VALUES (?, ?, ?, ?, '2026-07-01', 'Short', 'Z-Fix', ?, '2026-07-01 09:00', ?)`,
+    [projectId, number, `EE-${String(number).padStart(4, "0")}`, description, stage, CREATED],
   );
   return one(`SELECT id FROM samples WHERE project_sample_number = ?`, [number]).id;
 }
 
 function addSection(sampleId, duplicates, stage) {
   run(
-    `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
-     VALUES (?, ?, '', ?, '2026-07-02 09:00')`,
-    [sampleId, duplicates, stage],
+    `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at,
+                                   created_at)
+     VALUES (?, ?, '', ?, '2026-07-02 09:00', ?)`,
+    [sampleId, duplicates, stage, CREATED],
   );
   return one(`SELECT id FROM section_requests WHERE sample_id = ? ORDER BY id DESC LIMIT 1`, [sampleId]).id;
 }
@@ -85,8 +96,8 @@ function addSlide(sectionId, ordinal, code, extra = {}) {
   run(
     `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assay_type, assay_name,
                          stain_name, assignment_saved, slice_count, control_agent, current_stage,
-                         stage_cut_at, stage_stained_at, stack_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, '2026-07-02 10:00', ?, ?)`,
+                         stage_cut_at, stage_stained_at, stack_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, 2, 'IgG', ?, '2026-07-02 10:00', ?, ?, ?)`,
     [
       sectionId, ordinal, code,
       extra.purpose ?? "extra",
@@ -96,6 +107,7 @@ function addSlide(sectionId, ordinal, code, extra = {}) {
       extra.stage ?? "extra",
       extra.stainedAt ?? null,
       extra.stackId ?? null,
+      CREATED,
     ],
   );
   return one(`SELECT id FROM slides WHERE slide_code = ?`, [code]).id;
@@ -117,8 +129,9 @@ const s2 = addSample(2, "8 week Stretch PLA", "needs_sectioning");
 const s3 = addSample(3, "12 week Stretch PLA", "needs_sectioning");
 run(
   `INSERT INTO slide_stacks (kind, assay_type, assay_name, sample_id, current_stage,
-                             stage_stain_requested_at, stage_stained_at)
-   VALUES ('stain', 'stain', 'Safranin O', NULL, 'stain_requested', '2026-07-03 09:00', '2026-07-03 11:00')`,
+                             stage_stain_requested_at, stage_stained_at, created_at)
+   VALUES ('stain', 'stain', 'Safranin O', NULL, 'stain_requested', '2026-07-03 09:00', '2026-07-03 11:00', ?)`,
+  [CREATED],
 );
 const rackId = one(`SELECT id FROM slide_stacks ORDER BY id DESC LIMIT 1`).id;
 
@@ -135,6 +148,23 @@ addSlide(sec3, 1, "EE-0003-A", {
   purpose: "stain", assayType: "stain", assayName: "Safranin O", stainName: "Safranin O",
   stage: "stain_requested", stainedAt: null, stackId: rackId,
 });
+
+// Pin the rest: rows the migrations seeded, and the audit events the triggers
+// wrote. Then prove nothing is left on the clock.
+const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all().map((t) => t.name);
+const triggered = new Set(
+  db.prepare(`SELECT DISTINCT tbl_name FROM sqlite_master WHERE type = 'trigger'`).all().map((t) => t.tbl_name),
+);
+for (const table of tables) {
+  for (const col of db.prepare(`PRAGMA table_info("${table}")`).all()) {
+    if (!/CURRENT_TIMESTAMP/i.test(String(col.dflt_value ?? ""))) continue;
+    if (!triggered.has(table)) run(`UPDATE "${table}" SET "${col.name}" = ?`, [CREATED]);
+    const clocked = one(`SELECT COUNT(*) AS n FROM "${table}" WHERE "${col.name}" <> ?`, [CREATED]).n;
+    if (clocked > 0) {
+      throw new Error(`${table}.${col.name}: ${clocked} row(s) stamped by the clock; insert them with CREATED`);
+    }
+  }
+}
 
 db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
 db.close();
