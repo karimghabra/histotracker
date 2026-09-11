@@ -2,9 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   acknowledgeRequestsForSlide,
   assayTypeByName,
+  bringImageUpToDate,
   findSampleIdByCode,
   getActiveUser,
   getDbFilePath,
+  ImageRefusedError,
   insertStainRequest,
   rejectStainRequestByUuid,
   requestStainForSample,
@@ -265,7 +267,13 @@ export interface PullResult {
 /**
  * Download and swap in the published snapshot when it is newer than the one
  * this viewer last synced. Sequence: read manifest → compare → download DB →
- * close connection → overwrite the SQLite file → let getDb() reopen it.
+ * bring it up to this build's migrations → close connection → overwrite the
+ * SQLite file → let getDb() reopen it.
+ *
+ * The workstation may run another version of Histometer. A snapshot this build
+ * cannot bring up to date (one made by a newer version, say) is refused before
+ * the connection is touched, and last_synced_version stays where it was, so
+ * the viewer pulls it again once it can.
  */
 export async function pullSnapshotIfNewer(): Promise<PullResult> {
   const manifest = await readManifest();
@@ -276,7 +284,18 @@ export async function pullSnapshotIfNewer(): Promise<PullResult> {
     return { updated: false };
   }
 
-  const dbBytes = await githubDownloadReleaseAsset(RELEASE_TAG, manifest.db_asset || DB_ASSET);
+  const downloaded = await githubDownloadReleaseAsset(RELEASE_TAG, manifest.db_asset || DB_ASSET);
+  let dbBytes: Uint8Array;
+  try {
+    dbBytes = await bringImageUpToDate(downloaded);
+  } catch (err) {
+    if (!(err instanceof ImageRefusedError)) throw err;
+    const remedy = err.newer ? " Update Histometer on this computer to open it." : "";
+    throw new Error(
+      `The workstation's latest snapshot cannot be opened here: ${err.reason}.${remedy} ` +
+        `This computer's copy has not been changed.`,
+    );
+  }
 
   // Resolve the path while the connection is open, then close it so the file
   // is not locked when we overwrite it, then reopen against the new bytes.

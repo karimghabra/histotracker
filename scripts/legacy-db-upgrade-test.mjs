@@ -4,12 +4,13 @@
 //   node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs
 //
 // Covers the ways a live database reaches the new build:
-//   PATH A — tauri-plugin-sql runs the migrations the file predates, then
+//   PATH A - tauri-plugin-sql runs the migrations the file predates, then
 //            getDb() converges it (the normal upgrade on app start).
-//   PATH B — the file is swapped in at runtime (undo restore / viewer sync pull),
-//            where migrations do NOT re-run and ensureRuntimeSchema() is the only
-//            thing that converges it.
-//   PATH C — the round trip through the build IN USE: upgrade, revert to a
+//   PATH B - the file is swapped in at runtime unmigrated (an undo restore, or a
+//            revert or sync pull on a build before 0.18.0), where migrations do
+//            NOT re-run and ensureRuntimeSchema() is the only thing that
+//            converges it.
+//   PATH C - the round trip through the build IN USE: upgrade, revert to a
 //            backup that build took, relaunch; and that build opening the
 //            upgraded file. Modelled on the real migrator, record and all.
 // All must end with the data intact and the new columns usable.
@@ -284,8 +285,9 @@ console.log("\nPATH B — the image is swapped in at runtime; only ensureRuntime
     assert(cols.includes("slides_issued") && cols.includes("archived_at"), "both columns present");
     db.prepare(`SELECT archived_at FROM samples`).all(); // no longer throws
   });
-  // The path a sync pull or an undo takes: no migrations run, so this is the
-  // ONLY thing that makes the new column exist on the captain's file.
+  // No numbered migration adds this column, so on every path (a launch, a
+  // revert, a pull, an undo) this is the ONLY thing that makes it exist on the
+  // captain's file.
   check("#137: embedding_notes converges too, with every row intact", () => {
     const cols = db.prepare(`PRAGMA table_info(samples)`).all().map((c) => c.name);
     assert(cols.includes("embedding_notes"), "embedding_notes present after convergence");

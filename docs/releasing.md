@@ -26,7 +26,7 @@ Everything below exists so that it cannot happen again without the repository sa
 4. **Watch it.**
    The run has four jobs, and each one can stop the release:
    - `plan` runs `node scripts/release-check.mjs plan`. It refuses a run on any ref but master, version files that disagree, a version that is already released or is not newer than the newest release, a `CHANGELOG.md` with no `## <version>` section, and any release tag that master does not contain.
-   - `tests` runs the whole of `.github/workflows/test.yml` on the same commit: the harness, the legacy upgrade, the unit and browser tests, and `pnpm test:compat` against the release in use.
+   - `tests` runs the whole of `.github/workflows/test.yml` on the same commit: the harness, the legacy upgrade, the unit and browser tests, the Rust shell's `cargo check` and unit tests (on Linux), and `pnpm test:compat` against the release in use.
    - `build` compiles the app on Windows and publishes the release, tagged at the commit `plan` and `tests` passed.
    - `verify` checks that the new tag names that commit.
 5. **After the lab installs it,** bump `IN_USE_RELEASE` in `scripts/compat-releases.mjs` so every later pull request is checked against what the bench actually runs.

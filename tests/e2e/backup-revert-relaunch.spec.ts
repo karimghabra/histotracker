@@ -1,11 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DatabaseSync } from "../compat/sqlite";
-import { REPO_ROOT, registeredMigrations } from "../compat/builds";
-import { seedLedger } from "../compat/sqlx-migrator";
 import { openBackups, openManage } from "../helpers/app";
+import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../helpers/images";
 
 // Reverting to a backup, then closing the app and opening it again.
 //
@@ -24,35 +19,6 @@ import { openBackups, openManage } from "../helpers/app";
 const LIVE = "histometer-shim-fs:histometer-shim.db";
 const BACKUPS = "histometer-shim-fs:backups/";
 const OLD_BACKUP = "histometer-backup-20250301-091500-scheduled.db";
-
-const MIGRATIONS = registeredMigrations(REPO_ROOT);
-const NEWEST = Math.max(...MIGRATIONS.map((m) => m.version));
-
-/** Open `b64` as a SQLite file, let `edit` change it, and hand back its bytes. */
-function editImage(b64: string, edit: (db: DatabaseSync) => void): string {
-  const dir = mkdtempSync(join(tmpdir(), "histometer-backup-"));
-  const file = join(dir, "image.db");
-  try {
-    writeFileSync(file, Buffer.from(b64, "base64"));
-    const db = new DatabaseSync(file);
-    edit(db);
-    db.close();
-    return readFileSync(file).toString("base64");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/**
- * A backup from before migrations 23 and 24: the populated legacy database
- * (tests/fixtures/legacy-pre-0023), with the migration record the app would
- * have written into it. It was built by executing migrations 1–22 directly, so
- * the record is the one thing it lacks.
- */
-function preMigrationBackup(): string {
-  const fixture = readFileSync(join(REPO_ROOT, "tests", "fixtures", "legacy-pre-0023.b64"), "utf8").trim();
-  return editImage(fixture, (db) => seedLedger(db, MIGRATIONS.filter((m) => m.version <= 22)));
-}
 
 async function plantBackup(page: Page, name: string, b64: string): Promise<void> {
   await page.evaluate(([key, value]) => window.localStorage.setItem(key, value), [BACKUPS + name, b64]);
@@ -137,7 +103,7 @@ test("a backup from before the newest migration: revert, relaunch, relaunch agai
   await freshLab(page);
   expect(await ledger(page)).toEqual(MIGRATIONS.map((m) => m.version));
 
-  await plantBackup(page, OLD_BACKUP, preMigrationBackup());
+  await plantBackup(page, OLD_BACKUP, preMigrationImage());
   await revertTo(page, OLD_BACKUP);
   // The backup's own lab is what the board shows now.
   await expect(page.locator("aside").getByText("Enthesis Engineering")).toBeVisible({ timeout: 15_000 });
@@ -196,34 +162,16 @@ test("a backup this build took reverts exactly as before", async ({ page }) => {
 
 for (const [what, damage, refusal] of [
   [
-    "a damaged backup",
-    (b64: string) => {
-      // Bit rot across the middle of an otherwise real backup.
-      const bytes = Buffer.from(b64, "base64");
-      for (let i = Math.floor(bytes.length * 0.3); i < Math.floor(bytes.length * 0.6); i += 1) bytes[i] = 0xa5;
-      return bytes.toString("base64");
-    },
-    /This backup cannot be restored: it is damaged \(.+\)\. The current database has not been changed\./,
-  ],
-  [
     "a file that is not a database at all",
     () => Buffer.from("these are not the bytes of a database ".repeat(40)).toString("base64"),
     /This backup cannot be restored: it is not a database file\. The current database has not been changed\./,
   ],
   [
     "a backup made by a newer version",
-    (b64: string) =>
-      editImage(b64, (db) =>
-        db
-          .prepare(
-            `INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-             VALUES (?, 'from the future', TRUE, x'00', 0)`,
-          )
-          .run(NEWEST + 1),
-      ),
+    fromANewerVersion,
     new RegExp(
       `This backup cannot be restored: it was made by a newer version of Histometer \\(it has database migration ${NEWEST + 1}, ` +
-        `which this version does not have\\), so only that version or a later one can restore it\\. ` +
+        `which this version does not have\\)\\. Only that version or a later one can restore it\\. ` +
         `The current database has not been changed\\.`,
     ),
   ],

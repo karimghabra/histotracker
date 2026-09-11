@@ -3,7 +3,7 @@
 ## 0.18.0 - unreleased
 
 No schema change and no new migration.
-A 0.17.0 instance opens every database this version writes, a reverted backup included.
+A 0.17.0 instance opens every database this version writes, a reverted backup and a pulled snapshot included.
 
 - **Reverting to an older backup no longer leaves an app that will not start.**
   Reverting to a backup taken before 0.13.0 worked for the rest of that session, and then the next launch showed an empty board, "No projects yet", "Not signed in", and a "Sync error" about a duplicate column.
@@ -16,9 +16,20 @@ A 0.17.0 instance opens every database this version writes, a reverted backup in
   What the backup lacks really runs, including 0024's fill-in of what each stain slide was asked for, and the record is the migrator's own, so it says what the file holds.
 
   **A backup that cannot be brought up to date is refused, and nothing changes.**
-  The Backups dialog says why: it is not a database, it is damaged, Histometer did not write it, a newer version made it, or a migration fails on it.
+  The Backups dialog says why: it is not a database, it cannot be read at all, a newer version made it, its record of migrations does not match this version's, or a migration fails on it.
   The "Before revert" safety backup is now taken only once the backup is accepted, so a refused revert leaves nothing behind.
   A 0.17.0 install that has already been bricked this way is not repaired by this version; copy its "Before revert" backup over `histometer.db` by hand.
+
+- **A sync viewer no longer stops starting after it pulls from a workstation on another version.**
+  A pull swapped the workstation's snapshot in mid-session the same way, record and all.
+  A viewer that pulled from a workstation still on a version before 0.13.0 worked until its next launch, which stopped on the same duplicate column.
+  A pull now runs the snapshot through this version's migrations first, exactly as a revert does.
+
+  **A snapshot the viewer cannot bring up to date is refused, and the viewer keeps what it had.**
+  The sync error says why, and when the workstation runs a newer version of Histometer it says to update Histometer on the viewer.
+  Before, the viewer would have taken such a snapshot anyway and then refused to start at its next launch.
+  The refused snapshot is not marked as pulled, so the viewer takes it at the first sync after it can.
+  A sync error now shows the message alone, without "Error:" in front of it.
 
 ## 0.17.0 - unreleased
 

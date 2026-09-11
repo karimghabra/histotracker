@@ -15,7 +15,7 @@ pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
 pnpm test:compat           # the released build in use vs this tree, both directions
 pnpm test:release          # release checks' own tests, then this tree's version sources agree
-cd src-tauri && cargo check
+cd src-tauri && cargo check && cargo test --lib
 ```
 
 `pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All of the
@@ -92,19 +92,17 @@ breaks at runtime. Update all of these in the same change:
   migrations `ADD COLUMN`/`CREATE TABLE`; never drop/rename a column a shipped
   build still reads (backups, sync, and undo all restore raw DB *images*, so an
   older image must stay openable). If the new column is read/written at runtime,
-  also add it to `ensureRuntimeSchema()` in `src/lib/db.ts` — `getDb()` converges
-  it on every DB (re)open, which is what keeps an older image swapped in at
-  runtime (undo, sync pull) working. See `docs/shared_data_sync.md` §1a. A column
-  may skip its numbered migration and live in `ensureRuntimeSchema()` alone when
-  a migration would break rollback to the build in use or a sync pull —
-  precedent `samples.embedding_notes` (#137, https://github.com/karimghabra/histotracker/pull/138).
+  also add it to `ensureRuntimeSchema()` in `src/lib/db.ts`.
+  `getDb()` converges it on every DB (re)open, so an image swapped in at runtime has every column, one with no numbered migration included.
+  See `docs/shared_data_sync.md` §1a.
+  A column may skip its numbered migration and live in `ensureRuntimeSchema()` alone when a migration would break rollback to the build in use, which refuses a database recording a version it does not know, and so does every sync viewer still on it.
+  Precedent: `samples.embedding_notes` (#137, https://github.com/karimghabra/histotracker/pull/138).
 - `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
-  A revert first runs the backup through this build's migrations
-  (`src-tauri/src/migrate.rs`, `db_migrate_image`) so the migration record in
-  the file stays true; the test harnesses model that command in
-  `src/test/sqlx-migrator.ts`, refusal wording included.
+  An image from elsewhere, a backup or a pulled sync snapshot, goes through `bringImageUpToDate()` (`src/lib/db.ts`) before it is swapped in.
+  That runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations so the migration record in the file stays true, or refuses it with nothing changed.
+  The test harnesses model that command in `src/test/sqlx-migrator.ts`, refusal wording included; the CI `rust` job runs the real command's tests.
 
 ## Docs worth reading
 

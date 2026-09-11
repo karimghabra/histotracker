@@ -26,12 +26,10 @@ if (!RELEASE) throw new Error("Set COMPAT_RELEASE to a release tag, or run `pnpm
  * Migrations this branch registers that the release does not, accepted as a
  * ONE-WAY upgrade. Once this build opens a database, the release refuses it
  * ("migration N was previously applied but is missing"), and so does every
- * sync viewer still running it. A viewer on this build that pulls a snapshot
- * from a workstation still on the release swaps it in unmigrated, so its next
- * launch runs the migration on top of whatever getDb() converged. (A backup
- * revert does not: it runs the migrations first, see src-tauri/src/migrate.rs.)
- * Empty is the normal state: a column can be converged at runtime instead
- * (AGENTS.md, embedding_notes).
+ * sync viewer still running it. (This build itself is safe either way: a
+ * backup revert and a sync pull run its migrations on the image first, see
+ * bringImageUpToDate in src/lib/db.ts.) Empty is the normal state: a column can
+ * be converged at runtime instead (AGENTS.md, embedding_notes).
  * Add a version only with the captain's sign-off, saying why; the stories
  * below then stop at the refusal instead of failing on it.
  */
@@ -131,9 +129,7 @@ describe("the migration ledger", () => {
       refused,
       `this branch registers migration ${refused.join(", ")}, which ${release.ref} does not. After this ` +
         `build opens the lab's database, ${release.ref} refuses to open it, and so does every viewer ` +
-        `still on it; a viewer on this build that pulls a snapshot from a workstation still on ` +
-        `${release.ref} runs the migration again, at its next launch, on top of the column getDb() ` +
-        `converged. Converge the column at runtime only, or get a signed-off ACCEPTED_ONE_WAY entry.`,
+        `still on it. Converge the column at runtime only, or get a signed-off ACCEPTED_ONE_WAY entry.`,
     ).toEqual([]);
   });
 });
@@ -327,7 +323,7 @@ describe(`a backup from before a migration this branch registers (${OLD_BACKUP_R
 });
 
 describe("sync between a workstation and a viewer on different builds", () => {
-  /** Publish from `workstation`, pull on a viewer that has been running `viewerBuild`, relaunch it. */
+  /** Publish from `workstation`, pull on a viewer that has been running `viewerBuild`, relaunch it twice. */
   async function publishAndPull(workstation: () => Promise<App>, viewerBuild: Build, viewerName: string): Promise<void> {
     const viewer = newMachine(viewerName, "viewer");
     await quit(await launch(viewerBuild, viewer)); // a viewer that has been running its own build
@@ -340,11 +336,14 @@ describe("sync between a workstation and a viewer on different builds", () => {
       await readEverything(app);
     });
     // The swap happened under a running app; the migrator meets the pulled
-    // ledger only at the next launch.
-    await using(await launch(viewerBuild, viewer), async (app) => {
-      await readEverything(app);
-    });
+    // ledger only at the next launch, and must have nothing left to do there.
+    for (const _launch of ["next", "after that"]) {
+      await using(await launch(viewerBuild, viewer), async (app) => {
+        await readEverything(app);
+      });
+    }
     expect(lostOrChanged(published, dump(viewer.dbFile))).toEqual([]);
+    expect(ledger(viewer.dbFile)).toEqual(viewerBuild.migrations.map((m) => m.version).sort((a, b) => a - b));
   }
 
   it("the workstation updates first: a viewer still on the release pulls what this branch published", async ({ skip }) => {
@@ -356,6 +355,18 @@ describe("sync between a workstation and a viewer on different builds", () => {
     const workstation = newMachine("workstation still on the release");
     await using(await launch(release, workstation), (app) => runTheLab(app, "release workstation"));
     await publishAndPull(() => launch(release, workstation), branch, "viewer on this branch");
+  });
+
+  it(`this branch pulls what a workstation still on ${OLD_BACKUP_RELEASE} published, before a migration this branch registers`, async () => {
+    // The snapshot's migration record lacks migrations this branch registers.
+    // Swapped in as it was, getDb() converged their columns, and the viewer's
+    // next launch ran them again on top of those columns ("duplicate column
+    // name") and could not open its database. The pull now runs this branch's
+    // migrations on the snapshot first.
+    const old = releaseBuild(OLD_BACKUP_RELEASE);
+    const workstation = newMachine(`workstation still on ${OLD_BACKUP_RELEASE}`);
+    await using(await launch(old, workstation), (app) => runTheLab(app, `${OLD_BACKUP_RELEASE} workstation`));
+    await publishAndPull(() => launch(old, workstation), branch, `viewer on this branch, pulling ${OLD_BACKUP_RELEASE}`);
   });
 });
 

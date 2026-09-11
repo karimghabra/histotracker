@@ -33,19 +33,24 @@ which "deploy everywhere together" eliminates.
 
 ### 1a. Additive migrations + runtime convergence (backward compatibility)
 
-The same "the schema is the wire format" rule governs **backups** (a backup is a
-raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image
-restore). All three swap a DB *file* under the live connection, and
-`tauri-plugin-sql` only runs migrations **once at startup** — a reopened file is
-never re-migrated. So an image that predates a column can go live under a newer
-build (e.g. a viewer on a new build pulling a snapshot from a workstation still on an old one).
+The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image restore).
+All three swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
 
-A backup revert is the exception.
-The migration record lives inside the image, so an older backup swapped in as it is would carry a record without the newer migrations, and the next launch would run them again on top of the columns `getDb()` had converged ("duplicate column name"), leaving a database the app cannot open.
-`revertToBackup()` therefore first passes the backup through `db_migrate_image` (`src-tauri/src/migrate.rs`), which runs this build's migrations on a copy with the same sqlx migrator the launch uses.
+The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
+`getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
+So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, first goes through `bringImageUpToDate()` (`src/lib/db.ts`).
+It runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
 The image goes live fully migrated, with a record sqlx itself wrote.
-A backup that cannot be brought up to date is refused before anything changes: one that is damaged or not a database, one the app did not write, one made by a newer build, and one a migration fails on.
-That last includes a backup taken after an older build's revert had already converged columns its record does not account for; it is refused, not patched over.
+Undo images need none of this: this build took them, in this session, after its own migrations had run.
+
+An image that cannot be brought up to date is refused before anything changes, the live database and its connection included.
+That is one that is not a database or that the migrator cannot read, one made by a newer build, one whose record does not match this build's migrations, and one a migration fails on.
+The last includes a backup taken after an older build's revert had already converged columns its record does not account for; it is refused, not patched over.
+A refused revert says so in the Backups dialog.
+A refused pull shows as a sync error, telling the viewer to update Histometer when the snapshot came from a newer version, and leaves `last_synced_version` where it was, so the viewer pulls that snapshot once it can.
+
+A numbered migration still makes the upgrade one-way: an older build refuses a database recording a version it does not know, and so does every sync viewer still running it.
+But neither a revert nor a pull can leave a newer build unable to launch.
 
 Three rules keep updates compatible with existing databases:
 
@@ -62,10 +67,8 @@ Three rules keep updates compatible with existing databases:
    `samples.embedding_notes`) — the harness's `freshDb()` converges every column
    parsed out of `ensureRuntimeSchema()`, so a regex over `db.ts` adds nothing. This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
-3. **A column may skip its numbered migration** and live in
-   `ensureRuntimeSchema()` alone when a numbered migration would break rollback
-   to the build in use or a sync pull; precedent `samples.embedding_notes`
-   (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
+3. **A column may skip its numbered migration** and live in `ensureRuntimeSchema()` alone when a numbered migration would break rollback to the build in use, or leave the viewers still on it unable to open what the workstation publishes.
+   Precedent: `samples.embedding_notes` (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
 
 `pnpm test:compat` checks these rules against a real release rather than
 trusting them: the release's own tagged data layer and this tree open, work on,

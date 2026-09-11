@@ -2,12 +2,12 @@
 //!
 //! tauri-plugin-sql runs the numbered migrations (`crate::migrations`) on the
 //! first open of each launch, and sqlx records every one it applies inside the
-//! file, in `_sqlx_migrations`. A backup revert swaps a whole image in AFTER
-//! that, mid-session, so a backup older than the newest migration arrives with a
-//! record that lacks it. `getDb()` adds the missing columns, which keeps the
-//! session working, but the record still says the migration never ran: the next
-//! launch runs it again on top of those columns, fails on "duplicate column
-//! name", and the app cannot open its database.
+//! file, in `_sqlx_migrations`. A backup revert and a sync pull swap a whole
+//! image in AFTER that, mid-session, so an image older than the newest migration
+//! arrives with a record that lacks it. `getDb()` adds the missing columns, which
+//! keeps the session working, but the record still says the migration never ran:
+//! the next launch runs it again on top of those columns, fails on "duplicate
+//! column name", and the app cannot open its database.
 //!
 //! `db_migrate_image` gives the image what a launch would give it: the same
 //! migrations through the same sqlx migrator, on a staging copy. The migrations
@@ -15,15 +15,19 @@
 //! sqlx's own, so it says exactly what the file holds. An image that cannot be
 //! brought up to date is refused, and the live database is never touched:
 //!
-//!  * it is not a SQLite file, or it is damaged (`PRAGMA quick_check`);
-//!  * it has no `_sqlx_migrations` at all, so the app never wrote it;
+//!  * it is not a SQLite file;
+//!  * the migrator cannot read it at all, e.g. "database disk image is malformed";
 //!  * it was made by a NEWER build (it records a migration this one does not
 //!    have), which this build's own launch would refuse;
+//!  * its record does not match this build's migrations, or says one was only
+//!    partly applied;
 //!  * a migration fails on it, e.g. on a column its record does not account for.
 //!
-//! Every refusal is worded to follow "This backup cannot be restored: ". The
-//! test harnesses model this command in `src/test/sqlx-migrator.ts`
-//! (`migrateImage`), word for word; change the two together.
+//! Every refusal reason is worded to follow a caller's lead-in, "This backup
+//! cannot be restored: " or "The workstation's latest snapshot cannot be opened
+//! here: ", and each caller adds its own what-to-do. The test harnesses model
+//! this command in `src/test/sqlx-migrator.ts` (`migrateImage`), word for word;
+//! change the two together.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -33,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::error::BoxDynError;
 use sqlx::migrate::{MigrateError, Migration as SqlxMigration, MigrationSource, Migrator};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -67,9 +71,27 @@ impl MigrationSource<'static> for Registered {
     }
 }
 
+/// Why an image cannot be brought up to date, as the webview receives it.
+/// `newer` marks the one refusal that updating Histometer on this computer
+/// cures: the image was made by a newer version.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct Refusal {
+    reason: String,
+    newer: bool,
+}
+
+impl Refusal {
+    fn because(reason: impl Into<String>) -> Self {
+        Refusal {
+            reason: reason.into(),
+            newer: false,
+        }
+    }
+}
+
 /// The image, brought up to this build's migrations, or why it cannot be.
 #[tauri::command]
-pub async fn db_migrate_image(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+pub async fn db_migrate_image(bytes: Vec<u8>) -> Result<Vec<u8>, Refusal> {
     migrate_image(&bytes, crate::migrations(), &std::env::temp_dir()).await
 }
 
@@ -110,12 +132,17 @@ fn sqlite_message(err: &sqlx::Error) -> String {
         .unwrap_or_else(|| err.to_string())
 }
 
-fn refusal(err: MigrateError) -> String {
-    match err {
-        MigrateError::VersionMissing(v) => format!(
-            "it was made by a newer version of Histometer (it has database migration {v}, \
-             which this version does not have), so only that version or a later one can restore it"
-        ),
+fn refusal(err: MigrateError) -> Refusal {
+    let reason = match err {
+        MigrateError::VersionMissing(v) => {
+            return Refusal {
+                reason: format!(
+                    "it was made by a newer version of Histometer (it has database migration {v}, \
+                     which this version does not have)"
+                ),
+                newer: true,
+            }
+        }
         MigrateError::VersionMismatch(v) => {
             format!("its database migration {v} is not the one this version of Histometer has")
         }
@@ -124,40 +151,10 @@ fn refusal(err: MigrateError) -> String {
             "bringing it up to date failed at database migration {v} ({})",
             sqlite_message(&e)
         ),
+        MigrateError::Execute(e) => format!("it could not be read ({})", sqlite_message(&e)),
         other => other.to_string(),
-    }
-}
-
-async fn check_and_migrate(pool: &SqlitePool, migrations: Vec<Migration>) -> Result<(), String> {
-    let damaged = |e: sqlx::Error| format!("it is damaged ({})", sqlite_message(&e));
-    let check: Vec<String> = sqlx::query_scalar("PRAGMA quick_check")
-        .fetch_all(pool)
-        .await
-        .map_err(damaged)?;
-    if check.len() != 1 || check[0] != "ok" {
-        let first = check
-            .first()
-            .map(String::as_str)
-            .unwrap_or("no result from quick_check");
-        return Err(format!("it is damaged ({first})"));
-    }
-    let ledger: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(damaged)?;
-    if ledger == 0 {
-        return Err(
-            "it has no record of Histometer's database migrations, so Histometer did not write it"
-                .into(),
-        );
-    }
-    let migrator = Migrator::new(Registered(migrations))
-        .await
-        .map_err(|e| e.to_string())?;
-    // As tauri-plugin-sql runs it: `Migrator::run` on a pool.
-    migrator.run(pool).await.map_err(refusal)
+    };
+    Refusal::because(reason)
 }
 
 /// Stage `bytes` in `dir`, run `migrations` on the copy the way the plugin runs
@@ -166,29 +163,37 @@ async fn migrate_image(
     bytes: &[u8],
     migrations: Vec<Migration>,
     dir: &Path,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Refusal> {
     if bytes.len() < 100 || &bytes[..16] != SQLITE_MAGIC {
-        return Err("it is not a database file".into());
+        return Err(Refusal::because("it is not a database file"));
     }
+    let migrator = Migrator::new(Registered(migrations))
+        .await
+        .map_err(refusal)?;
     let staging = Staging::new(dir);
-    std::fs::write(&staging.0, bytes)
-        .map_err(|e| format!("it could not be copied aside to be checked ({e})"))?;
+    std::fs::write(&staging.0, bytes).map_err(|e| {
+        Refusal::because(format!("it could not be copied aside to be checked ({e})"))
+    })?;
     let options = SqliteConnectOptions::new().filename(&staging.0);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)
         .await
-        .map_err(|e| format!("it could not be opened ({})", sqlite_message(&e)))?;
-    let migrated = check_and_migrate(&pool, migrations).await;
+        .map_err(|e| Refusal::because(format!("it could not be opened ({})", sqlite_message(&e))))?;
+    // As tauri-plugin-sql runs it: `Migrator::run` on a pool.
+    let migrated = migrator.run(&pool).await;
     // Every connection closed, so the file is whole before it is read back.
     pool.close().await;
-    migrated?;
-    std::fs::read(&staging.0).map_err(|e| format!("it could not be read back after checking ({e})"))
+    migrated.map_err(refusal)?;
+    std::fs::read(&staging.0).map_err(|e| {
+        Refusal::because(format!("it could not be read back after checking ({e})"))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::SqlitePool;
 
     fn block_on<F: Future>(f: F) -> F::Output {
         tauri::async_runtime::block_on(f)
@@ -312,7 +317,7 @@ mod tests {
     }
 
     /// The command, checking it cleans up after itself.
-    async fn migrate(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    async fn migrate(bytes: &[u8]) -> Result<Vec<u8>, Refusal> {
         let dir = Scratch::new();
         let out = migrate_image(bytes, crate::migrations(), &dir.0).await;
         let left = std::fs::read_dir(&dir.0).unwrap().count();
@@ -364,7 +369,9 @@ mod tests {
             // An image in that state is refused, not patched into something else.
             assert_eq!(
                 migrate(&converged).await.unwrap_err(),
-                "bringing it up to date failed at database migration 23 (duplicate column name: slides_issued)"
+                Refusal::because(
+                    "bringing it up to date failed at database migration 23 (duplicate column name: slides_issued)"
+                )
             );
         });
     }
@@ -391,10 +398,13 @@ mod tests {
             .await;
             assert_eq!(
                 migrate(&newer).await.unwrap_err(),
-                format!(
-                    "it was made by a newer version of Histometer (it has database migration {future}, \
-                     which this version does not have), so only that version or a later one can restore it"
-                )
+                Refusal {
+                    reason: format!(
+                        "it was made by a newer version of Histometer (it has database migration {future}, \
+                         which this version does not have)"
+                    ),
+                    newer: true,
+                }
             );
         });
     }
@@ -409,22 +419,7 @@ mod tests {
             .await;
             assert_eq!(
                 migrate(&dirty).await.unwrap_err(),
-                "database migration 7 was only partly applied to it"
-            );
-        });
-    }
-
-    #[test]
-    fn a_database_the_app_did_not_write_is_refused() {
-        block_on(async {
-            let dir = Scratch::new();
-            let file = dir.0.join("foreign.db");
-            let pool = open(&file).await;
-            run(&pool, "CREATE TABLE notes (body TEXT)").await;
-            pool.close().await;
-            assert_eq!(
-                migrate(&std::fs::read(&file).unwrap()).await.unwrap_err(),
-                "it has no record of Histometer's database migrations, so Histometer did not write it"
+                Refusal::because("database migration 7 was only partly applied to it")
             );
         });
     }
@@ -434,28 +429,28 @@ mod tests {
         block_on(async {
             assert_eq!(
                 migrate(b"not a database").await.unwrap_err(),
-                "it is not a database file"
+                Refusal::because("it is not a database file")
             );
             assert_eq!(
                 migrate(&[0u8; 4096]).await.unwrap_err(),
-                "it is not a database file"
+                Refusal::because("it is not a database file")
             );
         });
     }
 
     #[test]
-    fn a_damaged_image_is_refused() {
+    fn an_image_the_migrator_cannot_read_is_refused() {
         block_on(async {
+            // A sound header over a first page (the schema) that is all noise.
             let mut rotten = image_at(newest()).await;
-            let (from, to) = (rotten.len() * 3 / 10, rotten.len() * 6 / 10);
-            rotten[from..to].fill(0xa5);
+            let page = match u16::from_be_bytes([rotten[16], rotten[17]]) {
+                1 => 65536,
+                size => usize::from(size),
+            };
+            rotten[100..page].fill(0xa5);
             let err = migrate(&rotten).await.unwrap_err();
-            assert!(err.starts_with("it is damaged ("), "{err}");
-
-            let mut truncated = image_at(newest()).await;
-            truncated.truncate(truncated.len() / 2);
-            let err = migrate(&truncated).await.unwrap_err();
-            assert!(err.starts_with("it is damaged ("), "{err}");
+            assert!(err.reason.starts_with("it could not be "), "{err:?}");
+            assert!(!err.newer);
         });
     }
 }

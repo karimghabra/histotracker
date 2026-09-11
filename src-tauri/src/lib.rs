@@ -22,7 +22,8 @@ fn read_file(path: String) -> Result<Vec<u8>, String> {
 
 /// The numbered migrations, in order. tauri-plugin-sql runs them on the first
 /// open of each launch; `migrate::db_migrate_image` runs the very same list on a
-/// backup before a revert swaps it in. Append-only: never edit or remove one.
+/// backup or a pulled snapshot before it is swapped in. Append-only: never edit
+/// or remove one.
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {

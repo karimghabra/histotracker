@@ -29,8 +29,8 @@
 // sqlx-core or tauri-plugin-sql minor version, so this cannot silently go stale.
 //
 // `migrateImage` models the app's own `db_migrate_image` command
-// (src-tauri/src/migrate.rs), which puts a backup through this same migrator
-// before a revert swaps it in.
+// (src-tauri/src/migrate.rs), which puts a backup or a pulled snapshot through
+// this same migrator before it is swapped in.
 
 export type SqlValue = number | bigint | string | Uint8Array | null;
 
@@ -187,8 +187,20 @@ export function seedLedger(db: SqlFile, migrations: RegisteredMigration[]): void
 
 const SQLITE_MAGIC = "SQLite format 3\0";
 
+/** The command's error as the webview receives it: migrate.rs `Refusal`, serialized. */
+export interface Refusal {
+  reason: string;
+  newer: boolean;
+}
+
 /** Why an image cannot be brought up to date, in the command's words. */
-export class ImageRefused extends Error {}
+export class ImageRefused extends Error {
+  readonly refusal: Refusal;
+  constructor(reason: string, newer = false) {
+    super(reason);
+    this.refusal = { reason, newer };
+  }
+}
 
 /** The command's first check, on the bytes before anything opens them. */
 export function assertSqliteImage(bytes: Uint8Array): void {
@@ -199,47 +211,34 @@ export function assertSqliteImage(bytes: Uint8Array): void {
 }
 
 /** The refusal for a migrator error: src-tauri/src/migrate.rs `refusal`. */
-function refusal(err: MigrateError): string {
+function refusal(err: MigrateError): ImageRefused {
   switch (err.kind) {
     case "VersionMissing":
-      return (
+      return new ImageRefused(
         `it was made by a newer version of Histometer (it has database migration ${err.version}, ` +
-        `which this version does not have), so only that version or a later one can restore it`
+          `which this version does not have)`,
+        true,
       );
     case "VersionMismatch":
-      return `its database migration ${err.version} is not the one this version of Histometer has`;
+      return new ImageRefused(`its database migration ${err.version} is not the one this version of Histometer has`);
     case "Dirty":
-      return `database migration ${err.version} was only partly applied to it`;
+      return new ImageRefused(`database migration ${err.version} was only partly applied to it`);
     case "ExecuteMigration":
-      return `bringing it up to date failed at database migration ${err.version} (${err.detail})`;
+      return new ImageRefused(`bringing it up to date failed at database migration ${err.version} (${err.detail})`);
   }
 }
 
 /**
- * What `db_migrate_image` does to the image it is given, once it is open: check
- * it is sound, check it is a database the app wrote, then run the migrator on
- * it exactly as a launch would. Returns the versions applied.
+ * What `db_migrate_image` does to the image it is given, once it is open: run
+ * the migrator on it exactly as a launch would. An error the migrator raises
+ * outside any one migration means it could not read the image at all (sqlx's
+ * `MigrateError::Execute`). Returns the versions applied.
  */
 export function migrateImage(db: SqlFile, migrations: RegisteredMigration[]): number[] {
-  let check: string[];
-  try {
-    check = db.all("PRAGMA quick_check").map((row) => String(Object.values(row)[0]));
-  } catch (err) {
-    throw new ImageRefused(`it is damaged (${(err as Error).message})`);
-  }
-  if (check.length !== 1 || check[0] !== "ok") {
-    throw new ImageRefused(`it is damaged (${check[0] ?? "no result from quick_check"})`);
-  }
-  const ledger = db.all(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
-  );
-  if (ledger.length === 0) {
-    throw new ImageRefused("it has no record of Histometer's database migrations, so Histometer did not write it");
-  }
   try {
     return runMigrator(db, migrations);
   } catch (err) {
-    if (err instanceof MigrateError) throw new ImageRefused(refusal(err));
-    throw err;
+    if (err instanceof MigrateError) throw refusal(err);
+    throw new ImageRefused(`it could not be read (${(err as Error).message})`);
   }
 }

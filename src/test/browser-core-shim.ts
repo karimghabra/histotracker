@@ -11,6 +11,7 @@
 // restoreDb() overwrites them — runs unmodified against a genuine "file".
 import { readShimFile, writeShimFile } from "./shim-fs";
 import { migrateImageBytes } from "./browser-sql-shim";
+import { ImageRefused } from "./sqlx-migrator";
 
 // Backups live in the same virtual FS under a fixed prefix so the real
 // backup.ts path (snapshotDb → backup_write → backup_list/read) runs unmodified.
@@ -166,10 +167,16 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
       }
       return undefined as unknown as T;
     }
-    // migrate.rs: bring a backup up to this build's migrations before a revert.
+    // migrate.rs: bring a backup or a pulled snapshot up to this build's
+    // migrations before it is swapped in. A refusal rejects with the serialized
+    // `Refusal`, as a Rust command's error does.
     case "db_migrate_image": {
       const bytes = Uint8Array.from((_args?.bytes as number[] | undefined) ?? []);
-      return Array.from(await migrateImageBytes(bytes)) as unknown as T;
+      try {
+        return Array.from(await migrateImageBytes(bytes)) as unknown as T;
+      } catch (err) {
+        throw err instanceof ImageRefused ? err.refusal : err;
+      }
     }
 
     case "backup_prune": {

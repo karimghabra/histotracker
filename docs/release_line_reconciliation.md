@@ -87,6 +87,11 @@ In short: the installer workflow runs only when started by hand on master; it re
 A separate release-integrity check turns every pull request red while any release tag is missing from master or master's version is behind the newest release.
 Either condition would have flagged this divergence the day 0.14.3 was published.
 
+The review of this merge also dropped the test workflow's Rust job, which compiled the Rust shell on Windows.
+0.18.0 deliberately supersedes that part of the decision and brings the job back, on Linux, running `cargo check` and the Rust unit tests.
+The Rust shell now holds `db_migrate_image`, which brings a backup or a pulled snapshot up to the build's migrations on the lab's machine, and only the Rust tests exercise the real command rather than its TypeScript model.
+Linux is cheap and catches the breakage that matters; the installer build still compiles for Windows at release time.
+
 ## The review
 
 The 21 commits were reviewed before the merge, and the review found defects in code the lab had been running, none of them in migrations, backups or sync code.

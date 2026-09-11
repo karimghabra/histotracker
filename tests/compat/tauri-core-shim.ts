@@ -5,7 +5,9 @@
 //                            (snapshots, undo, sync publish and pull)
 //   backup_*               - backup.rs: validated, atomic, named backups
 //   db_migrate_image       - migrate.rs: the running build's migrations, run on a
-//                            staging copy of an image (a backup before a revert)
+//                            staging copy of an image (a backup before a revert,
+//                            a snapshot before a pull); a refusal rejects with
+//                            the serialized `Refusal`, as the Rust command does
 //   sync_config_* / github_* - sync.rs: per-machine config plus ONE shared fake
 //                            remote, so a workstation and a viewer on different
 //                            builds really exchange the database file
@@ -17,7 +19,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "./sqlite";
-import { assertSqliteImage, migrateImage } from "./sqlx-migrator";
+import { ImageRefused, assertSqliteImage, migrateImage } from "./sqlx-migrator";
 import { currentProcess, world } from "./world";
 
 const BACKUP_PREFIX = "histometer-backup-";
@@ -82,9 +84,9 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
     }
     case "db_migrate_image": {
       const bytes = Uint8Array.from((args.bytes as number[]) ?? []);
-      assertSqliteImage(bytes);
       const dir = mkdtempSync(join(tmpdir(), "histometer-migrate-"));
       try {
+        assertSqliteImage(bytes);
         const file = join(dir, "staging.db");
         writeFileSync(file, bytes);
         const db = new DatabaseSync(file);
@@ -95,6 +97,8 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
           db.close();
         }
         return out(Array.from(readFileSync(file)));
+      } catch (err) {
+        throw err instanceof ImageRefused ? err.refusal : err;
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

@@ -38,7 +38,8 @@ code runs in Node:
   checksums, the refusal of unknown or modified versions, and one transaction
   per migration. `builds.ts` refuses a build that locks a different sqlx or
   plugin line, so the model cannot quietly go stale.
-  It also models `db_migrate_image` (`src-tauri/src/migrate.rs`), which runs that migrator on a backup before a revert.
+  It also models `db_migrate_image` (`src-tauri/src/migrate.rs`), which runs that migrator on a backup before a revert and on a snapshot before a pull.
+  The real command's own tests run in the CI `rust` job.
   The Playwright shim uses the same file; `tests/compat/sqlx-migrator.ts` binds it to node:sqlite.
 - `tests/compat/tauri-sql-shim.ts` is the SQLite connection. It opens a real
   file with node:sqlite, sets `foreign_keys = ON`, and sets no journal mode, as
@@ -79,6 +80,8 @@ Windows installer, and the SQLite version compiled into the shipped binary
    The next two launches must open the database with everything the backup held, and so must the release.
 5. **Sync.** A viewer on each build pulls what a workstation on the other
    published, reads it, and relaunches.
+   Then a workstation on `OLD_BACKUP_RELEASE` publishes, and a viewer on this branch pulls it.
+   The pull must leave a migration record that lists every migration this branch registers, and the viewer's next two launches must open the database with everything the workstation published.
 6. **The populated legacy fixture** (`tests/fixtures/legacy-pre-0023.b64`)
    goes release, this branch, release, with every row intact.
 
@@ -98,8 +101,7 @@ record, the Logs CSV and XLSX, and the status workbook.
   survival of a value nobody writes proves nothing.
 - **You add a numbered migration:** the ledger check fails against every release that lacks it.
   That failure is the real thing: once this build opens the database, the older build refuses it, and so does every sync viewer still running it.
-  A viewer on this build that pulls a snapshot from a workstation still on the older build swaps it in without the migration, so its next launch runs the migration again on top of the column `getDb()` converged ("duplicate column name"), and it cannot open its database.
-  A backup revert is not exposed to this, because it runs the migrations on the backup before swapping it in.
+  Nothing on this build is exposed: a backup revert and a sync pull both run the migrations on the image before swapping it in, so neither can leave a database the next launch cannot open.
   Converge the column at runtime only (see AGENTS.md, precedent `samples.embedding_notes`).
   The alternative is to get the captain's sign-off and record the version in `ACCEPTED_ONE_WAY` in the test, which then asserts the refusal instead of failing on it.
 - **An older release lacks a function the lab uses:** that step is skipped and

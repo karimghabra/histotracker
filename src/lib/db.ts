@@ -176,9 +176,9 @@ export function getDb(): Promise<Database> {
 async function ensureRuntimeSchema(db: Database): Promise<void> {
   // Register EVERY additively-added column that current runtime queries read or
   // write. Anything missing here becomes a silent failure the moment an older
-  // image is opened unmigrated (undo restore, sync pull). A backup revert runs
-  // the numbered migrations first (src-tauri/src/migrate.rs), so there it only
-  // matters for a column that has none.
+  // image is opened unmigrated. A backup revert and a sync pull run the
+  // numbered migrations first (bringImageUpToDate), so there it only matters
+  // for a column that has none.
   // A new migration that adds such a column MUST add a matching line below —
   // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
@@ -197,11 +197,9 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // the Logs and both exports. RUNTIME-ONLY — deliberately no numbered
   // migration. A migration records its version in the file, and that record is
   // what breaks compatibility here: the build in use (0.17.0) refuses to open a
-  // database carrying a version it does not know, and a viewer on this build
-  // that pulls a snapshot from a workstation still on 0.17.0 would, at its next
-  // launch, re-run the migration's ADD COLUMN on top of the column this line
-  // already added ("duplicate column name") and not open. Adding it here alone
-  // leaves neither record nor collision. See AGENTS.md.
+  // database carrying a version it does not know, and so does every sync viewer
+  // still running it, so the upgrade could not be rolled back. Adding it here
+  // alone leaves no record. See AGENTS.md.
   await ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(
@@ -544,12 +542,53 @@ export async function snapshotDb(): Promise<DbImage> {
  * mechanics the sync viewer already uses to swap in a downloaded snapshot —
  * proven, WAL-safe (the closed connection has no dirty -wal), and atomic from
  * the app's point of view. Callers refetch afterwards.
+ *
+ * The reopen does not run the numbered migrations, and the record of which ones
+ * a file has had lives inside it, so an image goes live with whatever record it
+ * brings. Any image not written by this build in this session (a backup, a
+ * snapshot pulled from the workstation) must first go through
+ * {@link bringImageUpToDate}, or the next launch re-runs the migrations it lacks
+ * on top of the columns getDb() converged and cannot open the database. Undo
+ * images, taken by this build in this session, need not.
  */
 export async function restoreDb(image: DbImage): Promise<void> {
   const path = await getDbFilePath(); // resolve while the connection is still open
   await resetDb(); // close + drop the pooled handle so the file is unlocked
   await invoke("save_file", { path, contents: Array.from(image) });
   await getDb(); // reopen eagerly so callers see a ready connection
+}
+
+/**
+ * Why {@link bringImageUpToDate} will not let an image go live. `reason` is
+ * worded to follow the caller's own lead-in (e.g. "This backup cannot be
+ * restored: "); `newer` marks an image made by a newer version of Histometer,
+ * which updating this computer would open.
+ */
+export class ImageRefusedError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly newer: boolean,
+  ) {
+    super(reason);
+    this.name = "ImageRefusedError";
+  }
+}
+
+/**
+ * Bring an image from elsewhere up to this build before it is swapped in: the
+ * Rust `db_migrate_image` command (src-tauri/src/migrate.rs) runs this build's
+ * migrations on a copy, through the same migrator a launch uses, and returns
+ * the copy with a record that says what it holds. An image it cannot bring up
+ * to date throws {@link ImageRefusedError}, and nothing has changed.
+ */
+export async function bringImageUpToDate(image: DbImage): Promise<DbImage> {
+  try {
+    return Uint8Array.from(await invoke<number[]>("db_migrate_image", { bytes: Array.from(image) }));
+  } catch (err) {
+    const refusal = err as { reason?: unknown; newer?: unknown } | null;
+    if (typeof refusal?.reason === "string") throw new ImageRefusedError(refusal.reason, refusal.newer === true);
+    throw new ImageRefusedError(err instanceof Error ? err.message : String(err), false);
+  }
 }
 
 /**

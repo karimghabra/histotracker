@@ -68,7 +68,7 @@ export function useSync(config: SyncConfigPublic | null): SyncState {
       }
       setLastSyncedAt(new Date());
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       running.current = false;
       setSyncing(false);
