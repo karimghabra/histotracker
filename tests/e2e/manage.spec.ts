@@ -21,7 +21,11 @@ test("Manage → Projects: rename and delete", async ({ page }) => {
   await seed(page);
   await openManage(page);
   await page.getByRole("button", { name: "Projects", exact: true }).click();
-  await expect(page.getByText("Enthesis Engineering")).toBeVisible();
+  // Scoped to the dialog: the sidebar names the project too. A page-wide text
+  // match found both whenever this panel had rendered by the first check, and
+  // passed only when it had not yet.
+  const manage = page.getByRole("dialog", { name: "Manage" });
+  await expect(manage.getByText("Enthesis Engineering")).toBeVisible();
 
   // Rename it (the new name shows in both the dialog and the sidebar).
   await page.getByTitle("Edit").first().click();
