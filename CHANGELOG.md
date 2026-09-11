@@ -52,7 +52,13 @@ with the empty string; no row is rewritten. That keeps the update two-way with
 the build in use (0.17.0): it can still open a database this build has opened,
 and reverting to any backup it took, then relaunching, is safe. A migration
 would have broken both. Proven on a populated pre-existing database in
-`npm run test:legacy`, including the revert-then-relaunch round trip.
+`npm run test:legacy`, including the revert-then-relaunch round trip, and
+against the real 0.17.0 by `pnpm test:compat`.
+- **A compatibility check against the release in use, on every change.**
+  `pnpm test:compat` takes a released build from its tag and has it and the
+  change under test open, work on, back up, revert and sync each other's
+  database, in both directions. It checks 0.17.0 today, and any other release
+  by name (`pnpm test:compat app-v0.18.0`). CI runs it on every push.
 
 ### Six defects from a swarm of walkers
 

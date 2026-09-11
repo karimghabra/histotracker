@@ -13,6 +13,7 @@ pnpm build                 # tsc typecheck + vite build
 pnpm test                  # data-layer workflow harness (see below)
 pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
+pnpm test:compat           # the released build in use vs this tree, both directions
 cd src-tauri && cargo check
 ```
 
@@ -68,6 +69,9 @@ breaks at runtime. Update all of these in the same change:
 - `tests/stress2/driver.ts` — the `addSample` payloads in `seed()` **and**
   `seedLarge()`; plus the inline one in `tests/stress2/13-abuse.spec.ts`. Miss
   one and the whole stress2 harness stops running.
+- `tests/compat/lab.ts` — the `addSample` payload in `newSample()`, and
+  `runTheLab()` must write every column you add (the compat harness fails on a
+  new column left at its default).
 
 ## Where things live
 
@@ -122,7 +126,11 @@ Release tagged `app-v<version>`, where `<version>` comes from
   a tester is already using.
 - **Every PR states its compatibility with the version in use** (a standing
   requirement from the lab): whether its schema change, if any, applies cleanly
-  to the release line's database, and how it merges onto that line.
+  to the release line's database, and how it merges onto that line. The proof
+  is `pnpm test:compat` (CI job `release-compat`): the release's own tagged
+  data layer and this tree open, work on and revert each other's database, and
+  sync it (`docs/release_compat.md`). When the lab installs a new release,
+  bump `IN_USE_RELEASE` in `scripts/release-compat.mjs`.
 
 ## Maintaining this file
 

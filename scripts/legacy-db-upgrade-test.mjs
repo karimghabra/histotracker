@@ -349,6 +349,7 @@ function registeredMigrations() {
  * The last migration the build in use registers. 0.17.0, cut from the
  * long-running claude/** release line, registers 0001–0024 — the same files as
  * master (checked 2026-09-10). Raise this when a release ships a new one.
+ * This is a model of that build; `pnpm test:compat` runs the real one.
  */
 const IN_USE_LAST_MIGRATION = 24;
 

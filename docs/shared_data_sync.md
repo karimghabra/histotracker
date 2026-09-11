@@ -60,6 +60,11 @@ Three rules keep updates compatible with existing databases:
    to the build in use or a backup revert; precedent `samples.embedding_notes`
    (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
 
+`pnpm test:compat` checks these rules against a real release rather than
+trusting them: the release's own tagged data layer and this tree open, work on,
+revert and sync each other's database, through the modelled sqlx migrator
+(`docs/release_compat.md`).
+
 ### Safe to change (sync is unaffected)
 - All UI, components, board layout, styling, hooks
 - Business/workflow logic, validation, new features, bug fixes
