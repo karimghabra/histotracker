@@ -2,9 +2,12 @@
 
 ## 0.18.0 - unreleased
 
-One new column, `samples.embedding_notes` (#137), added at runtime with no numbered migration.
+One new column, `samples.embedding_notes` (#137), added at runtime with **no numbered migration**.
+The app adds the column itself whenever it opens a database, filled with the empty string; no row is rewritten.
+A numbered migration would have made the update one-way, because the build in use (0.17.0) refuses to open a database that records a migration version it does not know.
 The backup-revert and sync-pull fixes below add no column and no migration.
 A 0.17.0 instance opens every database this version writes, a reverted backup and a pulled snapshot included.
+Proven on a populated pre-existing database by `pnpm test:legacy`, including a revert and relaunch, and against the real 0.17.0 by `pnpm test:compat`.
 
 - **Reverting to an older backup no longer leaves an app that will not start.**
   Reverting to a backup taken before 0.13.0 worked for the rest of that session, and then the next launch showed an empty board, "No projects yet", "Not signed in", and a "Sync error" about a duplicate column.
@@ -31,6 +34,11 @@ A 0.17.0 instance opens every database this version writes, a reverted backup an
   Before, the viewer would have taken such a snapshot anyway and then refused to start at its next launch.
   The refused snapshot is not marked as pulled, so the viewer takes it at the first sync after it can.
   A sync error now shows the message alone, without "Error:" in front of it.
+
+- **A compatibility check against the release in use, on every change.**
+  `pnpm test:compat` takes a released build from its tag and has it and the change under test open, work on, back up, revert and sync each other's database, in both directions.
+  It checks 0.17.0 today, and any other release by name (`pnpm test:compat app-v0.18.0`).
+  CI runs it on every push.
 
 ## 0.17.0 - unreleased
 
@@ -634,20 +642,6 @@ harness.
   accepts it silently rather than failing, so the file was written and saved and
   simply had nothing in it. All three workbook writers now go through one
   function that uses the supported form.
-
-Schema: one new column, `samples.embedding_notes`, and **no numbered
-migration**. The app adds the column itself whenever it opens a database, filled
-with the empty string; no row is rewritten. That keeps the update two-way with
-the build in use (0.17.0): it can still open a database this build has opened,
-and reverting to any backup it took, then relaunching, is safe. A migration
-would have broken both. Proven on a populated pre-existing database in
-`npm run test:legacy`, including the revert-then-relaunch round trip, and
-against the real 0.17.0 by `pnpm test:compat`.
-- **A compatibility check against the release in use, on every change.**
-  `pnpm test:compat` takes a released build from its tag and has it and the
-  change under test open, work on, back up, revert and sync each other's
-  database, in both directions. It checks 0.17.0 today, and any other release
-  by name (`pnpm test:compat app-v0.18.0`). CI runs it on every push.
 
 ### Six defects from a swarm of walkers
 
