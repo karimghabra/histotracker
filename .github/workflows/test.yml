@@ -118,5 +118,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Compatibility with the released builds
+      - name: Compatibility with the release in use
         run: pnpm test:compat
