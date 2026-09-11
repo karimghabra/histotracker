@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.18.0 - unreleased
+
+No schema change and no new migration.
+A 0.17.0 instance opens every database this version writes, a reverted backup included.
+
+- **Reverting to an older backup no longer leaves an app that will not start.**
+  Reverting to a backup taken before 0.13.0 worked for the rest of that session, and then the next launch showed an empty board, "No projects yet", "Not signed in", and a "Sync error" about a duplicate column.
+  Every launch after that did the same.
+  Nothing was lost; the database's own record of which migrations it had was wrong.
+  The app runs its migrations when it launches and records each one inside the database file, but a revert swapped the backup in mid-session, record and all, and the columns the backup lacked were then added without a record.
+  The next launch ran those migrations again on top of the columns and stopped.
+
+  A revert now runs the backup through this version's migrations first, on a copy, with the same migrator a launch uses.
+  What the backup lacks really runs, including 0024's fill-in of what each stain slide was asked for, and the record is the migrator's own, so it says what the file holds.
+
+  **A backup that cannot be brought up to date is refused, and nothing changes.**
+  The Backups dialog says why: it is not a database, it is damaged, Histometer did not write it, a newer version made it, or a migration fails on it.
+  The "Before revert" safety backup is now taken only once the backup is accepted, so a refused revert leaves nothing behind.
+  A 0.17.0 install that has already been bricked this way is not repaired by this version; copy its "Before revert" backup over `histometer.db` by hand.
+
 ## 0.17.0 - unreleased
 
 No schema change and nothing that syncs: a theme is eleven CSS variables in
