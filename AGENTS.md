@@ -130,7 +130,7 @@ Release tagged `app-v<version>`, where `<version>` comes from
   is `pnpm test:compat` (CI job `release-compat`): the release's own tagged
   data layer and this tree open, work on and revert each other's database, and
   sync it (`docs/release_compat.md`). When the lab installs a new release,
-  bump `IN_USE_RELEASE` in `scripts/release-compat.mjs`.
+  bump `IN_USE_RELEASE` in `scripts/compat-releases.mjs`.
 
 ## Maintaining this file
 

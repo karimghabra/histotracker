@@ -5,7 +5,7 @@ released build and this checkout, and has each one open, read, and work on a
 database the other one wrote.
 
 ```bash
-pnpm test:compat                      # the release in use, plus the newest release if newer
+pnpm test:compat                      # the release in use, and only that
 pnpm test:compat app-v0.18.0          # any release, by tag (several may be named)
 pnpm test:compat origin/claude/xyz    # or a release line's tip before it is tagged
 ```
@@ -84,8 +84,9 @@ record, the Logs CSV and XLSX, and the status workbook.
 ## When a version changes
 
 - **The lab installs a new release:** bump `IN_USE_RELEASE` in
-  `scripts/release-compat.mjs`. Until you do, the newest published release is
-  checked alongside the pinned one, so a new release is never silently skipped.
+  `scripts/compat-releases.mjs`. Until you do, the run keeps checking the
+  pinned release only. To check a release the lab has not installed yet, name
+  it: `pnpm test:compat app-v0.18.0`.
 - **You add a column:** make `runTheLab()` write a non-default value into it.
   The harness fails if a new column only ever holds its default, because
   survival of a value nobody writes proves nothing.

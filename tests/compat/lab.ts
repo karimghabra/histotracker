@@ -267,13 +267,17 @@ export async function readEverything(app: App): Promise<Reads> {
   await perRecord(results.listOpenSlideStacks, ["getSlideStack", "listSlidesForStack", "listStackSampleIds"]);
   await perRecord(results.listAllProcessingBatches, ["getProcessingBatchSamples", "getBatchMemberIds"]);
 
-  // The Logs export as the Logs screen hands it rows, and the full workbook
-  // the sync publishes alongside the database.
-  const slides = (results.listAllSlides as Array<{ sample_id: number }>) ?? [];
-  const rows = ((results.listAllSamples as Array<{ id: number }>) ?? []).map((sample) => ({
+  // The Logs export as the Logs screen hands it rows (slides grouped under
+  // their block by code, as LogsView does), and the full workbook the sync
+  // publishes alongside the database.
+  const slides = (results.listAllSlides as Array<{ parent_code: string | null }>) ?? [];
+  const rows = ((results.listAllSamples as Array<{ sample_code: string }>) ?? []).map((sample) => ({
     sample,
-    slides: slides.filter((s) => s.sample_id === sample.id),
+    slides: slides.filter((s) => s.parent_code === sample.sample_code),
   }));
+  if (!rows.some((row) => row.slides.length)) {
+    failures.push("the Logs export rows carry no slides, so the slide half of the export went untested");
+  }
   for (const [name, args] of [
     ["buildLogsCsv", [rows]],
     ["buildLogsXlsxBytes", [rows]],

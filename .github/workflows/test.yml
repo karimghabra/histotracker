@@ -94,10 +94,10 @@ jobs:
           retention-days: 7
 
   # Is this change compatible with the build the lab is running? Runs the REAL
-  # data layer of the release in use (and of the newest release, if newer) from
-  # its tag, against this checkout's: a database each one wrote, opened and
-  # worked on by the other, through upgrade, rollback, backup revert and sync.
-  # The in-use release is IN_USE_RELEASE in scripts/release-compat.mjs.
+  # data layer of the release in use from its tag, against this checkout's: a
+  # database each one wrote, opened and worked on by the other, through
+  # upgrade, rollback, backup revert and sync.
+  # The in-use release is IN_USE_RELEASE in scripts/compat-releases.mjs.
   # See docs/release_compat.md.
   release-compat:
     runs-on: ubuntu-latest

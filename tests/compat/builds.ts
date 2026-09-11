@@ -42,10 +42,11 @@ function resolveCommit(ref: string): string {
     return git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
   } catch {
     // A fresh or shallow clone (CI) has no tags: fetch just this one.
+    const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
     try {
-      git("fetch", "--quiet", "--depth=1", "origin", `refs/tags/${ref}:refs/tags/${ref}`);
+      git("fetch", "--quiet", ...depth, "origin", `refs/tags/${ref}:refs/tags/${ref}`);
     } catch {
-      git("fetch", "--quiet", "--depth=1", "origin", ref);
+      git("fetch", "--quiet", ...depth, "origin", ref);
       return git("rev-parse", "--verify", "FETCH_HEAD^{commit}");
     }
     return git("rev-parse", "--verify", `${ref}^{commit}`);

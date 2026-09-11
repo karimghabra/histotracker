@@ -6,7 +6,7 @@
 // migrator on the first open of a process, then its own getDb() — and each is
 // driven through its own data layer. docs/release_compat.md explains it.
 //
-//   pnpm test:compat                 the release in use, and the newest release
+//   pnpm test:compat                 the release in use
 //   pnpm test:compat app-v0.18.0     any release, by tag
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
