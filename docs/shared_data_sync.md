@@ -50,8 +50,10 @@ Two rules keep updates compatible with existing databases:
    `ensureRuntimeSchema()`** (`src/lib/db.ts`), which `getDb()` runs on *every*
    (re)open. It `PRAGMA table_info`-checks and `ADD COLUMN`s only what's missing —
    a no-op on an up-to-date DB, and the thing that makes opening/reverting an
-   older image safe. **When you add such a column, add a matching line there** (and
-   to the harness invariant "getDb converges late-added runtime columns"). This is
+   older image safe. **When you add such a column, add a matching line there**, and
+   prove it with a harness gate that writes and reads it (as `issue(137)` does for
+   `samples.embedding_notes`) — the harness's `freshDb()` converges every column
+   parsed out of `ensureRuntimeSchema()`, so a regex over `db.ts` adds nothing. This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
 3. **A column may skip its numbered migration** and live in
    `ensureRuntimeSchema()` alone when a numbered migration would break rollback

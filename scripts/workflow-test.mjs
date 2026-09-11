@@ -3218,8 +3218,10 @@ invariant("slide allocators never derive an identifier from a live COUNT", () =>
 
 invariant("getDb converges late-added runtime columns on every (re)open", () => {
   // Forward-compat contract: every additive column current queries depend on is
-  // re-asserted after any DB file swap (undo/sync/backup-revert). If you add a
-  // migration with a new runtime column, add it to ensureRuntimeSchema AND here.
+  // re-asserted after any DB file swap (undo/sync/backup-revert). freshDb() now
+  // converges every column parsed out of ensureRuntimeSchema, so a new column is
+  // proven by a gate that writes and reads it (as issue(137) does for
+  // samples.embedding_notes), not by another regex line here.
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   assert(db.includes("ensureRuntimeSchema"), "getDb must run a runtime schema guard");
   const converged = [
