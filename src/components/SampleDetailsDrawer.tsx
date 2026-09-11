@@ -255,6 +255,11 @@ export function SampleDetailsDrawer({
                   void withdrawStainRequest(sample.id, assayType, assayName)
           }
         />
+        {/* Read at the embedding station, so it sits above the cut notes — the
+            same order the block travels through the bench (#137). */}
+        {sample.embedding_notes && (
+          <Section title="Embedding Notes">{sample.embedding_notes}</Section>
+        )}
         {sample.cut_notes && <Section title="Cut Notes">{sample.cut_notes}</Section>}
         {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
         {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}

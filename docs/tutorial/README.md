@@ -2,7 +2,7 @@
 
 Histometer tracks histology samples from intake through processing, embedding,
 sectioning, staining, imaging and analysis. This walkthrough follows a single
-block, **EE‑0001**, all the way through the pipeline and then shows the records,
+block, **EE‑1**, all the way through the pipeline and then shows the records,
 tagging, request, export and backup features.
 
 > The screenshots are generated automatically by a Playwright walkthrough
@@ -31,15 +31,22 @@ yourself and sign in — actions are attributed to the signed‑in user.
 ![Manage dialog](img/02-manage.png)
 
 Create a project (a short code + a name). Every sample is numbered within its
-project, e.g. `EE‑0001`.
+project, and shown as `EE‑1`, `EE‑2`, … everywhere in the app and in the
+exports.
 
 ![Add a project](img/03-add-project.png)
 
 ## 3. Log a sample
 
 **New Sample** records a block: description, processing type (Short/Long),
-fixative, whether it needs decalcification, and any stains you already know you
-want. It lands in **Pre‑processing**.
+fixative, whether it needs decalcification, **embedding notes** for whoever
+picks up the mould (how it should be oriented, whether it is bisected), and any
+stains you already know you want. It lands in **Pre‑processing**.
+
+With **Quantity** above 1, Embedding Notes gets a switch: **One note for all**
+saves the same note on every sample in the batch, and **A note for each** gives
+every sample code its own line (leave a line blank for none). Switching keeps
+what you typed in the other mode; only the mode on screen is saved.
 
 ![New sample](img/04-new-sample.png)
 
@@ -102,8 +109,12 @@ Dried**). Finishing the last step advances the slides to *Ready for Imaging*.
 
 Switch to **Logs** for a spreadsheet of every sample and slide. Sort by any
 column; filter by project, stain/IHC, stage, assay type, or date; search across
-codes, descriptions, stains and notes. A block marked exhausted shows an
-**Exhausted** badge. Export the current view as CSV or Excel.
+codes, descriptions, stains and notes. Stains that are assigned but not yet cut
+are listed too, marked *(assigned)*, so the log says what the board says — the
+stain and assay-type filters and the search find them, and the CSV/Excel export
+carries them as rows with no slide ID, stage `requested (not cut)`. A block
+marked exhausted shows an **Exhausted** badge and, since it can no longer be
+cut, no *(assigned)* stains. Export the current view as CSV or Excel.
 
 ![Logs](img/14-logs.png)
 
@@ -129,12 +140,14 @@ to clear a tag.
 
 ![Depth tags applied](img/17-depth-tag-applied.png)
 
-## 10. Request a stain
+## 10. Add a stain
 
-You can raise a formal stain request from the sample drawer *or* straight from a
-Logs row — the sample is filled in for you (no typing the code). If a free extra
-exists it's pulled straight into staining; otherwise the block is flagged for a
-fresh cut.
+Expand a Logs row and pick from **Add a stain…** — the block is already scoped,
+so there is no code to type. The sample drawer offers the same control. If a
+free extra exists it's pulled straight into staining; otherwise the block is
+flagged for a fresh cut and the stain shows in the Logs as *(assigned)* until it
+is. A read‑only viewer instead files a formal request for the workstation to
+action.
 
 ![Request a stain](img/18-request-stain.png)
 

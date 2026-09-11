@@ -375,6 +375,81 @@ type-check + code review; the data-layer fix (#12) has a harness gate.
 
 ---
 
+## #136–#137 — what the log could not tell you — unreleased (master)
+
+Both fixed. One schema change: `samples.embedding_notes`, added at runtime with
+no numbered migration.
+
+### #137 — Embedding Notes
+
+**Reported:** "Embedding Notes. During sample creation add a box for embedding
+notes."
+
+**Root cause:** there was no such field. How a specimen is to be embedded —
+which face down, which end proximal, whether it is bisected — is decided at
+intake and read at the embedding station, one station *before* the microtome.
+The only places to write it were Sectioning / Cut Notes, which is read one
+station too late, and General Notes, where it is buried.
+
+**Fix:** `samples.embedding_notes TEXT NOT NULL DEFAULT ''`, added by
+`ensureRuntimeSchema()` alone. It has no numbered migration: a migration would
+leave the build in use unable to open the database, and would re-run on top of
+the converged column after a backup revert, so the database would not open at the
+next launch (https://github.com/karimghabra/histotracker/pull/138). A box in
+`NewSampleDialog` (one note for a batch, or one per sample); read-back in the
+board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX; and
+`RESTORE_COLUMNS`, so undoing an edit restores it rather than blanking it.
+
+**Coverage:** `npm run test:legacy` asserts the column DIRECTLY on the populated
+pre-0023 fixture, by every route an update arrives — launch, a swapped-in image,
+and PATH C, which models the real migrator (its record kept in the file) through
+upgrade, revert to the build in use's backup, and relaunch, and checks that the
+build in use can still open the upgraded file. PATH C fails with the old 0025
+migration in place. That harness now applies *every* migration the fixture
+predates rather than naming 0023 alone, which is how it quietly stopped
+covering "the update". `NewSampleDialog.test.tsx` and
+`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes.
+
+### #136 — assigned stains did not reach the log
+
+**Reported:** "When Stains are assigned they do not show up on the log until
+they have been sectioned. Can they show up earlier in the process so that the
+log has the same info as the main screen. Example: the current fixing TE8-12
+samples have SafO assigned but I cannot tell that from the log."
+
+**Root cause:** the Logs derived a block's agents from its physical `slides`
+alone. The main screen never did — `SampleCard` flags the block from
+`pending_stains` and `SampleDetailsDrawer` lists a "Requested" row per
+outstanding agent. So a block in fixative with SafO assigned had nothing for the
+Logs to read.
+
+**Fix:** `src/lib/logStains.ts` — `outstandingStains()` and `logAgents()`.
+`LogsView` builds its Stains / IHC cell, stain filter, assay-type filter, search
+haystack and stain sort from it, and `export.ts`'s `logRowCells()` emits one row
+per outstanding request (blank Slide ID, Slide Stage `requested (not cut)`). The
+cell collapses to one "(all assigned)" marker only when the block has no glass
+at all; a block that has been cut marks each outstanding agent individually,
+because an agent that was cut and then re-requested is outstanding again.
+A removed or exhausted block lists nothing outstanding — it can no longer be
+cut, so nothing is owed (reasoning at `outstandingStains()`); an archived block
+keeps its requests.
+
+**The part that is easy to get wrong:** the ask was *consistency between the log
+and the main screen*, and the exported log is still the log. Fixing only the
+on-screen table leaves the CSV a technician takes to the bench disagreeing with
+the screen it came from — silently, in both the zero-slide case and the harder
+one where a block already has glass for one agent and owes a second. Both halves
+go through the one helper for exactly that reason.
+
+**Coverage:** `src/lib/logStains.test.ts`; `src/lib/logsCsv.test.ts` and
+`src/lib/logsXlsx.test.ts` (both export shapes, red before the fix);
+`src/components/LogsView.test.tsx` for the "(all assigned)" gate, the
+assay-type filter and a removed block; `tests/e2e/issues-136-137.spec.ts`, which
+asserts the same facts on screen and in the CSV exported from that same view,
+including a block removed before it was cut; harness gates `issue(136, …)` ×3 and `issue(137, …)` over a port of `logAgents()`.
+
+---
+
 ## 0.13.1 — what a second stress harness found
 
 Full write-up: `docs/stress_test_v2.md`. No schema change.

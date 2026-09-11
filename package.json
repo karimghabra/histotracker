@@ -12,6 +12,7 @@
     "test:staining": "node scripts/staining-stack-harness.mjs",
     "test:legacy": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs",
     "test:ui": "vitest run",
+    "test:compat": "node scripts/release-compat.mjs",
     "dev:browser": "vite --config vite.config.playwright.ts",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

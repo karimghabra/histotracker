@@ -49,3 +49,6 @@ tests/fixtures/*.sqlite
 *.sln
 *.sw?
 
+
+# Release trees extracted by the compatibility harness (tests/compat/builds.ts).
+.compat/

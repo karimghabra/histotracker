@@ -208,6 +208,7 @@ test("abuse: hostile text in every field that takes text", async ({
         needs_decalcification: 0,
         cut_notes: value,
         slide_notes: value,
+        embedding_notes: value,
         stains: "",
         preselected_stains: [],
         overall_notes: value,

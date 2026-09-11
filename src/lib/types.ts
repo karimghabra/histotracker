@@ -31,6 +31,8 @@ export interface Sample {
   needs_decalcification: number; // 0 | 1
   cut_notes: string;
   slide_notes: string;
+  /** Orientation and handling for the person embedding the block (#137). */
+  embedding_notes: string;
   stains: string;
   overall_notes: string;
   sectioning_plan: string;
@@ -302,6 +304,14 @@ export interface NewSampleInput {
   needs_decalcification: boolean;
   cut_notes: string;
   slide_notes: string;
+  /**
+   * Orientation and handling for the embedder (#137). Required, so that every
+   * construction site has to decide what to put here rather than inheriting a
+   * silent default — but see addSample(), which coerces a missing value anyway:
+   * `tests/` and `scripts/` are outside tsconfig's `include`, so a hand-written
+   * harness caller is NOT protected by this and must not be able to throw.
+   */
+  embedding_notes: string;
   stains: string;
   /** Agents ticked at creation; preassigned + auto-planned at embed (0.3.3). */
   preselected_stains: Array<{ assay_type: string; assay_name: string }>;

@@ -10,6 +10,7 @@ import {
 } from "./db";
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
+import { outstandingStains } from "./logStains";
 import { displayCode, slideCutAt, slideLetterOf, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
@@ -38,6 +39,7 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
       (s) => (s as unknown as Record<string, string | null>)[stage.column] ?? "",
     ],
   ),
+  ["Embedding Notes", (s) => s.embedding_notes ?? ""],
   ["Cut Notes", (s) => s.cut_notes],
   ["Slide Notes", (s) => s.slide_notes],
   ["Stains / IHC", (s) => s.stains],
@@ -128,6 +130,35 @@ async function writeBytes(path: string, bytes: Uint8Array): Promise<void> {
   await invoke("save_file", { path, contents: Array.from(bytes) });
 }
 
+/** A header row followed by one array of cells per row — write-excel-file's sheet data. */
+function sheetRows<T>(
+  rows: T[],
+  columns: Array<[string, Accessor<T>]>,
+  headerStyle?: object,
+): unknown[] {
+  const header = columns.map(([label]) => (headerStyle ? { value: label, ...headerStyle } : label));
+  const body = rows.map((row) => columns.map(([, fn]) => fn(row)));
+  return [header, ...body];
+}
+
+/**
+ * Render sheets to workbook bytes.
+ *
+ * write-excel-file takes an array of `{ data, sheet, … }` and returns a
+ * `{ toBlob, toFile }` handle (NOT a Blob directly); its types don't model that
+ * overload cleanly, so we call through a narrow signature. Passing the removed
+ * v1 `(data, { schema, sheets })` form instead is silently accepted and writes
+ * an EMPTY workbook — `data[0]` is read as the first ROW, whose cells are then
+ * whole objects — so every writer here goes through this one function.
+ */
+async function xlsxBytes(sheets: unknown[]): Promise<Uint8Array> {
+  const write = writeXlsxFile as unknown as (
+    sheets: unknown[],
+  ) => { toBlob: () => Promise<Blob> };
+  const blob = await write(sheets).toBlob();
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 /** Export all samples as a single CSV file. Returns the saved path, or null if cancelled. */
 export async function exportSamplesCsv(): Promise<string | null> {
   const samples = await listAllSamples();
@@ -151,11 +182,22 @@ const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
-  "Slide Notes", "Sample Notes",
+  "Slide Notes", "Embedding Notes", "Sample Notes",
 ];
 
+/**
+ * The Slide Stage written for an assigned stain that has no glass yet (#136).
+ *
+ * Deliberately not "assigned": that is a real slide stage (a cut slide waiting
+ * to be filed against an assay), and a spreadsheet column that used the same
+ * word for both would be unreadable. This row has no Slide ID and no Cut date,
+ * and says why.
+ */
+const REQUESTED_STAGE = "requested (not cut)";
+
 // One array of cells (in LOGS_HEADERS order) per exported line — one row per
-// slide, plus a single row for a sample with no slides. Shared by CSV and XLSX.
+// slide, then one per stain still only assigned (#136), and a single bare row
+// for a sample with neither. Shared by CSV and XLSX.
 function logRowCells(rows: LogExportRow[]): string[][] {
   const out: string[][] = [];
   for (const { sample, slides } of rows) {
@@ -169,11 +211,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       sample.block_exhausted ? "Yes" : "No",
       (sample.date_added ?? "").slice(0, 10),
     ];
-    if (slides.length === 0) {
-      // 9 empty slide-stage cells + empty Slide Notes, then Sample Notes.
-      out.push([...base, ...Array(10).fill(""), sample.overall_notes ?? ""]);
-      continue;
-    }
+    const tail = [sample.embedding_notes ?? "", sample.overall_notes ?? ""];
     for (const sl of slides) {
       out.push([
         ...base,
@@ -187,8 +225,31 @@ function logRowCells(rows: LogExportRow[]): string[][] {
         sl.stage_pictures_taken_at ?? "",
         sl.stage_analyzed_at ?? "",
         sl.notes ?? "",
-        sample.overall_notes ?? "",
+        ...tail,
       ]);
+    }
+    // #136 — a stain the block has been assigned but nobody has cut for yet.
+    // The Logs table names it and the main screen flags it, so the exported log
+    // has to carry it too, whether or not the block already has other glass.
+    // Without this, exporting a fixing block with SafO assigned produced either
+    // an empty stain column or (worse) three slide rows that mention every
+    // agent EXCEPT the one still outstanding.
+    const requested = outstandingStains(sample);
+    for (const agent of requested) {
+      out.push([
+        ...base,
+        "", // no slide exists yet — that is the whole point of the row
+        agent.assay_type,
+        agent.assay_name,
+        REQUESTED_STAGE,
+        "", "", "", "", "", // never cut, so no bench stamps
+        "", // no slide notes without a slide
+        ...tail,
+      ]);
+    }
+    if (slides.length === 0 && requested.length === 0) {
+      // Nothing cut and nothing owed: one row so the block still appears.
+      out.push([...base, ...Array(10).fill(""), ...tail]);
     }
   }
   return out;
@@ -216,6 +277,14 @@ export async function saveLogsCsv(rows: LogExportRow[]): Promise<string | null> 
   return path;
 }
 
+/**
+ * Build the Logs workbook — the same rows as the CSV, on one "Log" sheet.
+ * Pure (no save dialog) so the exported bytes can be unit tested.
+ */
+export async function buildLogsXlsxBytes(rows: LogExportRow[]): Promise<Uint8Array> {
+  return xlsxBytes([{ data: [LOGS_HEADERS, ...logRowCells(rows)], sheet: "Log" }]);
+}
+
 /** Save the same Logs rows as a single-sheet XLSX workbook. */
 export async function saveLogsXlsx(rows: LogExportRow[]): Promise<string | null> {
   const path = await save({
@@ -223,22 +292,7 @@ export async function saveLogsXlsx(rows: LogExportRow[]): Promise<string | null>
     filters: [{ name: "Excel Workbook", extensions: ["xlsx"] }],
   });
   if (!path) return null;
-  const objects = logRowCells(rows).map((cells) =>
-    Object.fromEntries(LOGS_HEADERS.map((h, i) => [h, cells[i] ?? ""])),
-  );
-  const schema = LOGS_HEADERS.map((column) => ({
-    column,
-    type: String,
-    value: (r: Record<string, string>) => r[column],
-  }));
-  // Use the same multi-sheet overload as exportWorkbookXlsx (a single "Log"
-  // sheet); the single-sheet `{ schema }` form is rejected by this version.
-  const write = writeXlsxFile as unknown as (
-    data: unknown[],
-    opts: { schema: unknown[]; sheets: string[] },
-  ) => { toBlob: () => Promise<Blob> };
-  const blob = await write([objects], { schema: [schema], sheets: ["Log"] }).toBlob();
-  await writeBytes(path, new Uint8Array(await blob.arrayBuffer()));
+  await writeBytes(path, await buildLogsXlsxBytes(rows));
   return path;
 }
 
@@ -257,46 +311,16 @@ export async function exportWorkbookXlsx(): Promise<string | null> {
   });
   if (!path) return null;
 
-  const projectSchema = PROJECT_COLUMNS.map(([column, fn]) => ({
-    column,
-    type: String,
-    value: (p: Project) => fn(p),
-  }));
-  const sampleSchema = SAMPLE_COLUMNS.map(([column, fn]) => ({
-    column,
-    type: String,
-    value: (s: Sample) => fn(s),
-  }));
-  const sectionSchema = SECTION_COLUMNS.map(([column, fn]) => ({
-    column,
-    type: String,
-    value: (row: SectionRequest) => fn(row),
-  }));
-  const slideSchema = SLIDE_COLUMNS.map(([column, fn]) => ({
-    column,
-    type: String,
-    value: (row: Slide) => fn(row),
-  }));
-  const batchSchema = BATCH_COLUMNS.map(([column, fn]) => ({
-    column,
-    type: String,
-    value: (row: ProcessingBatch) => fn(row),
-  }));
-
-  // write-excel-file's multi-sheet browser overload returns a { toBlob, toFile }
-  // handle (NOT a Blob directly); its types don't model that overload cleanly,
-  // so we call through a narrow signature and take the blob via toBlob().
-  const write = writeXlsxFile as unknown as (
-    data: unknown[],
-    opts: { schema: unknown[]; sheets: string[] },
-  ) => { toBlob: () => Promise<Blob> };
-
-  const blob = await write([projects, samples, sections, slides, batches], {
-    schema: [projectSchema, sampleSchema, sectionSchema, slideSchema, batchSchema],
-    sheets: ["Projects", "Samples", "Cut Orders", "Slides", "Processing Batches"],
-  }).toBlob();
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  await writeBytes(path, bytes);
+  await writeBytes(
+    path,
+    await xlsxBytes([
+      { data: sheetRows(projects, PROJECT_COLUMNS), sheet: "Projects" },
+      { data: sheetRows(samples, SAMPLE_COLUMNS), sheet: "Samples" },
+      { data: sheetRows(sections, SECTION_COLUMNS), sheet: "Cut Orders" },
+      { data: sheetRows(slides, SLIDE_COLUMNS), sheet: "Slides" },
+      { data: sheetRows(batches, BATCH_COLUMNS), sheet: "Processing Batches" },
+    ]),
+  );
   return path;
 }
 
@@ -310,12 +334,6 @@ const STATUS_HEADER_STYLE = {
   align: "left" as const,
 };
 
-function statusSheetRows<T>(rows: T[], columns: Array<[string, Accessor<T>]>): unknown[] {
-  const header = columns.map(([label]) => ({ value: label, ...STATUS_HEADER_STYLE }));
-  const body = rows.map((row) => columns.map(([, fn]) => fn(row)));
-  return [header, ...body];
-}
-
 /**
  * Build the human-facing 2-sheet status workbook ("Sample Status", "Slide
  * Status") as raw bytes, so the sync layer can upload it as a release asset
@@ -324,18 +342,16 @@ function statusSheetRows<T>(rows: T[], columns: Array<[string, Accessor<T>]>): u
 export async function buildStatusWorkbookBytes(): Promise<Uint8Array> {
   const [samples, slides] = await Promise.all([listAllSamples(), listAllSlides()]);
 
-  const sheets = [
-    { data: statusSheetRows(samples, SAMPLE_COLUMNS), sheet: "Sample Status", stickyRowsCount: 1 },
-    { data: statusSheetRows(slides, SLIDE_COLUMNS), sheet: "Slide Status", stickyRowsCount: 1 },
-  ];
-
-  // The multi-sheet browser overload takes an array of { data, sheet, ... } and
-  // returns a { toBlob, toFile } handle (NOT a Blob directly); its types don't
-  // model this overload cleanly, so we call through a narrow signature and take
-  // the blob via toBlob() (same approach as exportWorkbookXlsx above).
-  const write = writeXlsxFile as unknown as (
-    sheets: unknown[],
-  ) => { toBlob: () => Promise<Blob> };
-  const blob = await write(sheets).toBlob();
-  return new Uint8Array(await blob.arrayBuffer());
+  return xlsxBytes([
+    {
+      data: sheetRows(samples, SAMPLE_COLUMNS, STATUS_HEADER_STYLE),
+      sheet: "Sample Status",
+      stickyRowsCount: 1,
+    },
+    {
+      data: sheetRows(slides, SLIDE_COLUMNS, STATUS_HEADER_STYLE),
+      sheet: "Slide Status",
+      stickyRowsCount: 1,
+    },
+  ]);
 }

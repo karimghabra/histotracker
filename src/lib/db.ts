@@ -139,6 +139,16 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // them would break both.
   await ensureColumn(db, "slides", "requested_assay_type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "slides", "requested_assay_name", "TEXT NOT NULL DEFAULT ''");
+  // What the embedder is told (#137), read on every sample row in the drawer,
+  // the Logs and both exports. RUNTIME-ONLY — deliberately no numbered
+  // migration. A migration records its version in the file, and that record is
+  // what breaks compatibility here: the build in use (0.17.0) refuses to open a
+  // database carrying a version it does not know, and after a revert to any
+  // backup taken before this column existed, the next launch re-runs the
+  // migration's ADD COLUMN on top of the column this line already added
+  // ("duplicate column name") and the database will not open. Adding it here
+  // alone leaves neither record nor collision. See AGENTS.md.
+  await ensureColumn(db, "samples", "embedding_notes", "TEXT NOT NULL DEFAULT ''");
   // Marker table for one-time data translations (see reconcileStainRequests).
   await db.execute(
     `CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')`,
@@ -768,8 +778,9 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
     `INSERT INTO samples (
         project_id, project_sample_number, sample_code, sample_description, date_added,
         processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-        stains, preselected_stains, overall_notes, current_stage, stage_received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
+        embedding_notes, stains, preselected_stains, overall_notes, current_stage,
+        stage_received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
     [
       input.project_id,
       number,
@@ -781,6 +792,11 @@ export async function addSample(input: NewSampleInput, projectCode: string): Pro
       input.needs_decalcification ? 1 : 0,
       input.cut_notes.trim(),
       input.slide_notes.trim(),
+      // Coerced, not asserted. NewSampleInput requires this field so that TS
+      // call sites must think about it, but `tests/` and `scripts/` are outside
+      // tsconfig's `include` and construct these payloads by hand — a stale one
+      // must write an empty note, never throw a TypeError mid-harness.
+      (input.embedding_notes ?? "").trim(),
       input.stains.trim(),
       preselected,
       input.overall_notes.trim(),
@@ -911,7 +927,8 @@ export async function updateSampleDetails(
   await db.execute(
     `UPDATE samples
         SET sample_description = ?, processing_type = ?, fixative_agent = ?,
-            needs_decalcification = ?, cut_notes = ?, slide_notes = ?, stains = ?, overall_notes = ?
+            needs_decalcification = ?, cut_notes = ?, slide_notes = ?, embedding_notes = ?,
+            stains = ?, overall_notes = ?
       WHERE id = ?`,
     [
       input.sample_description.trim(),
@@ -920,6 +937,7 @@ export async function updateSampleDetails(
       input.needs_decalcification ? 1 : 0,
       input.cut_notes.trim(),
       input.slide_notes.trim(),
+      (input.embedding_notes ?? "").trim(),
       input.stains.trim(),
       input.overall_notes.trim(),
       sampleId,
@@ -946,7 +964,8 @@ export async function getSample(sampleId: number): Promise<Sample | null> {
 const RESTORE_COLUMNS = [
   "project_sample_number", "sample_code", "sample_description", "date_added",
   "processing_type", "fixative_agent", "needs_decalcification", "cut_notes",
-  "slide_notes", "stains", "preselected_stains", "overall_notes", "sectioning_plan", "current_stage",
+  "slide_notes", "embedding_notes", "stains", "preselected_stains", "overall_notes",
+  "sectioning_plan", "current_stage",
   "stage_received_at", "decalc_completed_at", "fixative_placed_at", "fixative_removed_at",
   "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",
   "stage_embedded_at", "stage_needs_sectioning_at", "stage_sectioned_at", "stage_stain_requested_at",

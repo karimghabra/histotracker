@@ -40,7 +40,7 @@ restore). All three swap a DB *file* under the live connection, and
 never re-migrated. So an image that predates a column can go live under a newer
 build (e.g. reverting to an older backup after an update).
 
-Two rules keep updates compatible with existing databases:
+Three rules keep updates compatible with existing databases:
 
 1. **Migrations are additive.** New numbered migration files only `ADD COLUMN` /
    `CREATE TABLE`; never edit an applied migration and never drop/rename a column
@@ -50,9 +50,20 @@ Two rules keep updates compatible with existing databases:
    `ensureRuntimeSchema()`** (`src/lib/db.ts`), which `getDb()` runs on *every*
    (re)open. It `PRAGMA table_info`-checks and `ADD COLUMN`s only what's missing —
    a no-op on an up-to-date DB, and the thing that makes opening/reverting an
-   older image safe. **When you add such a column, add a matching line there** (and
-   to the harness invariant "getDb converges late-added runtime columns"). This is
+   older image safe. **When you add such a column, add a matching line there**, and
+   prove it with a harness gate that writes and reads it (as `issue(137)` does for
+   `samples.embedding_notes`) — the harness's `freshDb()` converges every column
+   parsed out of `ensureRuntimeSchema()`, so a regex over `db.ts` adds nothing. This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
+3. **A column may skip its numbered migration** and live in
+   `ensureRuntimeSchema()` alone when a numbered migration would break rollback
+   to the build in use or a backup revert; precedent `samples.embedding_notes`
+   (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
+
+`pnpm test:compat` checks these rules against a real release rather than
+trusting them: the release's own tagged data layer and this tree open, work on,
+revert and sync each other's database, through the modelled sqlx migrator
+(`docs/release_compat.md`).
 
 ### Safe to change (sync is unaffected)
 - All UI, components, board layout, styling, hooks

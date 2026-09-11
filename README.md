@@ -102,7 +102,7 @@ legacy/              original Python prototype (operational CSV exports are igno
 
 Implemented:
 
-- Projects with auto-generated per-project sample IDs (`EE-0001`)
+- Projects with auto-generated per-project sample IDs (`EE-1`)
 - Sample intake and the two-lane, compact-list drag-and-drop workflow board
 - Shift/Ctrl multi-selection and persistent processing batches with a batch-start checklist
 - Stage timestamping and timed processing auto-advance (18h short / 52h long)

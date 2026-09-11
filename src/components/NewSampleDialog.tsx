@@ -21,10 +21,17 @@ function codeAt(first: string, index: number): string {
   return `${match[1]}${String(n).padStart(width, "0")}`;
 }
 
-/** Expand a single next code ("EE-22") into a range label for quantity > 1. */
+/**
+ * The label shown for the batch about to be created — the DISPLAY boundary.
+ *
+ * The arithmetic above deliberately works on the stored, zero-padded form; only
+ * here are the zeros stripped, so the dialog names a block the same way the
+ * board, the Logs and both exports do. Both ends of a range are formatted: a
+ * half-formatted "EE-1 – EE-0005" would be worse than either form alone.
+ */
 function codeRange(first: string, quantity: number): string {
-  if (quantity <= 1) return first;
-  return `${first} – ${codeAt(first, quantity - 1)}`;
+  if (quantity <= 1) return displayCode(first);
+  return `${displayCode(first)} – ${displayCode(codeAt(first, quantity - 1))}`;
 }
 
 export function NewSampleDialog({
@@ -69,6 +76,16 @@ export function NewSampleDialog({
   }, [pasted, quantity]);
   // Agents ticked for this sample (issue #1). Keyed "type::name".
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // #137 — orientation and handling for the person embedding the block. It is
+  // decided at intake ("cut side down", "bisect through the enthesis") and read
+  // at the embedding station, so it is asked for here and kept apart from the
+  // cut notes, which are read one station later at the microtome.
+  const [embeddingNotes, setEmbeddingNotes] = useState("");
+  // A batch either shares ONE embedding note or gives each sample its own. Both
+  // are held at once, so switching modes never throws away what was typed in
+  // the other: only the active mode is saved.
+  const [noteMode, setNoteMode] = useState<"all" | "each">("all");
+  const [notesEach, setNotesEach] = useState<string[]>([]);
   const [cutNotes, setCutNotes] = useState("");
   const [slideNotes, setSlideNotes] = useState("");
   const [overallNotes, setOverallNotes] = useState("");
@@ -77,7 +94,7 @@ export function NewSampleDialog({
     nextSampleCode(project.id, project.code).then(setPreviewCode);
   }, [project.id, project.code]);
 
-  // For quantity > 1, preview the full "EE-0022 – EE-0026" range.
+  // For quantity > 1, preview the full "EE-22 – EE-26" range.
   const previewLabel = codeRange(previewCode, quantity);
 
   /**
@@ -112,6 +129,25 @@ export function NewSampleDialog({
     .filter((a) => picked.has(`${a.assay_type}::${a.name}`))
     .map((a) => ({ assay_type: a.assay_type, assay_name: a.name }));
 
+  // "A note for each" only means something for a batch; one sample has one box.
+  const eachNotes = quantity > 1 && noteMode === "each";
+  const noteRows = Array.from({ length: quantity }, (_, i) => notesEach[i] ?? "");
+  const sharedNote = embeddingNotes.trim();
+
+  function chooseNoteMode(mode: "all" | "each") {
+    // Splitting a shared note with nothing typed per sample yet starts every
+    // row from it, so "the same for all but one" is a single edit. A row that
+    // already holds text is never overwritten.
+    if (mode === "each" && sharedNote && noteRows.every((r) => !r.trim())) {
+      setNotesEach((prev) => {
+        const next = [...prev];
+        for (let i = 0; i < quantity; i += 1) next[i] = embeddingNotes;
+        return next;
+      });
+    }
+    setNoteMode(mode);
+  }
+
   function toggle(key: string) {
     setPicked((prev) => {
       const next = new Set(prev);
@@ -135,6 +171,7 @@ export function NewSampleDialog({
         needs_decalcification: needsDecalc,
         cut_notes: cutNotes,
         slide_notes: slideNotes,
+        embedding_notes: eachNotes ? "" : embeddingNotes,
         stains: preselectedStains.map((a) => a.assay_name).join(", "),
         preselected_stains: preselectedStains,
         overall_notes: overallNotes,
@@ -145,7 +182,12 @@ export function NewSampleDialog({
       // Correcting Quantity back to 1 hides the rows, so their contents must
       // stop counting too — otherwise descriptions[0] silently overrode the
       // Description field the user could actually see.
-      quantity > 1 ? descriptions.slice(0, quantity) : undefined,
+      quantity > 1
+        ? {
+            descriptions: descriptions.slice(0, quantity),
+            embeddingNotes: eachNotes ? noteRows : undefined,
+          }
+        : undefined,
     );
     setSaving(false);
     onClose();
@@ -314,6 +356,89 @@ export function NewSampleDialog({
           {autoExtras === 1 ? "" : "s"} at embedding.
         </p>
       </Field>
+      {/* Embedding comes BEFORE sectioning at the bench, so it comes before the
+          cut notes here — and it is its own box rather than a line in them,
+          because the two are read by different people at different stations. */}
+      {/* Not a <Field>: that is a <label>, and a label wrapping the mode
+          switch would hand every click on it to the first control inside. */}
+      <div className="mb-3.5">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+          <label
+            htmlFor={eachNotes ? undefined : "embedding-notes"}
+            className="text-xs font-medium text-ink-soft"
+          >
+            Embedding Notes
+          </label>
+          {quantity > 1 && (
+            <div
+              role="radiogroup"
+              aria-label="Notes apply to"
+              className="inline-flex rounded-md border border-line bg-surface p-0.5 text-[11px]"
+            >
+              {(
+                [
+                  ["all", `One note for all ${quantity}`],
+                  ["each", "A note for each"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={noteMode === mode}
+                  onClick={() => chooseNoteMode(mode)}
+                  className={cn(
+                    "rounded px-2 py-0.5 font-medium transition",
+                    noteMode === mode
+                      ? "bg-brand text-white shadow-sm"
+                      : "text-ink-soft hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {eachNotes ? (
+          <div className="max-h-36 space-y-1 overflow-y-auto rounded-lg border border-line bg-surface p-2 thin-scroll">
+            {noteRows.map((note, i) => {
+              const code = displayCode(codeAt(previewCode, i));
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="w-20 shrink-0 text-[11px] font-medium text-ink-soft">{code}</span>
+                  <TextInput
+                    aria-label={`Embedding note for ${code}`}
+                    value={note}
+                    placeholder="Leave blank for none"
+                    onChange={(e) =>
+                      setNotesEach((prev) => {
+                        const next = [...prev];
+                        while (next.length < quantity) next.push("");
+                        next[i] = e.target.value;
+                        return next;
+                      })
+                    }
+                    className="py-1 text-[11px]"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <TextArea
+            id="embedding-notes"
+            rows={2}
+            value={embeddingNotes}
+            onChange={(e) => setEmbeddingNotes(e.target.value)}
+            placeholder={
+              quantity > 1
+                ? `e.g. cut face down — saved on all ${quantity} samples`
+                : "e.g. cut face down, proximal end to the left"
+            }
+          />
+        )}
+      </div>
       <Field label="Sectioning / Cut Notes">
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />
       </Field>

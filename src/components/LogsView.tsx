@@ -14,6 +14,8 @@ import {
   STAGE_LABELS,
   STAGE_ORDER,
 } from "../lib/stages";
+import { logAgents, outstandingStains } from "../lib/logStains";
+import type { AssignedStain, LogAgent } from "../lib/logStains";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
 import { useReadOnly } from "../lib/readOnly";
 
@@ -388,7 +390,13 @@ export function LogsView() {
     () =>
       samples.map((sample) => {
         const slidesForSample = slidesBySample.get(sample.sample_code) ?? [];
-        const agents = [...new Set(slidesForSample.map((s) => s.assay_name).filter(Boolean))];
+        // #136 — the agents this block involves, NOT just the ones already on
+        // glass. A block in fixative with SafO assigned reads as "SafO" here
+        // exactly as it does on the board, and the same helper feeds the CSV /
+        // XLSX export so the two cannot disagree.
+        const agentEntries = logAgents(sample, slidesForSample);
+        const agents = agentEntries.map((a) => a.name);
+        const requested = outstandingStains(sample);
         const phases = samplePhases(sample, slidesForSample);
         const phase = furthestPhase(phases);
         const progress = analyzedProgress(slidesForSample);
@@ -403,7 +411,9 @@ export function LogsView() {
         return {
           sample,
           slides: slidesForSample,
+          agentEntries,
           agents,
+          requested,
           phase,
           phases,
           progress,
@@ -434,7 +444,7 @@ export function LogsView() {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
-      const { sample, slides: sampleSlides, agents, phases: rowPhases } = row;
+      const { sample, slides: sampleSlides, agents, requested, phases: rowPhases } = row;
       // Archived samples stay out of the way unless explicitly asked for (#74).
       if (!showArchived && sample.archived_at) return false;
       // …and so do removed ones (#105, #96).
@@ -444,7 +454,16 @@ export function LogsView() {
       // slides are in staining is in both places, and the filters read as
       // inventories (#119).
       if (phases.size > 0 && ![...rowPhases].some((p) => phases.has(p))) return false;
-      if (assayType !== "all" && !sampleSlides.some((s) => s.assay_type === assayType)) return false;
+      // #136 again: an assigned-but-uncut agent carries its type, so a block
+      // with an IHC only assigned is found by the type filter exactly as it is
+      // found by the stain filter and named in the Stains cell.
+      if (
+        assayType !== "all" &&
+        !sampleSlides.some((s) => s.assay_type === assayType) &&
+        !requested.some((a) => a.assay_type === assayType)
+      ) {
+        return false;
+      }
       if (stain !== "all" && !agents.some((a) => a.toLowerCase() === stain.toLowerCase())) return false;
       const added = (sample.date_added || "").slice(0, 10);
       if (fromDate && added && added < fromDate) return false;
@@ -747,7 +766,8 @@ export function LogsView() {
                 <FragmentRow
                   key={row.sample.id}
                   sample={row.sample}
-                  agents={row.agents}
+                  agentEntries={row.agentEntries}
+                  requested={row.requested}
                   slides={row.slides}
                   // A removed block has no live slides, so the derived phase
                   // falls back to its stage column — which removal overwrote.
@@ -863,7 +883,8 @@ function DepthTagDialog({
 
 function FragmentRow({
   sample,
-  agents,
+  agentEntries,
+  requested,
   slides,
   phaseLabel,
   progress,
@@ -885,7 +906,10 @@ function FragmentRow({
   onToggleSlideSelect,
 }: {
   sample: Sample;
-  agents: string[];
+  /** Every agent named on the block — cut glass first, then still-assigned. */
+  agentEntries: LogAgent[];
+  /** The outstanding stain requests themselves, listed in the drill-down. */
+  requested: AssignedStain[];
   slides: Slide[];
   phaseLabel: string;
   progress: { done: number; total: number };
@@ -946,6 +970,18 @@ function FragmentRow({
     stainFilter && onlyMatching
       ? listedSlides.filter((s) => s.assay_name?.toLowerCase() === stainFilter.toLowerCase())
       : listedSlides;
+  // Nothing cut yet, so every agent this block names is one it still owes.
+  // Gated on the absence of glass, NOT on every agent carrying a request: an
+  // agent that was cut and then re-requested is outstanding again, and saying
+  // "all assigned" over a block that already has slides would be a lie.
+  const allAssigned = agentEntries.length > 0 && slides.length === 0;
+  // "Only matching" narrows the outstanding requests the same way it narrows the
+  // glass — otherwise filtering to one agent still listed every other agent the
+  // block owes, right under a slide list that had been filtered down to it.
+  const visibleRequested =
+    stainFilter && onlyMatching
+      ? requested.filter((a) => a.assay_name.toLowerCase() === stainFilter.toLowerCase())
+      : requested;
   const liveSlideCount = slides.length - removedCount;
   const slideTitle = [
     extras > 0 ? `${progress.total} assay · ${extras} extra` : `${liveSlideCount} slides`,
@@ -1024,8 +1060,51 @@ function FragmentRow({
             )}
           </div>
         </td>
-        <td className="max-w-[14rem] truncate px-2 py-1.5 text-ink-soft">
-          {agents.length ? agents.join(", ") : "—"}
+        {/* An outstanding request is named in the same list as the glass — that
+            is #136 — but it is a plan, not a fact, so it is toned like the
+            board's "Awaiting stains" line rather than reading as a slide that
+            exists. The cell truncates, so the full list, and which of them are
+            still only assigned, is also in the tooltip.
+
+            A block that has not been cut owes EVERY agent it names, which is the
+            common case and the one in the report. Repeating "(assigned)" after
+            each of three names there was noise that pushed the third name out of
+            the cell entirely, so that case says it once for the whole list —
+            spelled "all assigned" when there is more than one, because a
+            trailing "(assigned)" after a comma list reads as belonging to the
+            last name alone. */}
+        <td
+          className="max-w-[16rem] truncate px-2 py-1.5 text-ink-soft"
+          title={
+            agentEntries.length
+              ? agentEntries
+                  .map((a) => (a.requested ? `${a.name} (assigned, not cut yet)` : a.name))
+                  .join(", ")
+              : undefined
+          }
+        >
+          {agentEntries.length === 0 ? (
+            "—"
+          ) : allAssigned ? (
+            <span className="text-brand">
+              {agentEntries.map((a) => a.name).join(", ")}
+              <span className="ml-1 text-[10px]">
+                ({agentEntries.length > 1 ? "all assigned" : "assigned"})
+              </span>
+            </span>
+          ) : (
+            agentEntries.map((agent, i) => (
+              <span key={`${agent.name}-${i}`}>
+                {i > 0 && ", "}
+                <span className={cn(agent.requested && "text-brand")}>
+                  {agent.name}
+                  {agent.requested && (
+                    <span className="ml-0.5 text-[10px] text-brand">(assigned)</span>
+                  )}
+                </span>
+              </span>
+            ))
+          )}
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums text-ink-soft" title={slideTitle}>
           {liveSlideCount}
@@ -1178,6 +1257,18 @@ function FragmentRow({
               </>
             )}
 
+            {/* Written at intake for whoever embeds the block (#137). Read-only
+                here, as it is in the board drawer — it describes a decision
+                made about the specimen, not a running commentary. */}
+            {sample.embedding_notes?.trim() && (
+              <>
+                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Embedding notes
+                </h4>
+                <p className="whitespace-pre-wrap text-[11px] text-ink">{sample.embedding_notes}</p>
+              </>
+            )}
+
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
@@ -1193,6 +1284,36 @@ function FragmentRow({
               placeholder="Notes about this sample…"
               onSave={(notes) => void editSampleNotes(sample.id, notes)}
             />
+
+            {/* #136 — the stains this block owes. They have no slide and no
+                timeline, so they cannot live in the list below; without them
+                the expanded row contradicted the Stains / IHC cell above it,
+                which now names them. Same list, same wording ("Requested") as
+                the board drawer. */}
+            {visibleRequested.length > 0 && (
+              <>
+                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                  Assigned — not cut yet ({visibleRequested.length}
+                  {visibleRequested.length !== requested.length ? ` of ${requested.length}` : ""})
+                </h4>
+                <ul className="mb-1 space-y-0.5 rounded-md border border-line/60 px-2 py-1.5">
+                  {visibleRequested.map((agent, i) => (
+                    <li
+                      key={`${agent.assay_type}-${agent.assay_name}-${i}`}
+                      className="flex items-baseline gap-1.5 text-[11px]"
+                    >
+                      {agent.assay_type && (
+                        <span className="rounded bg-brand/10 px-1 text-[9px] font-semibold uppercase text-brand">
+                          {agent.assay_type}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-ink">{agent.assay_name}</span>
+                      <span className="shrink-0 text-[10px] text-brand">Requested</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
 
             {/* Slides — each with its own separate timeline. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">

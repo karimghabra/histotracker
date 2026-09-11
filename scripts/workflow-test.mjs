@@ -90,6 +90,31 @@ function duplicateLabel(ordinal) {
   return label;
 }
 
+/**
+ * The columns getDb() converges on every open, read out of ensureRuntimeSchema
+ * in `src/lib/db.ts` rather than retyped — same reasoning as the stage lists
+ * above. Some columns exist ONLY there, with no numbered migration
+ * (`samples.embedding_notes`; see the note beside it in db.ts), so a schema
+ * built from the migrations alone is not the schema the app actually runs on.
+ */
+const RUNTIME_COLUMNS = (() => {
+  const src = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  const body = /async function ensureRuntimeSchema[\s\S]*?\n}/.exec(src)?.[0] ?? "";
+  const cols = [...body.matchAll(/ensureColumn\(\s*db,\s*"(\w+)",\s*"(\w+)",\s*"([^"]+)"\s*\)/g)]
+    .map(([, table, column, type]) => ({ table, column, type }));
+  if (cols.length === 0) throw new Error("could not read ensureRuntimeSchema out of db.ts");
+  return cols;
+})();
+
+// Port of ensureRuntimeSchema's column half — additive, a no-op when present.
+function convergeRuntimeColumns(db) {
+  for (const { table, column, type } of RUNTIME_COLUMNS) {
+    const have = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
+/** The database getDb() hands the app: every migration, then convergence. */
 function freshDb() {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
@@ -97,6 +122,7 @@ function freshDb() {
     if (!file.endsWith(".sql")) continue;
     db.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
   }
+  convergeRuntimeColumns(db);
   return db;
 }
 
@@ -160,13 +186,18 @@ function makeApi(db) {
       `INSERT INTO samples (
          project_id, project_sample_number, sample_code, sample_description, date_added,
          processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
-         stains, preselected_stains, overall_notes, current_stage, stage_received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, '', 'received', ?)`,
+         embedding_notes, stains, preselected_stains, overall_notes, current_stage,
+         stage_received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, '', 'received', ?)`,
       [
         projectId, number, code, description, "2026-01-01",
         opts.processingType ?? "Short",
         opts.fixative ?? "PFA",
         opts.needsDecalc ? 1 : 0,
+        // #137 — asked for at intake, so the port writes it the same way db.ts
+        // does. Coerced, matching addSample(): a caller that predates the field
+        // stores an empty note rather than throwing.
+        String(opts.embeddingNotes ?? "").trim(),
         opts.stains ?? "",
         preselected,
         now(),
@@ -3187,8 +3218,10 @@ invariant("slide allocators never derive an identifier from a live COUNT", () =>
 
 invariant("getDb converges late-added runtime columns on every (re)open", () => {
   // Forward-compat contract: every additive column current queries depend on is
-  // re-asserted after any DB file swap (undo/sync/backup-revert). If you add a
-  // migration with a new runtime column, add it to ensureRuntimeSchema AND here.
+  // re-asserted after any DB file swap (undo/sync/backup-revert). freshDb() now
+  // converges every column parsed out of ensureRuntimeSchema, so a new column is
+  // proven by a gate that writes and reads it (as issue(137) does for
+  // samples.embedding_notes), not by another regex line here.
   const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
   assert(db.includes("ensureRuntimeSchema"), "getDb must run a runtime schema guard");
   const converged = [
@@ -3204,6 +3237,141 @@ invariant("getDb converges late-added runtime columns on every (re)open", () => 
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// 0.13.3 — the log says what the main screen says (#136), and the embedder gets
+// told what was decided at intake (#137).
+// ---------------------------------------------------------------------------
+
+/**
+ * Port of logAgents() — src/lib/logStains.ts.
+ *
+ * Both halves of the Logs go through that one helper: the on-screen table and
+ * the CSV/XLSX export. That is the point of #136 — the ask was CONSISTENCY
+ * between the log and the main screen, and two implementations that happen to
+ * agree today are what produced the bug in the first place.
+ */
+function logAgentsPort(api, sampleId) {
+  const out = [];
+  const seen = new Map();
+  const slides = api.all(
+    `SELECT sl.assay_name AS name FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sr.sample_id = ? AND sl.assay_name <> '' ORDER BY sl.id`,
+    [sampleId],
+  );
+  for (const slide of slides) {
+    const key = String(slide.name).toLowerCase();
+    if (seen.has(key)) continue;
+    const entry = { name: slide.name, requested: false };
+    seen.set(key, entry);
+    out.push(entry);
+  }
+  const row = api.get(
+    `SELECT preselected_stains, current_stage, block_exhausted FROM samples WHERE id = ?`,
+    [sampleId],
+  );
+  const cuttable = row.current_stage !== "removed" && row.block_exhausted !== 1;
+  const outstanding = cuttable && row.preselected_stains ? JSON.parse(row.preselected_stains) : [];
+  for (const agent of outstanding) {
+    const key = String(agent.assay_name).toLowerCase();
+    const existing = seen.get(key);
+    if (existing) {
+      existing.requested = true;
+      continue;
+    }
+    const entry = { name: agent.assay_name, requested: true };
+    seen.set(key, entry);
+    out.push(entry);
+  }
+  return out;
+}
+
+// "The current fixing TE8-12 samples have SafO assigned but I cannot tell that
+// from the log." The block has no cut group and no glass, so everything the log
+// used to read about it was empty.
+issue(136, "a stain assigned to an uncut block is named in the log", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "TE8-12 fixing sample", {
+    preselectedStains: [{ assay_type: "stain", assay_name: "Safranin O" }],
+  });
+  eq(api.all(`SELECT id FROM section_requests WHERE sample_id = ?`, [id]).length, 0,
+     "precondition: nothing has been cut, which is why the old log said nothing");
+
+  const assigned = logAgentsPort(api, id);
+  eq(assigned.length, 1, "the block names exactly the agent it owes");
+  eq(assigned[0].name, "Safranin O", "…by name, exactly as the board card does");
+  eq(assigned[0].requested, true, "marked as a plan, not as glass that exists");
+
+  // And once it IS cut, the same helper reports it as a fact rather than a
+  // request — the log must not go on calling a made slide "assigned".
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "Safranin O", assay_type: "stain", assay_name: "Safranin O" },
+  ]);
+  const cut = logAgentsPort(api, id);
+  eq(cut.length, 1, "one agent, not one per stage it passed through");
+  eq(cut[0].requested, false, "the cut fulfilled the request, so it is no longer outstanding");
+});
+
+// The harder half of #136, and the one with no existing path: a block that
+// already HAS glass, with a second agent still only assigned. Its slide rows
+// named every agent except the one still owed.
+issue(136, "a block with slides still names a second stain that is only assigned", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "cut but still owing a stain");
+  api.markEmbedded(id);
+  api.createSectionRequests(id, [
+    { duplicates: 1, stains: "Alcian Blue", assay_type: "stain", assay_name: "Alcian Blue" },
+  ]);
+  api.requestStainForSample(id, "stain", "Safranin O");
+
+  const agents = logAgentsPort(api, id);
+  eq(agents.map((a) => `${a.name}:${a.requested}`).join(", "),
+     "Alcian Blue:false, Safranin O:true",
+     "glass first, then what is still owed — and the owed one is not dropped");
+});
+
+// A block that can no longer be cut owes nothing: the log must not keep saying
+// "assigned, not cut yet" about a removed or exhausted block.
+issue(136, "a removed or exhausted block lists no assigned stain", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const safO = { preselectedStains: [{ assay_type: "stain", assay_name: "Safranin O" }] };
+  const live = api.addSample(p, "EE", "still owed", safO);
+  const removed = api.addSample(p, "EE", "removed before the cut", safO);
+  api.removeSample(removed.id);
+  const spent = api.addSample(p, "EE", "exhausted before the cut", safO);
+  api.run(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [spent.id]);
+
+  eq(logAgentsPort(api, live.id).map((a) => `${a.name}:${a.requested}`).join(", "),
+     "Safranin O:true", "a live block still names what it owes");
+  eq(logAgentsPort(api, removed.id).length, 0, "a removed block owes nothing");
+  eq(logAgentsPort(api, spent.id).length, 0, "an exhausted block owes nothing");
+
+  api.run(`UPDATE samples SET block_exhausted = 0 WHERE id = ?`, [spent.id]);
+  eq(logAgentsPort(api, spent.id).length, 1, "restoring the block brings the request back");
+});
+
+// #137 — "During sample creation add a box for embedding notes."
+issue(137, "an embedding note given at intake is stored on the block", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "oriented block", {
+    embeddingNotes: "  cut face down, proximal end left  ",
+  });
+  eq(api.get(`SELECT embedding_notes AS n FROM samples WHERE id = ?`, [id]).n,
+     "cut face down, proximal end left",
+     "trimmed on the way in, exactly like the other intake notes");
+
+  // A block created without one must read as empty, never NULL — every screen
+  // that shows it tests the string.
+  const plain = api.addSample(p, "EE", "plain block");
+  eq(api.get(`SELECT embedding_notes AS n FROM samples WHERE id = ?`, [plain.id]).n, "",
+     "no note means an empty note, not a null");
+});
 
 // ---------------------------------------------------------------------------
 // 0.13.0 — the record must match the work that was actually done.
