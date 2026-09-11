@@ -40,7 +40,7 @@ restore). All three swap a DB *file* under the live connection, and
 never re-migrated. So an image that predates a column can go live under a newer
 build (e.g. reverting to an older backup after an update).
 
-Two rules keep updates compatible with existing databases:
+Three rules keep updates compatible with existing databases:
 
 1. **Migrations are additive.** New numbered migration files only `ADD COLUMN` /
    `CREATE TABLE`; never edit an applied migration and never drop/rename a column

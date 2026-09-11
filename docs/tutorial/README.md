@@ -113,8 +113,8 @@ codes, descriptions, stains and notes. Stains that are assigned but not yet cut
 are listed too, marked *(assigned)*, so the log says what the board says — the
 stain and assay-type filters and the search find them, and the CSV/Excel export
 carries them as rows with no slide ID, stage `requested (not cut)`. A block
-marked exhausted shows an **Exhausted** badge. Export the current view as CSV
-or Excel.
+marked exhausted shows an **Exhausted** badge and, since it can no longer be
+cut, no *(assigned)* stains. Export the current view as CSV or Excel.
 
 ![Logs](img/14-logs.png)
 
