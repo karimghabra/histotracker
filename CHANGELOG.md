@@ -2,7 +2,8 @@
 
 ## 0.18.0 - unreleased
 
-No schema change and no new migration.
+One new column, `samples.embedding_notes` (#137), added at runtime with no numbered migration.
+The backup-revert and sync-pull fixes below add no column and no migration.
 A 0.17.0 instance opens every database this version writes, a reverted backup and a pulled snapshot included.
 
 - **Reverting to an older backup no longer leaves an app that will not start.**
