@@ -10,7 +10,6 @@ export function StackCard({
   selected = false,
   onSelect,
   overlay = false,
-  laterRackFor,
 }: {
   stack: SlideStack;
   selected?: boolean;
@@ -24,7 +23,6 @@ export function StackCard({
    * the board it just looked like a duplicate, with nothing to say which was
    * which or why. Saying it is the difference between a rule and a glitch.
    */
-  laterRackFor?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `stack-${stack.id}`,
@@ -70,17 +68,22 @@ export function StackCard({
             {stack.parent_description}
           </span>
         )}
+        {/* Which rack this is, when the agent has more than one. There used to
+            be an amber "new rack" tag here instead; it said only THAT an earlier
+            rack existed, which the second card on the board already says, and it
+            could not tell two racks apart — the thing you actually need to know
+            when you are holding one. */}
+        {stack.kind === "stain" && stack.rack_ordinal != null && (
+          <span
+            className="shrink-0 text-xs font-semibold text-ink-faint"
+            title={`Rack ${stack.rack_ordinal} for this agent`}
+          >
+            {stack.rack_ordinal}
+          </span>
+        )}
         {stack.kind === "stain" && (
           <span className="rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
             {memberSampleCount} {memberSampleCount === 1 ? "sample" : "samples"}
-          </span>
-        )}
-        {laterRackFor && (
-          <span
-            className="rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800"
-            title="An earlier rack for this agent has already started its protocol, so it can no longer take new slides. These went into a fresh rack."
-          >
-            new rack
           </span>
         )}
         {stack.is_priority === 1 && <Star size={10} className="fill-amber-400 text-amber-500" aria-label="Priority sample" />}

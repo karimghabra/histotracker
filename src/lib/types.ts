@@ -230,6 +230,8 @@ export interface SlideStack {
   assay_slide_count?: number;
   has_stain?: number;
   has_ihc?: number;
+  /** Which rack for this agent it is (1st, 2nd, …). Stain racks only. */
+  rack_ordinal?: number | null;
   slide_summary?: string;
   /** Comma-delimited distinct assay agents in the stack — used by the Ready for
    *  Imaging stain filter (#82). */

@@ -111,7 +111,6 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await closeDrawer(page);
   await col("Staining / IHC").getByText("H&E").first().click();
   await expect(page.getByText(/Stain workflow/i)).toBeVisible();
-  await page.getByLabel("Active operator").fill("Alex");
   await shot(page, "12-staining-protocol");
 
   // Run the protocol to scatter into Ready for Imaging.

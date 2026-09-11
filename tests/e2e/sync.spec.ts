@@ -224,7 +224,6 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
   // stack). Each checklist toggle refetches, so wait for the running count to
   // tick before the next click instead of firing all three at once.
   await column(ws, "Staining / IHC").getByText("Alcian Blue").first().click();
-  await ws.getByLabel("Active operator").fill("Alex");
   const steps = ["Stained", "Coverslipped"];
   for (let i = 0; i < steps.length; i += 1) {
     await ws.getByRole("button", { name: steps[i], exact: true }).click();
@@ -312,7 +311,7 @@ test("viewer stain request formally flags the block on the workstation", async (
   // the slide that will carry the stain has not been cut yet (#110).
   await expect(async () => {
     await syncNow(ws);
-    await expect(column(ws, "Embedded Inventory").getByText(/needs cut/i)).toBeVisible({ timeout: 3000 });
+    await expect(column(ws, "Embedded Inventory").getByText("⚑ needs cut")).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 40000 });
 
   // The request also lands in the workstation inbox.
@@ -321,7 +320,7 @@ test("viewer stain request formally flags the block on the workstation", async (
   await ws.keyboard.press("Escape");
 
   // The flag streams back to the viewer, and the viewer tracks its request.
-  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText(/needs cut/i));
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("⚑ needs cut"));
   await vw.getByRole("button", { name: /My requests/ }).click();
   await expect(vw.getByText("EE-1").first()).toBeVisible();
   await vw.screenshot({ path: "test-results/sync-request.png", fullPage: true });

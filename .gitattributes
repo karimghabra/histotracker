@@ -1,0 +1,5 @@
+# Text files are stored with LF line endings in the repository, whatever a
+# checkout converts them to on disk. scripts/workflow-test.mjs was committed as
+# CRLF from 0.16.2 (0cc2b63), the only such file, and the next merge of it was
+# one conflict spanning every line (docs/release_line_reconciliation.md).
+* text=auto

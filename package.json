@@ -1,7 +1,7 @@
 {
   "name": "histometer",
   "private": true,
-  "version": "0.13.2",
+  "version": "0.18.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,8 +13,12 @@
     "test:legacy": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs",
     "test:ui": "vitest run",
     "test:compat": "node scripts/release-compat.mjs",
+    "test:release": "node --test scripts/release-check.test.mjs && node scripts/release-check.mjs versions",
     "dev:browser": "vite --config vite.config.playwright.ts",
     "test:e2e": "playwright test",
+    "test:stress": "playwright test --config playwright.stress.config.ts",
+    "test:stress2": "playwright test --config playwright.stress2.config.ts",
+    "test:stress3": "playwright test --config playwright.stress3.config.ts",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui"
   },

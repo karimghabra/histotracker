@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
-import { Sidebar, type AppView } from "./components/Sidebar";
+import { ALL_PROJECTS, Sidebar, type AppView } from "./components/Sidebar";
+import { ThemeCustomizerPanel } from "./components/ThemeCustomizerPanel";
+import {
+  applyPalette,
+  CUSTOM_THEME,
+  loadCustomPalette,
+  readThemePalette,
+  saveCustomPalette,
+  type Palette as ThemePalette,
+} from "./lib/theme";
 import { LogsView } from "./components/LogsView";
 import { Board } from "./components/Board";
 import { NewProjectDialog } from "./components/NewProjectDialog";
@@ -33,7 +42,7 @@ import { useSync } from "./hooks/useSync";
 import { useBackupScheduler } from "./hooks/useBackupScheduler";
 import { useUndoStore } from "./lib/undo";
 import { hydrateUndoHistory } from "./lib/undoPersist";
-import { autoAdvanceProcessingRuns, setViewerReadOnly } from "./lib/db";
+import { autoAdvanceProcessingRuns, setSignedOutReadOnly, setViewerReadOnly } from "./lib/db";
 import { getSyncConfig, type SyncConfigPublic } from "./lib/syncConfig";
 import { exportSamplesCsv, exportWorkbookXlsx } from "./lib/export";
 
@@ -96,6 +105,17 @@ export default function App() {
     if (syncConfig) setViewerReadOnly(syncConfig.role === "viewer");
   }, [syncConfig]);
 
+  // The same backstop for an unsigned session (#128).
+  //
+  // Nobody signed in means nobody to attribute the work to, and this app exists
+  // to keep a record — an entry stamped "Unsigned" is a hole in it that cannot
+  // be filled in later. Note the app signs itself out at launch (#76), so this
+  // is the state every session STARTS in: the board is readable, and the first
+  // click that changes anything is choosing your name.
+  useEffect(() => {
+    setSignedOutReadOnly(!activeUser);
+  }, [activeUser]);
+
   // Automatic local database backups — only the authoritative workstation backs
   // up (a viewer's DB is a read-only mirror). Announces scheduled/launch backups.
   useBackupScheduler(Boolean(syncConfig?.configured) && !isViewer, () =>
@@ -125,6 +145,15 @@ export default function App() {
   const [theme, setTheme] = useState(
     () => window.localStorage.getItem("histometer-theme") ?? "system",
   );
+  // The custom palette, and the customizer's live draft (#theme customizer).
+  //
+  // `draft` is what the board is CURRENTLY painted with while the panel is
+  // open; `saved` is what survives a reload. Keeping them apart is what makes
+  // Discard work: the panel can repaint the whole app on every keystroke and
+  // still put back exactly what was there.
+  const [customPalette, setCustomPalette] = useState<ThemePalette | null>(() => loadCustomPalette());
+  const [themeDraft, setThemeDraft] = useState<ThemePalette | null>(null);
+  const [themeBefore, setThemeBefore] = useState<{ theme: string; palette: ThemePalette | null } | null>(null);
   const [drawerWidth, setDrawerWidth] = useState(
     () => Number(window.localStorage.getItem("histometer-drawer-width") ?? "416"),
   );
@@ -147,18 +176,25 @@ export default function App() {
     window.localStorage.setItem("histometer-theme", theme);
   }, [theme]);
 
+  // One place decides what the app is painted with, so the draft and the saved
+  // palette can never both be half-applied. The draft wins while the customizer
+  // is open; otherwise the saved palette applies only when `custom` is picked;
+  // otherwise the stylesheet is left to do its job.
+  useEffect(() => {
+    if (themeDraft) applyPalette(themeDraft);
+    else if (theme === CUSTOM_THEME) applyPalette(customPalette);
+    else applyPalette(null);
+  }, [theme, customPalette, themeDraft]);
+
   useEffect(() => {
     window.localStorage.setItem("histometer-drawer-width", String(drawerWidth));
   }, [drawerWidth]);
 
-  // Keep the protocol-checklist operator name in step with who is signed in —
-  // INCLUDING on sign-out. It used to be written but never cleared, so after an
-  // idle logout the protocol steps kept recording the departed operator's name
-  // (#76).
-  useEffect(() => {
-    if (activeUser) window.localStorage.setItem("histometer-active-operator", activeUser.name);
-    else window.localStorage.removeItem("histometer-active-operator");
-  }, [activeUser]);
+  // The protocol checklist used to keep its own copy of the operator's name in
+  // localStorage, mirrored from here, and #76 was the bug where that copy was
+  // written but never cleared — so after an idle logout the steps kept recording
+  // the departed operator. The checklist now reads the signed-in user directly
+  // (#127), so there is no second copy left to drift, and the mirror is gone.
 
   // #76 — the signed-in user lives in the DATABASE (app_settings.active_user_id),
   // so it survives quitting the app and rebooting the machine. On a shared bench
@@ -203,21 +239,44 @@ export default function App() {
     settings.idleLogoutMinutes * 60_000,
   );
 
-  // Restore the last-used project, falling back to the first active one (#84).
-  // Without persistence, every restart silently reset the sidebar to whichever
-  // project happened to sort first — and the next New Sample went there.
+  // Restore the last-used project (#84), now including "All projects" (#131).
+  //
+  // `null` used to mean two things — "nothing restored yet" and "no project" —
+  // which was harmless while every session had to land on some project. #131
+  // makes null a state a user can CHOOSE, so the two meanings are separated: a
+  // dedicated `restored` flag says whether the restore has run, and the stored
+  // value "all" round-trips to null instead of falling through to projects[0].
+  // Without that separation, picking All Projects snapped straight back to the
+  // first project on the next render.
+  const [projectRestored, setProjectRestored] = useState(false);
   useEffect(() => {
-    if (selectedProjectId !== null || projects.length === 0) return;
-    const remembered = Number(window.localStorage.getItem("histometer-selected-project") ?? "");
-    const stillExists = projects.some((project) => project.id === remembered);
-    setSelectedProjectId(stillExists ? remembered : projects[0].id);
-  }, [projects, selectedProjectId]);
+    if (projectRestored || projects.length === 0) return;
+    const stored = window.localStorage.getItem("histometer-selected-project");
+    if (stored === ALL_PROJECTS) {
+      setSelectedProjectId(null);
+    } else {
+      const remembered = Number(stored ?? "");
+      const stillExists = projects.some((project) => project.id === remembered);
+      setSelectedProjectId(stillExists ? remembered : projects[0].id);
+    }
+    setProjectRestored(true);
+  }, [projects, projectRestored]);
 
   useEffect(() => {
-    if (selectedProjectId !== null) {
-      window.localStorage.setItem("histometer-selected-project", String(selectedProjectId));
-    }
-  }, [selectedProjectId]);
+    if (!projectRestored) return;
+    window.localStorage.setItem(
+      "histometer-selected-project",
+      selectedProjectId === null ? ALL_PROJECTS : String(selectedProjectId),
+    );
+  }, [selectedProjectId, projectRestored]);
+
+  // A project that is deactivated or deleted while selected must not leave the
+  // sidebar pointing at a row that is no longer drawn — the board would filter
+  // to a project the user cannot see or clear.
+  useEffect(() => {
+    if (selectedProjectId === null || projects.length === 0) return;
+    if (!projects.some((project) => project.id === selectedProjectId)) setSelectedProjectId(null);
+  }, [projects, selectedProjectId]);
 
   // Restore the persisted undo/redo history (if it matches the live DB) so a
   // reload doesn't strand the user with a greyed-out Undo (#2).
@@ -235,8 +294,13 @@ export default function App() {
   // in the header every 60s for an action nobody took, masking real messages
   // like "Sync error" that share that slot. Gated like useBackupScheduler and
   // useIdleLogout above.
+  //
+  // Gated on the signed-in user for the same reason (#128): with nobody signed
+  // in the UPDATE is refused, and this one is called bare — so the rejection
+  // would flash "Sign in before making modifications" in the header every sixty
+  // seconds for an action nobody took.
   useEffect(() => {
-    if (isViewer) return;
+    if (isViewer || !activeUser) return;
     const tick = async () => {
       const moved = await autoAdvanceProcessingRuns();
       if (moved > 0) {
@@ -247,7 +311,7 @@ export default function App() {
     tick();
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [qc, isViewer]);
+  }, [qc, isViewer, activeUser]);
 
   // Global undo/redo shortcuts (ignored while typing in a field).
   useEffect(() => {
@@ -305,7 +369,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [modalOpen, drawerOpen]);
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
   const selectedSample = useMemo(
     () => samples.find((s) => s.id === selectedSampleId) ?? null,
     [samples, selectedSampleId],
@@ -498,7 +561,45 @@ export default function App() {
   // hazard applies to the timestamp draft and the stain-request agent, and to
   // any draft state added to these drawers later; keying by id retires the whole
   // class rather than resetting the three fields that exist today.
-  const activeDrawer = selectedSample ? (
+  function openThemeCustomizer() {
+    // Remember what to go back to BEFORE anything is painted, so Discard is
+    // exact rather than approximate — including which theme was selected, not
+    // just which colours were showing.
+    setThemeBefore({ theme, palette: customPalette });
+    setThemeDraft(customPalette ?? readThemePalette(theme));
+    setShowSettings(false);
+  }
+
+  function saveThemeCustomizer() {
+    if (!themeDraft) return;
+    saveCustomPalette(themeDraft);
+    setCustomPalette(themeDraft);
+    setTheme(CUSTOM_THEME);
+    setThemeDraft(null);
+    setThemeBefore(null);
+    flash("Theme saved");
+  }
+
+  function discardThemeCustomizer() {
+    // Put back both halves. Restoring only the palette would leave the picker
+    // saying "Custom" for a theme the user never saved.
+    if (themeBefore) {
+      setCustomPalette(themeBefore.palette);
+      setTheme(themeBefore.theme);
+    }
+    setThemeDraft(null);
+    setThemeBefore(null);
+  }
+
+  const activeDrawer = themeDraft ? (
+    <ThemeCustomizerPanel
+      palette={themeDraft}
+      onChange={setThemeDraft}
+      onSave={saveThemeCustomizer}
+      onCancel={discardThemeCustomizer}
+      width={drawerWidth}
+    />
+  ) : selectedSample ? (
     <SampleDetailsDrawer
       key={selectedSample.id}
       sample={selectedSample}
@@ -539,7 +640,14 @@ export default function App() {
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
       candidates={batchCandidates}
       onEditMembers={(batchId, sampleIds) =>
-        void editBatchMembers(batchId, sampleIds).catch((error) => flash(String(error)))
+        void editBatchMembers(batchId, sampleIds)
+          // Say it out loud when the last sample leaves (#135): the run is
+          // removed and the drawer closes under you, which without a word reads
+          // as the app having lost the batch.
+          .then(() => {
+            if (sampleIds.length === 0) flash("Processing run removed — it had no samples left");
+          })
+          .catch((error) => flash(String(error)))
       }
       onMove={moveBatchWithConfirmation}
       onEditStart={(batchId, startedAt) =>
@@ -582,7 +690,12 @@ export default function App() {
     // Viewer instances are read-only mirrors; the mutating surfaces below read
     // this and hide themselves rather than firing writes the data layer will
     // reject (#72).
-    <ReadOnlyProvider value={isViewer}>
+    <ReadOnlyProvider
+      value={{
+        readOnly: isViewer || !activeUser,
+        reason: isViewer ? "viewer" : "signed-out",
+      }}
+    >
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar
         projects={projects}
@@ -721,12 +834,15 @@ export default function App() {
             {!isViewer && (
               <Button
                 variant="primary"
-                disabled={!selectedProject || !activeUser}
+                // No longer gated on a sidebar selection (#132): the dialog
+                // asks for the project itself, so there is nothing to select
+                // first. Still gated on being signed in (#128).
+                disabled={!activeUser || projects.length === 0}
                 title={
                   !activeUser
                     ? "Sign in before adding samples"
-                    : !selectedProject
-                      ? "Select a project first"
+                    : projects.length === 0
+                      ? "Create a project first"
                       : undefined
                 }
                 onClick={() => setShowNewSample(true)}
@@ -771,6 +887,14 @@ export default function App() {
           <div className="min-w-0 flex-1 overflow-hidden p-3">
             <Board
               key={`board-${activeUser?.id ?? "none"}`}
+              // #131 — the sidebar selection is the board's project filter.
+              // Id and code both: the six column filters do not all match on the
+              // same column.
+              projectFilterId={selectedProjectId ?? "all"}
+              projectFilterCode={
+                projects.find((project) => project.id === selectedProjectId)?.code ?? "all"
+              }
+              projects={projects}
               samples={samples}
               sections={sections}
               stacks={stacks}
@@ -864,6 +988,7 @@ export default function App() {
         <SettingsDialog
           theme={theme}
           onThemeChange={setTheme}
+          onCustomizeTheme={openThemeCustomizer}
           // Close Settings when opening one of the dialogs it hands off to:
           // two stacked modals over the same backdrop is unreadable, and
           // Escape would only dismiss the top one.
@@ -878,8 +1003,14 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
-      {showNewSample && selectedProject && (
-        <NewSampleDialog project={selectedProject} onClose={() => setShowNewSample(false)} />
+      {showNewSample && (
+        // #132 — the dialog asks which project; it is no longer decided by what
+        // happened to be selected in the sidebar before the button was pressed.
+        <NewSampleDialog
+          projects={projects}
+          initialProjectId={selectedProjectId}
+          onClose={() => setShowNewSample(false)}
+        />
       )}
       {pendingBatchSampleIds && pendingBatchSamples.length > 0 && (
         <BatchStartDialog
@@ -939,7 +1070,10 @@ export default function App() {
         />
       )}
       {/* #76 — say plainly that the session lapsed, and offer the way back in.
-          Dismissable: work can continue unsigned, it is just recorded that way. */}
+          Still dismissable, but what dismissing MEANS changed with #128: the
+          board stays readable and nothing can be changed until somebody signs
+          in. It used to say unsigned work was "recorded as unsigned", which is
+          no longer true and would now be a promise the app refuses to keep. */}
       {signedOut !== null && (
         <Modal
           title={SIGN_OUT_TITLE[signedOut.reason]}
@@ -948,7 +1082,8 @@ export default function App() {
         >
           <p className="mb-3 text-xs text-ink-soft">
             {signOutMessage(signedOut.name, signedOut.reason, settings.idleLogoutMinutes)}{" "}
-            Sign back in so your changes are attributed to you — until then they are recorded as unsigned.
+            Sign back in to make changes — until then the board can be read but not edited, so
+            nothing lands in the record without a name on it.
           </p>
           <Field label="Sign in as">
             <select
@@ -969,7 +1104,7 @@ export default function App() {
           </Field>
           <div className="mt-3 flex justify-end">
             <Button variant="ghost" onClick={() => setSignedOut(null)}>
-              Continue unsigned
+              Keep reading
             </Button>
           </div>
         </Modal>

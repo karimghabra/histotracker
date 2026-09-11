@@ -1,6 +1,563 @@
 # Changelog
 
-## 0.13.2 - unreleased
+## 0.17.0 - unreleased
+
+No schema change and nothing that syncs: a theme is eleven CSS variables in
+`localStorage`, so it stays on the machine and the person who chose it. A 0.16
+instance opens a 0.17 database unchanged.
+
+- **Build your own theme, and watch the board while you do it.** The theme
+  picker has always lived in the Settings modal, which covers the board — so
+  choosing a colour meant close, look, reopen. The customizer is a **docked
+  panel** in the same slot as the details drawers, with the same resize handle,
+  and every change paints `:root` on the keystroke. There is no preview pane
+  because the app is the preview.
+
+  **Start from** any of the 26 existing themes rather than from nothing — most
+  people want "our blue instead of that blue", which is one change to a palette
+  rather than eleven decisions from black. The theme values are read out of the
+  live stylesheet rather than copied into TypeScript, so "start from Night Shift"
+  cannot drift into something that is not Night Shift.
+
+  **Discard restores both halves** — the palette and the theme that was selected.
+  Restoring only the colours would leave the picker saying "Custom" for a theme
+  nobody saved.
+
+- **A contrast warning, which nobody asked for.** Eleven colours picked one at a
+  time, with only the last combination ever looked at, is a reliable way to build
+  something unreadable; `index.css` already carries a long note about a version
+  of this that shipped. The five pairs that actually carry text are checked
+  against WCAG, worst first, and the faint ink is judged at 3:1 rather than 4.5
+  because it only ever carries timestamps — a warning that always fires is one
+  nobody reads. **It warns and still lets you save.** A lab that wants a
+  low-contrast theme for a dark room can have one; it should just not get one by
+  accident.
+
+- **Dark custom themes get what built-in dark themes get.** A theme in
+  `index.css` is not only eleven variables: the dark ones also set
+  `color-scheme` and remap Tailwind's literal `bg-white` to the panel colour.
+  `bg-white` is on 42 elements — every text input and every subtle button — so a
+  dark palette without that remap renders white boxes on a dark board, and the
+  contrast check cannot see it because `#ffffff` is not a colour the user picked.
+  Dark is inferred from the surface luminance and applied by the same function
+  that paints the palette, so the two cannot disagree.
+
+Two things the tests caught that would otherwise have shipped:
+
+- The unit test that checks `THEME_VARS` against the stylesheet **failed on its
+  first run** — `--color-warn` is declared in a shared rule for all the dark
+  themes rather than inside each theme block, so reading one block found ten
+  variables, not eleven. The test now scans every theme rule.
+- Editing `index.css` with a script flipped the file's line endings and broke the
+  Tailwind build outright — the app served a plugin error instead of a page, and
+  all four browser tests failed at the first assertion. Reverted and re-applied
+  preserving CRLF; the change is 18 added lines.
+
+## 0.16.3 - 2026-09-01
+
+Reverses the shape of 0.16.2's fix. Same trigger, different outcome: emptying a
+processing run now **removes** it rather than parking it as `cancelled`.
+
+- **An emptied run is deleted (#135).** 0.16.2 kept the batch row with a
+  `cancelled` status and deleted its membership — which was worse than either
+  option on the table. The surviving record could say a run had existed and not
+  what was in it, and a shell is not a record. Asked at the bench which way to go,
+  the answer was delete, and the reasoning holds: #83 protects the record of work
+  that **happened**, and a run emptied of its samples is a plan withdrawn —
+  nothing cut, nothing processed, and for a planned run nothing that physically
+  moved at all.
+
+  What did happen is not lost. `audit_events` keeps the run's creation and every
+  stage transition its samples made, so "EE-1 went into a machine at 09:14 and
+  came out at 09:20" is still answerable from the Manifest — which is where "who
+  did what" belongs, and where it is now tested (#77).
+
+  **The block survives; only the run goes.** That distinction has its own
+  invariant, because deleting a sample along with the run it happened to be in
+  would be #83 exactly.
+
+- **The never-delete guard was updated, not worked around.** `db.ts` is scanned
+  for DELETEs against lab-record tables against a fixed allow-list, and this
+  change tripped it — which is the guard doing its job: it forces a new delete
+  into review instead of letting it arrive as the obvious way to make a button
+  work. The count moved from 3 to 4 and the entry says who added it and why. The
+  `deleteProcessingBatch()` tombstone is amended rather than removed: deleting an
+  arbitrary run is still forbidden; deleting one with nothing in it is not.
+
+- Run numbers are row ids and ids are `AUTOINCREMENT`, so a removed run's number
+  is retired rather than handed to the next run. That has an invariant too — it
+  is the one way deleting could genuinely corrupt the record, if a technician had
+  written "Batch 3" on a cassette.
+
+## 0.16.2 - 2026-08-28
+
+No schema change. `cancelled` is a new value in a column that has never had a
+CHECK constraint, and every listing selects the statuses it wants — so a build
+that has never heard of it simply does not show the run, the same way an
+unrecognised stage degrades in #83. A 0.16.1 instance opens a 0.16.2 database
+unchanged.
+
+- **Taking the last sample out of a processing run now cancels the run (#135).**
+  It was impossible before, twice over: the remove control was hidden on the last
+  member, and the data layer refused an empty membership with "A run needs at
+  least one sample" — true, and unhelpful. A run with nothing in it is not a run,
+  and the technician emptying it is saying so. The only way out was to start a
+  run that was not happening and mark it done, which puts a lie in the record
+  about a machine that never ran.
+
+  **Cancelled, not deleted.** The batch row keeps its id, its start time and its
+  history, and the existing `audit_batches_update` trigger records who cancelled
+  it — so "what happened to batch 3?" stays answerable and the numbering has no
+  gap. A running batch's sample goes back to the end of pre-processing and drops
+  the start time it was carrying for a run it is no longer in; a planned batch
+  never moved its samples, so cancelling one leaves them exactly where they were,
+  which matters because "reverting" them would rewind real work on a block that
+  merely had a run pencilled in.
+
+  The cancellation is announced, because the drawer closes under you when the run
+  leaves the board and silence there reads as the app having lost the batch.
+
+## 0.16.1 - 2026-08-28
+
+The Manifest gets its first test, and the test found a bug.
+
+- **#77 had no automated coverage of any kind** — flagged since 0.7.0 and the
+  oldest such gap in the app. Covered now from both ends. The data-layer half is
+  in `scripts/workflow-test.mjs`, which loads the real migration SQL, so the
+  triggers under test are the actual triggers rather than a port: a change is
+  attributed to whoever was signed in for it, two people's changes do not
+  collapse onto one, a change made with nobody signed in records the ABSENCE
+  (NULL, not user 0 and not the last user), the name is joined rather than copied
+  so correcting a misspelling corrects the whole history, and the read is
+  newest-first with the id breaking ties inside a one-second timestamp.
+  `tests/e2e/manifest.spec.ts` covers what only a browser can: attribution as
+  rendered, the person/action/search filters, and the Unsigned bucket.
+
+- **Searching the Manifest for what is on the screen found nothing.** The table
+  renders codes through `displayCodesInText`, so a row reads `EE-2` while its
+  stored summary says `EE-0002` — and the search was a raw substring test against
+  the stored text. You had to guess the zero-padding to search your own manifest.
+  It now uses `matchesSearch`, the same smart match the Logs and the Extras
+  inventory have had since #120; the Manifest simply never got it. Found by the
+  first test this feature has ever had, which is the entire argument for writing
+  it.
+
+Two properties are deliberately NOT covered in the browser and say so in the
+spec: renaming a user (there is no UI for it — Manage renames assay agents only,
+so the property is data-layer and is asserted there), and performing an unsigned
+change (since #128 an unsigned session cannot write at all, so such rows exist
+only in databases written by older builds — one is planted as legacy data).
+
+## 0.16.0 - 2026-08-28
+
+> A tag `app-v0.15.3` existed briefly on 2026-08-28 and has been withdrawn: it
+> was cut with a lower number than the 0.16.0 already published, and the release
+> line goes forward. Its code is exactly 0.16.1's. Kept as a line here rather
+> than erased, because the installer was downloadable for about twenty minutes
+> and anyone holding it should be able to find out what it was.
+
+
+No schema change: #134 writes to a column that has existed since 0001, and the
+sidebar work is browser-local view state. A 0.15 instance opens a 0.16 database
+unchanged.
+
+Bench feedback on the 0.15 work, and one new issue.
+
+- **#129 is a sort, not a filter.** 0.15.0 shipped both, and the filter was the
+  wrong shape: a block that owes a cut is a priority, not a category, and hiding
+  the rest of the drawer to find the urgent ones costs you the context of what
+  else is in there. The filter is gone; the sort stays. Its absence is asserted,
+  so it does not come back by habit.
+
+- **A stage holding none of the selected project's work now shows NOTHING (#131).**
+  It showed everything instead, which is the opposite of filtering. Each column
+  offered only the projects it currently held, and a guard dropped the filter
+  back to "all" the moment the selection fell off that list — so asking for one
+  project's work handed you everyone else's.
+
+  The guard was right about the hazard and wrong about the trigger. A controlled
+  `<select>` whose value is not among its options does not go blank: react-dom
+  re-selects the first option and fires no change event, so control and state
+  silently disagree (#85). Keeping an option for the *current* value closes that
+  directly, and an empty column is then free to be empty. The guard now fires
+  only for a project that no longer EXISTS, which is the case it was written for.
+
+  Worth recording: I met this during 0.15.0's own testing — a column reading
+  "all" when I expected a project — and wrote around it in the test instead of
+  recognising it as the defect. The test now asserts the column is empty AND
+  that the control still names the project.
+
+- **The sidebar's All Projects is no longer shaped like a project (#131).** The
+  first version copied the project row exactly — same card, same Selected badge,
+  same count pill — and read as a project called "All". It is a control that
+  clears a filter, so it now says so: an icon no project has, one line instead of
+  two, a plain count rather than a pill, and a rule under it separating the
+  control from the things it acts on.
+
+- **Blocks can be switched between the Short and Long runs, in bulk (#134).**
+  The run is chosen when a block is booked in, and then the tissue turns out
+  denser than it looked; until now the only way to revise that was to book the
+  block in again. Offered only before the processor, which is the issue's own
+  condition and the honest one — `processing_type` decides a run's duration, so
+  changing it afterwards would rewrite how long a block that has already been
+  through the machine was in there. Every switch writes a timeline event naming
+  both ends (#83).
+
+  One guard the issue does not ask for and the feature needs: a block committed
+  to a **planned** batch is still in pre-processing, and a planned batch carries
+  its own protocol, checked when the batch was formed and never again. Switching
+  a member would leave the run stamping a ready time from a duration the block no
+  longer has. That is refused, and says which block and why.
+
+  Ineligible blocks in a selection are skipped rather than refused wholesale —
+  eleven ticked with one already loaded switches the ten, the rule
+  `setSlidesDepthTag` already follows.
+
+## 0.15.2 - 2026-08-26
+
+Dead code, and one latent bug found while removing it. No behaviour change and
+no schema change.
+
+- **The per-row undo subsystem is gone — 178 lines.** Undo has restored whole
+  SQLite images since 0.13.0, and the row-by-row machinery it replaced was left
+  behind: nine `restore*`/`reinsert*` functions, four `*_RESTORE_COLUMNS` tables,
+  a `ChecklistRunSnapshot` interface and the reader that filled it. Every one had
+  zero callers, inside `db.ts` or out. `snapshotDb`, `restoreDb` and
+  `restoreDbPreservingSession` — the whole-image trio that undo actually uses —
+  are untouched, and the harness gate that pins their existence (#28) still
+  passes.
+- **Five superseded `useActions` exports are gone — 49 lines.** `saveDetails`,
+  `createSample`, `sendSectionsToCutting`, `sendSectionsToCuttingForSamples` and
+  `removeSection`, each replaced by a bulk version the UI already calls
+  (`editSampleDescription`, `createSamples`, `sendPlansToCutting`,
+  `moveSamples`). `moveSample` is NOT deleted — the export is, but `markAnalyzed`
+  calls it, which is the kind of thing a line count does not tell you.
+- **One parser for agent pairs, and it is the careful one.** A `<select>` of
+  agents carries the pair as one string, and the app had two conventions:
+  `stain::PAS` to pick from the catalogue, `stain:PAS` to move glass onto an
+  agent — with `SectionDetailsDrawer` using both, twenty lines apart, and nothing
+  saying so.
+
+  Both formats are kept, because they are option VALUES and moving them would
+  change the DOM for no gain. What changed is that all nine parse sites now share
+  one implementation. The five catalogue sites did
+  `const [type, name] = value.split("::")`, which **silently truncates any agent
+  name containing the separator** — a lab that names an agent `CD31::clone2` gets
+  `CD31` and no error. The four reassign sites rejoined the tail and were
+  correct. Splitting once at the first separator is right for both and cannot
+  truncate. Covered by three new unit tests, revert-verified against the
+  truncating version.
+
+**A note on how the verification went**, because it nearly cost a correct change.
+After the deletion the suite reported two failures, one of them reproducing 2/2
+in isolation, and reverting `db.ts` "fixed" it. It was the dev server: the e2e
+config sets `reuseExistingServer: true`, so a server that had hot-reloaded across
+the edits was serving stale modules. `docs/stress_test_v3.md` already records
+this trap and states the rule — *if source changed since the server started,
+restart it before believing anything* — and I applied it to the stress configs
+and not to this one. From a cold server the same tree passes 116/116. The
+deletion was never at fault, and a bisect had already got as far as re-deleting
+all 178 lines and watching them pass.
+
+## 0.15.1 - 2026-08-26
+
+One fix, for a regression that 0.15.0 shipped with. **0.15.0 is published and
+should not be used**; this supersedes it.
+
+- **Coming back from the Logs wiped the column filter you had just set.** #131's
+  effect stamps the sidebar's selection onto every column filter, and a
+  `useEffect` with a dependency array still runs once on mount — so a trip to the
+  Logs and back, which remounts the Board, stamped the selection over a filter
+  the user had chosen by hand. That is #104 ("filters survive a view switch")
+  broken by the change meant to sit beside it. The mount run is now skipped: the
+  selection is adopted when it CHANGES, and the stored column preferences stand
+  on their own at mount.
+
+  The trade is deliberate and worth stating: on a fresh load the columns show
+  what was stored for them rather than what the sidebar restored to. That is the
+  right half to lose. #104 is about a choice made by hand surviving; #131 is
+  about what happens when you PICK a project, and picking is an action, not a
+  restore.
+
+**How it got out**, which matters more than the fix. The comment above the effect
+claimed it was "a no-op until the selection actually changes" — describing the
+behaviour I intended rather than the code I had written. The local suite ran with
+`retries: 2` and the test failed once and passed on retry, and I recorded it as
+flaky and moved on. It then failed all three attempts in CI. A flaky result on a
+test adjacent to the change under test is a finding, not noise; the full run
+before a push now uses `--retries=0`.
+
+## 0.15.0 - 2026-08-26 (superseded by 0.15.1 — do not use)
+
+No schema change. The two new preferences (the sidebar's All Projects state and
+the Embedded Inventory cutting filter) are browser-local view state, not database
+rows, so a 0.14 instance opens a 0.15 database unchanged and no lockstep upgrade
+is needed.
+
+The four issues raised against 0.14.x. Two of them are one change seen from
+opposite sides.
+
+- **The New Sample dialog asks which project (#132).** It used to inherit
+  whatever was selected in the sidebar, and said so only as three letters in the
+  title bar — a selection made for one reason (looking at a project) silently
+  deciding another (where twenty new samples get filed). The dialog now asks,
+  first field, and will not create anything until it has an answer. Nothing is
+  preselected when there is a real choice: a prefilled picker is one Enter away
+  from being no question at all. A lab with a single project is not asked, since
+  there is nothing to decide.
+
+- **The sidebar selection now filters the whole board (#131),** with an **All
+  projects** row to clear it. It *sets* each column's filter rather than
+  replacing it, so the per-column dropdowns still work and still say what the
+  board is doing — picking a project is the broad stroke, the column control is
+  the exception you make afterwards.
+
+  This is what #132 had to land first for: the sidebar meant two things at once,
+  and it could only be made to mean one of them cleanly after the other had
+  somewhere else to live. "No project" is now a state you can choose, so it is
+  also a state that has to persist — it is stored explicitly rather than as an
+  absent key, because absent already means "nothing restored yet", and the two
+  restore differently.
+
+- **Embedded Inventory can be filtered and sorted by what needs cutting (#129).**
+  The `needs cut` flag has been on the card since #110, but nothing could sort or
+  filter on it, so finding the flagged blocks in a full drawer meant reading
+  every card. Both new controls and the flag itself now share **one** predicate
+  in `db.ts` — two copies would be two answers to "needs cut", and a filter that
+  hides a flagged card is worse than no filter.
+
+- **Slides can be removed and reassigned from the Logs (#133).** The Logs could
+  show that a slide had been removed, and who removed it and why, but not remove
+  one — so the record was readable where the work was not. Both actions hang off
+  the tick list that was already there for tagging, the same way the rack panel
+  has worked since 0.14.1: one selection, three things to do with it. They act on
+  the live slides in the selection, so ticking eleven slides when one broke last
+  week does the ten rather than refusing all eleven.
+
+  Scoped to the two actions the issue names. "Anything that can be done in the
+  dashboard should be completable in the logs" is a direction, not a change, and
+  the rest of it should be argued for one action at a time.
+
+Every one of the six new tests was revert-verified — each watched failing with
+its change undone.
+
+**One bug introduced and caught in the same cycle**, recorded because the shape
+of it will recur. The six column filters are not one kind of thing: four match
+`project_id` and two — Extras and Ready for Imaging — match `project_code`. The
+first version of #131 set all six from the id, so both code-matched columns were
+handed a number no code can equal and rendered empty for every selection. The
+first version of the #131 test did not catch it, because it only looked at a
+project_id column; the sync specs did. The test now checks one column of each
+kind, through cards on screen.
+
+#131 and #132 also changed what a dozen existing specs could assume — that the
+sidebar decides where a sample is filed, and that the board shows every project.
+Both assumptions were the thing being removed. The New Sample flow is now driven
+through one helper (`tests/helpers/app.ts`) rather than fixed twelve times, for
+the same reason `helpers/rack.ts` exists: the next change to that dialog should
+be one edit, not twelve chances to look like twelve unrelated failures.
+
+## 0.14.4 - unreleased
+
+Coverage, not behaviour. Nothing in the app changes; two shipped issues that had
+no test of any kind now have one, and a suspected defect found while writing them
+turned out not to be one — which is recorded here, because the reasoning that
+made it look real is the part worth keeping.
+
+- **#121 and #122 had no automated coverage at all.** Both are pure screen
+  changes — one control deleted, one block of markup moved — which is exactly the
+  kind of change that reads as self-evidently done in a diff and quietly comes
+  back the next time somebody edits around it. `tests/e2e/issues-121-122.spec.ts`
+  covers both, and both were revert-verified: the checklist was moved back below
+  the slide list and the refile control was put back, and each test was watched
+  failing before being trusted. The #121 test also asserts that
+  `relabelSlideToSample` is still exported, because the issue removed the
+  affordance and deliberately kept the capability — an assertion satisfied by
+  deleting the function would be the wrong fix passing the right test.
+- **A finding about #125, investigated and retracted.** A stain requested against
+  a `sectioned` cut group appeared to ask for a recut it did not need: the group
+  has been cut, it can hold free extras, and the request still flags the block.
+  It is not a defect. `sectioned` sits *before* `assignment_required` in the
+  workflow, so a slide labelled "extra" there has been cut but not yet
+  dispositioned — surfacing it is issue #12 verbatim. Two experiments settled it:
+  rewriting the filter to ask "has this been cut?" makes the case pass and breaks
+  #12, and removing the three excluded stages one at a time shows `sectioned`
+  carries no weight at all — nothing fails without it, because no build can
+  produce a group at that stage holding slides still marked as extras.
+- What survives is an invariant naming the rule the filter actually encodes: an
+  extra is not inventory until its group reaches `stain_requested`, the point
+  where disposition is settled. The excluded stages are exactly the earlier ones.
+  It reads the stage order out of `src/lib/stages.ts` rather than retyping it, so
+  a reordering of the workflow fails here instead of passing against a private
+  copy. Revert-verified: dropping `needs_sectioning` from the filter fails it.
+- A guard for the unreachable case was written and deleted — it could not be made
+  to fail, the same way `rack-numbers-are-unique` could not in 0.14.3. The
+  reasoning is recorded next to the invariant so the next person does not
+  rediscover it as a bug.
+
+## 0.14.3 - 2026-08-17
+
+Mostly harness. The rack work in 0.14.0 shipped with unit and e2e coverage and no
+fuzz coverage at all — the newest code in the app was the least walked — so the
+explorer was widened to reach it, then run hard at it.
+
+- Four new moves (split a rack, merge two racks, move a selection to another
+  agent, change the rack ceiling) and four new invariants covering what those
+  operations must never break: a rack over its ceiling, a rack holding another
+  agent's glass, a slide in a stainer before it was cut, and a removed slide
+  reading "stained, never cut".
+- A **self-check** that plants each violation directly in the database and
+  insists the catalogue notices. It earned its keep immediately: a fifth
+  invariant could not be made to fail, because it was a tautology — two racks can
+  no more share a number than two integers can. Deleted, with the reason written
+  where the next person will look.
+- Roughly 2,500 moves across eleven seeds, three of them 45-round runs, plus
+  split and merge fired concurrently at the same racks. **No new workflow
+  defects.**
+- One cosmetic fix the fuzz printed on its way past: a refusal read
+  `a Alcian Blue rack holds 18`. Pluralised, since an "a/an" guess breaks the
+  moment the lab adds an agent starting with a vowel.
+
+## 0.14.2 - 2026-08-17
+
+Two ways a retracted cut could rewrite history, both found by the explorer while
+verifying 0.14.1, and both producing the same impossible record: a slide stained
+on a day it had not yet been cut.
+
+- **Sending a cut group back to Needs Sectioning left its slides in their
+  staining rack.** The cut date was cleared, correctly, but the glass stayed in
+  the rack — so the next tick of that rack's protocol stained a slide the app
+  said was not cut. Reverting now takes the slides out of the rack, clears the
+  request stamp, and retires any rack it empties. Going back to the queue means
+  the sections do not exist yet, so they cannot be in a stainer.
+- **A retraction also wiped the cut date of REMOVED slides.** A slide that was
+  cut, stained, and then broken at the bench came back reading "stained, never
+  cut". That is not a retraction; it is the record of real work being rewritten,
+  which is the one thing this application exists not to do (#83). A removed slide
+  now keeps every stamp it earned and only lets go of the rack. This one is older
+  than 0.14 — the guard added in 0.13.3 could not see it, because it inspects
+  live slides, and here the only worked slide had been removed.
+
+Also in the harness, which had been claiming more than it delivered:
+
+- **The stress walk was never actually reproducible from its seed.** Every move
+  picked its target with SQL's `RANDOM()`, which no seed of ours reaches, and the
+  seeded board used `Math.random()`. So the seed chose which move to make and
+  never what to make it on — and the first real defect it found could not be
+  re-run to trace. Both are now driven by the walk's own generator.
+- The explorer dumps the offending rows and the last twelve moves on the first
+  broken invariant. "Somewhere in these ten moves" is not a lead.
+
+## 0.14.1 - 2026-08-17
+
+- **The per-slide "Move…" dropdown is gone from the rack panel.** It put a select
+  box on every row — twenty-four of them on a full rack — for an action that is
+  occasional, and it could only ever move one slide. Reassigning now goes through
+  the same ticked list that splits and removes: **Select slides**, then move them
+  to another agent, split them into a new rack, or remove them. One selection,
+  three things to do with it.
+- **Racks for the same agent are numbered, and the "new rack" tag is gone.** The
+  tag only said THAT an earlier rack existed — which the second card on the board
+  already says — and it could not tell two racks apart, which is the thing you
+  need to know when you are holding one. Each stain rack now carries its number
+  for that agent: H&E 1, H&E 2, H&E 3.
+
+  The number counts every rack ever run for the agent, retired ones included, so
+  it is fixed for the life of the rack. Counting only the open ones would
+  renumber the survivors each time a rack finished — and a rack somebody wrote
+  "H&E 2" on in marker would silently become H&E 1.
+
+## 0.14.0 - 2026-08-17
+
+No schema change — the two new settings are rows in `app_settings`, which every
+build since 0.8 already ignores what it does not recognise, so a 0.13 viewer
+opens a 0.14 database unchanged.
+
+The eight issues raised against 0.13.x, four of which are feedback on the 0.13
+work itself.
+
+- **Nobody signed in now means nobody writes (#128).** An unsigned session could
+  section blocks, consume extras, request stains, record images and mark work
+  analyzed — and every one of those landed in the record attributed to nobody at
+  all. The app signs itself out at launch, so this was not an edge case, it was
+  the state every session started in. An unsigned session now has a viewer's
+  privileges: the board reads normally and nothing can be changed until you say
+  who you are. The gate sits at the one place every write passes through, so the
+  three surfaces that call the data layer directly are covered too. Signing in
+  is, of course, still possible while signed out.
+- **The protocol checklist has no Operator box (#127).** It was a second,
+  editable identity sitting beside the real one — typeable over, able to go
+  stale, and the only thing standing between an unsigned session and a completed
+  protocol step. Steps are now recorded under the signed-in user, the checkboxes
+  grey out when there isn't one, and the message says "Sign in before making
+  modifications" rather than sending you to a workstation you are sitting at.
+- **Rack capacity is configurable (#123).** A rack holds 24 slides; the app
+  cheerfully piled forty into one, so what the board showed and what a technician
+  could pick up and carry were different things. Separate ceilings for staining
+  and IHC, in Settings. A full rack is left alone and the next slide opens a
+  fresh one.
+- **Racks can be split and merged (#124).** Tick some slides and split them into
+  a new rack; select several racks and pour them into one. Merging refuses racks
+  that are for different agents or that have already been through the reagents —
+  that last one is how a rack ends up holding stained and unstained glass
+  together, which is the bug #81 was about, arriving by a different door. An
+  emptied rack is retired, not deleted.
+- **A whole selection can be reassigned at once (#126).** The tick list that was
+  already there for removal now also moves slides to another agent, or back to
+  extras, as one action and one undo.
+- **A stain requested for a block that is already queued for cutting joins that
+  cut (#125).** It used to ask for a second cut, so a block whose plan read "H&E,
+  extra, extra" and had not been cut yet came back demanding another trip to the
+  microtome the moment somebody added PAS. Nobody sections twice for that. A
+  fresh cut is now prompted only when the block is not already queued AND no cut
+  extra is free.
+- **The stained/coverslipped checkboxes moved to the top of the rack panel
+  (#122).** Below fifty slides, the two boxes a technician actually ticks were a
+  long scroll away from the work.
+- **Refiling a slide onto another block is gone from the Logs (#121).** It should
+  not happen, and if it does it can be corrected by hand — a one-click path to
+  rewriting which block a slide came from does not belong in the everyday log
+  view.
+
+## 0.13.3 - 2026-08-13
+
+No schema change. A third stress harness — **the explorer** — which does the one
+thing the second one couldn't: it *looks at the screen*. Ten walkers, twenty move
+types, and every few rounds the board and the Logs are opened and compared with
+counts recomputed from the database. Full account in `docs/stress_test_v3.md`.
+
+The wider point of v3 is that the previous harness only ever moved *along* the
+slide lifecycle, which is the part of the app the tests were already thinking
+about. These walkers move *across* it — archiving a block mid-cut, renaming a
+project while its codes are in use, retiring an agent that open racks depend on,
+reverting a block's stage while its slides are downstream — and they press the
+real Undo and Redo buttons, hundreds of times.
+
+- **A cut could be retracted after the glass had already been stained.** Dragging
+  a cut group back to Needs Sectioning strips the cut date from its slides, which
+  is right when the group was sent by mistake and wrong once someone has actually
+  stained one — it left a slide whose record said it was stained on a day it had
+  not yet been cut. The drag is now refused, naming the slides, with the honest
+  alternative: reassign the slide, or remove it with a reason. Cascading the
+  revert and wiping the staining dates was the other option and was rejected —
+  once a section is on a slide and stained, the cut is a fact. A group nobody has
+  touched still comes straight back, and there is a test insisting on that too.
+- **A removed slide could still be given a depth tag.** Every other slide action
+  refuses a slide that has been removed; this one quietly retagged it. It now
+  skips removed slides instead of failing, so tagging eleven slides when one of
+  them broke last week still tags the other ten.
+- **Undo and redo were put through a whole-database comparison** rather than a
+  spot check: 24 single-move round-trips and a 31-move storm all the way back and
+  all the way forward, every one byte-identical. Nothing to fix — but that is now
+  a fact rather than an assumption.
+
+Also fixed in the harnesses themselves, because both produced confident and
+completely false alarms: the stress suites no longer reuse a running dev server
+(a hot-reloaded one serves two copies of the database layer, which made redo look
+like it wiped everything), and the view checks now force a real refresh before
+reading the screen.
+
+## 0.13.2 - 2026-08-13
 
 Two things the log could not tell you, and six more defects found by a stress
 harness.

@@ -388,10 +388,23 @@ export async function checkInvariantsFast(
  */
 export async function seedLarge(
   page: Page,
-  opts: { projects: number; samplesPerProject: number; cutFraction?: number },
+  opts: { projects: number; samplesPerProject: number; cutFraction?: number; seed?: number },
 ): Promise<{ samples: number; slides: number; ms: number }> {
   return (await page.evaluate(async (o) => {
     const started = performance.now();
+    // The BOARD has to be seeded too, not just the walk.
+    //
+    // This used Math.random to decide which blocks get cut, so every run walked
+    // a different board while the harness advertised itself as reproducible —
+    // and a failure could not be re-run from its seed, which is the whole point
+    // of having one. mulberry32 again, same as the walker's rng().
+    let seedState = (o.seed ?? 20260101) >>> 0;
+    const random = () => {
+      seedState = (seedState + 0x6d2b79f5) >>> 0;
+      let x = Math.imul(seedState ^ (seedState >>> 15), 1 | seedState);
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
     const mod = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
     const codes = ["AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH"];
     const agents: Array<[string, string]> = [
@@ -450,7 +463,7 @@ export async function seedLarge(
 
         // Most blocks get cut, so the board has real work at every stage rather
         // than a thousand identical embedded blocks.
-        if (Math.random() < (o.cutFraction ?? 0.7)) {
+        if (random() < (o.cutFraction ?? 0.7)) {
           const groups: unknown[] = [];
           const count = 1 + (n % 3);
           for (let g = 0; g <= count; g += 1) {

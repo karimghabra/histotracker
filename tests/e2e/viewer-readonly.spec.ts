@@ -225,7 +225,10 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
   // …but the protocol checkboxes are absent, so nothing can hang.
   await expect(vw.getByRole("button", { name: "Stained", exact: true })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: "Coverslipped", exact: true })).toHaveCount(0);
-  await expect(vw.getByLabel("Active operator")).toHaveCount(0);
+  // There used to be an assertion here that the "Active operator" box was absent
+  // for a viewer. #127 removed that box from the app entirely, so the assertion
+  // could no longer fail for any reason — a vacuous pass, which is worse than no
+  // assertion because it reads like coverage. The two above are the real check.
   await expect(vw.getByText(/Read-only viewer/).first()).toBeVisible();
 
   // The workstation's own rack panel DOES offer them.

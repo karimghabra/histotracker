@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -16,8 +16,9 @@ import {
 } from "../lib/stages";
 import { logAgents, outstandingStains } from "../lib/logStains";
 import type { AssignedStain, LogAgent } from "../lib/logStains";
-import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt, parseAgent, CATALOG_SEP } from "../lib/utils";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
+import { RemovalReasonDialog } from "./RemovalReasonDialog";
 
 // A sample's coarse position in the lab pipeline, derived from its slides (which
 // hold the accurate per-stage stamps) and — before any slides exist — its own
@@ -250,6 +251,7 @@ function NotesEditor({
   // rather than three separate call-site checks, one of which would be missed
   // (#72). Left editable, typing was accepted and silently discarded on blur.
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   // Adopt external changes only while not editing, so a refetch can't clobber typing.
   useEffect(() => {
     if (!focused) setText(value ?? "");
@@ -260,7 +262,7 @@ function NotesEditor({
       value={text}
       rows={rows}
       readOnly={readOnly}
-      title={readOnly ? "Read-only viewer — edited on the workstation" : undefined}
+      title={readOnly ? readOnlyNotice(reason, "Read-only viewer — edited on the workstation") : undefined}
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
       onFocus={() => setFocused(true)}
@@ -305,10 +307,16 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
 }
 
 export function LogsView() {
-  const { tagSlidesDepth } = useActions();
+  // #133 — the Logs get the actions the dashboard has, driven by the selection
+  // that was already here for tagging. One ticked list, three things to do with
+  // it, exactly as the rack panel works since 0.14.1.
+  const { tagSlidesDepth, removeSlides, reassignSlides } = useActions();
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const [showDepthDialog, setShowDepthDialog] = useState(false);
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const toggleSlideSelect = (id: number) =>
     setSelectedSlideIds((cur) => {
       const next = new Set(cur);
@@ -325,6 +333,18 @@ export function LogsView() {
   const addableAgents = useMemo(
     () => catalog.filter((agent) => agent.is_active !== 0),
     [catalog],
+  );
+  // Removed slides can be SELECTED — "Show removed" puts them in the list, and
+  // tagging deliberately skips them rather than refusing the whole selection
+  // (#69). Remove and reassign work on the live subset for the same reason: a
+  // technician ticking eleven slides, one of which broke last week, should get
+  // the ten done rather than an error and nothing.
+  const liveSelectedIds = useMemo(
+    () =>
+      slides
+        .filter((slide) => selectedSlideIds.has(slide.id) && !isRemoved(slide))
+        .map((slide) => slide.id),
+    [slides, selectedSlideIds],
   );
   const { data: removalList = [] } = useSlideRemovals();
   const removals = useMemo(
@@ -426,21 +446,6 @@ export function LogsView() {
     [samples, slidesBySample],
   );
 
-  // Candidate blocks for refiling a mislabelled slide. Every live block the
-  // Logs already knows about, minus the one it is filed under — computed once
-  // here rather than per row, and derived from the same data the table draws so
-  // it can never offer a block that is not on screen.
-  const relabelTargets = useMemo(
-    () =>
-      rows
-        .filter((row) => row.sample.current_stage !== "removed")
-        .map((row) => ({
-          id: row.sample.id,
-          code: displayCode(row.sample.sample_code),
-          description: row.sample.sample_description ?? "",
-        })),
-    [rows],
-  );
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -789,9 +794,6 @@ export function LogsView() {
                   onlyMatching={onlyMatching}
                   colCount={columns.length + 1}
                   addableAgents={addableAgents}
-                  relabelTargets={relabelTargets.filter(
-                    (candidate) => candidate.id !== row.sample.id,
-                  )}
                   selectedSlideIds={selectedSlideIds}
                   onToggleSlideSelect={toggleSlideSelect}
                 />
@@ -801,29 +803,112 @@ export function LogsView() {
         </table>
       </div>
 
-      {/* Depth-tagging action bar — appears when slides are selected (#69). */}
+      {/* Selection action bar — tagging (#69), and since #133 the two things the
+          issue named: removal and reassignment. */}
       {selectedSlideIds.size > 0 && (
         <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center">
-          <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-line bg-panel px-4 py-2 shadow-xl">
+          <div className="pointer-events-auto flex flex-col gap-1.5 rounded-xl border border-line bg-panel px-4 py-2 shadow-xl">
+            <div className="flex items-center gap-3">
             <span className="text-xs font-medium text-ink">
               {selectedSlideIds.size} slide{selectedSlideIds.size === 1 ? "" : "s"} selected
+              {liveSelectedIds.length !== selectedSlideIds.size && (
+                <span className="ml-1 text-ink-faint">
+                  ({liveSelectedIds.length} live)
+                </span>
+              )}
             </span>
-            {/* A viewer can SEE existing tags but cannot add them (#72) — the
+            {/* A viewer can SEE the record but cannot change it (#72/#128) — the
                 write would be rejected and the dialog would hang. */}
             {readOnly ? (
-              <span className="text-[11px] text-ink-faint">Read-only viewer — tagging is done on the workstation</span>
+              <span className="text-[11px] text-ink-faint">
+                {readOnlyNotice(reason, "Read-only viewer — this is done on the workstation")}
+              </span>
             ) : (
-              <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
-                <Tag size={13} /> Create Tag
-              </Button>
+              <>
+                <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => setShowDepthDialog(true)}>
+                  <Tag size={13} /> Create Tag
+                </Button>
+                {/* Reassigning is a SELECTION action, not a per-row dropdown —
+                    the lesson of 0.14.1, where a select box on every row was
+                    twenty-four controls for an occasional job. */}
+                <select
+                  aria-label="Reassign the selected slides"
+                  className={selectClass}
+                  value=""
+                  disabled={liveSelectedIds.length === 0}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (!next) return;
+                    event.target.value = "";
+                    const target =
+                      next === "extra"
+                        ? ({ extra: true } as const)
+                        : (() => {
+                            const { assayType, assayName } = parseAgent(next);
+                            return { assayType: assayType as "stain" | "ihc", assayName };
+                          })();
+                    setActionError(null);
+                    void reassignSlides(liveSelectedIds, target)
+                      .then(() => setSelectedSlideIds(new Set()))
+                      .catch((err: unknown) =>
+                        setActionError(err instanceof Error ? err.message : "Could not reassign."),
+                      );
+                  }}
+                >
+                  <option value="">Reassign to…</option>
+                  {addableAgents.map((agent) => (
+                    <option key={`${agent.assay_type}:${agent.name}`} value={`${agent.assay_type}:${agent.name}`}>
+                      {agent.name}
+                    </option>
+                  ))}
+                  <option value="extra">Extra (no stain)</option>
+                </select>
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1.5 text-xs text-red-700"
+                  disabled={liveSelectedIds.length === 0}
+                  title={
+                    liveSelectedIds.length === 0
+                      ? "Every selected slide has already been removed"
+                      : undefined
+                  }
+                  onClick={() => setShowRemoveDialog(true)}
+                >
+                  <Trash2 size={13} /> Remove
+                </Button>
+              </>
             )}
-            <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSelectedSlideIds(new Set())}>
+            <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => {
+              setSelectedSlideIds(new Set());
+              setActionError(null);
+            }}>
               Clear
             </Button>
+            </div>
+            {actionError && (
+              <p className="text-[11px] text-red-700">{actionError}</p>
+            )}
           </div>
         </div>
       )}
 
+      {showRemoveDialog && (
+        <RemovalReasonDialog
+          title="Remove slides"
+          what={`${liveSelectedIds.length} slide${liveSelectedIds.length === 1 ? "" : "s"}`}
+          confirmLabel={`Remove ${liveSelectedIds.length} slide${liveSelectedIds.length === 1 ? "" : "s"}`}
+          onClose={() => setShowRemoveDialog(false)}
+          onConfirm={(why) => {
+            setShowRemoveDialog(false);
+            setActionError(null);
+            void removeSlides(liveSelectedIds, why)
+              .then(() => setSelectedSlideIds(new Set()))
+              .catch((err: unknown) =>
+                setActionError(err instanceof Error ? err.message : "Could not remove."),
+              );
+          }}
+        />
+      )}
       {showDepthDialog && (
         <DepthTagDialog
           count={selectedSlideIds.size}
@@ -901,7 +986,6 @@ function FragmentRow({
   onlyMatching,
   colCount,
   addableAgents,
-  relabelTargets,
   selectedSlideIds,
   onToggleSlideSelect,
 }: {
@@ -930,8 +1014,6 @@ function FragmentRow({
   colCount: number;
   /** Active agents that can be added straight onto this block (#114). */
   addableAgents: Array<{ assay_type: string; name: string }>;
-  /** The other blocks a mislabelled slide could actually have come from. */
-  relabelTargets: Array<{ id: number; code: string; description: string }>;
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
 }) {
@@ -941,14 +1023,7 @@ function FragmentRow({
     editSampleDescription,
     setArchived,
     requestStainForSamples,
-    relabelSlideToSample,
   } = useActions();
-  // Relabelling is per-slide, so the draft is keyed by slide id — otherwise
-  // opening a second row inherits the first one's half-typed reason.
-  const [relabelFor, setRelabelFor] = useState<number | null>(null);
-  const [relabelTo, setRelabelTo] = useState("");
-  const [relabelWhy, setRelabelWhy] = useState("");
-  const [relabelFlash, setRelabelFlash] = useState<string | null>(null);
   const [stainToAdd, setStainToAdd] = useState("");
   const [addFlash, setAddFlash] = useState<string | null>(null);
   const readOnly = useReadOnly();
@@ -1169,9 +1244,9 @@ function FragmentRow({
                     type="button"
                     disabled={!stainToAdd}
                     onClick={async () => {
-                      const [assayType, assayName] = stainToAdd.split("::");
+                      const { assayType, assayName } = parseAgent(stainToAdd, CATALOG_SEP);
                       try {
-                        const { pulled, failed } = await requestStainForSamples(
+                        const { pulled, joined, failed } = await requestStainForSamples(
                           [sample.id],
                           assayType as "stain" | "ihc",
                           assayName,
@@ -1182,7 +1257,9 @@ function FragmentRow({
                             ? failed[0].message
                             : pulled.length
                               ? `${assayName} pulled from an extra → now in Staining`
-                              : `${assayName} added — the block needs a cut`,
+                              : joined.length
+                                ? `${assayName} added to the cut already waiting`
+                                : `${assayName} added — the block needs a cut`,
                         );
                       } catch (error) {
                         setAddFlash(error instanceof Error ? error.message : String(error));
@@ -1407,94 +1484,13 @@ function FragmentRow({
                             placeholder="Notes about this slide…"
                             onSave={(notes) => void editSlideNotes(slide.id, notes)}
                           />
-                          {/* Mislabelling is the one correction the app could
-                              not make: a slide reaches its block only through
-                              its cut group, so glass cut from one block and
-                              written up as another could only be removed and
-                              re-cut — throwing away the fact that it exists.
-                              The Logs is the right home for it because this is
-                              the one place every slide is visible at every
-                              stage, including after its rack has retired. */}
-                          {!readOnly && !removed && relabelTargets.length > 0 && (
-                            <div className="rounded-md border border-line bg-surface px-2 py-1.5">
-                              {relabelFor === slide.id ? (
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <select
-                                    aria-label={`Move ${displayCode(slide.slide_code)} to another block`}
-                                    value={relabelTo}
-                                    onChange={(event) => setRelabelTo(event.target.value)}
-                                    className="rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
-                                  >
-                                    <option value="">Which block is it really from…</option>
-                                    {relabelTargets.map((candidate) => (
-                                      <option key={candidate.id} value={candidate.id}>
-                                        {candidate.code}
-                                        {candidate.description ? ` — ${candidate.description}` : ""}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <input
-                                    aria-label={`Why ${displayCode(slide.slide_code)} is being moved`}
-                                    value={relabelWhy}
-                                    onChange={(event) => setRelabelWhy(event.target.value)}
-                                    placeholder="Why — this is the record"
-                                    className="min-w-40 flex-1 rounded border border-line bg-white px-1.5 py-1 text-[11px] text-ink outline-none focus:border-brand"
-                                  />
-                                  <button
-                                    type="button"
-                                    disabled={!relabelTo || !relabelWhy.trim()}
-                                    onClick={async () => {
-                                      try {
-                                        await relabelSlideToSample(
-                                          slide.id,
-                                          Number(relabelTo),
-                                          relabelWhy,
-                                        );
-                                        setRelabelFlash("Refiled — both blocks record it.");
-                                        setRelabelFor(null);
-                                        setRelabelTo("");
-                                        setRelabelWhy("");
-                                      } catch (error) {
-                                        setRelabelFlash(
-                                          error instanceof Error ? error.message : String(error),
-                                        );
-                                      }
-                                    }}
-                                    className="rounded px-1.5 py-1 text-[11px] font-medium text-brand hover:bg-brand/10 disabled:opacity-40"
-                                  >
-                                    Refile
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRelabelFor(null);
-                                      setRelabelWhy("");
-                                      setRelabelTo("");
-                                    }}
-                                    className="rounded px-1.5 py-1 text-[11px] text-ink-soft hover:bg-black/5"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setRelabelFor(slide.id);
-                                    setRelabelFlash(null);
-                                  }}
-                                  className="text-[11px] font-medium text-ink-soft hover:text-brand"
-                                >
-                                  Wrong block? Refile this slide…
-                                </button>
-                              )}
-                              {relabelFlash && relabelFor !== slide.id && (
-                                <span role="status" className="ml-2 text-[11px] text-brand">
-                                  {relabelFlash}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          {/* #121 removed the "refile onto another block" control that used to
+                              live here. Mislabelled glass is rare enough that the lab would
+                              rather correct it by hand than have a one-click path to rewriting
+                              which block a slide came from sitting in the everyday log view.
+                              `relabelSlideToSample` is deliberately KEPT in db.ts — the
+                              capability, its timeline events and its guards are all still there
+                              and still tested; only the affordance is gone. */}
                         </div>
                       )}
                     </div>

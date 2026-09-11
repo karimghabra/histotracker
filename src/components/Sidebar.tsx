@@ -1,11 +1,20 @@
-import { History, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Settings, Table2 } from "lucide-react";
+import { History, Layers, LayoutGrid, Microscope, PanelLeftClose, PanelLeftOpen, Plus, Settings, Table2 } from "lucide-react";
 import { useState } from "react";
 import type { Project } from "../lib/types";
 import { cn } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { APP_VERSION } from "../lib/version";
 
 export type AppView = "board" | "logs" | "manifest";
+
+/**
+ * The value stored for "no project chosen" (#131).
+ *
+ * A sentinel rather than an absent key, because absent already means "nothing
+ * has been stored yet", and those two must restore differently: nothing stored
+ * lands on a project, All Projects stays on All Projects.
+ */
+export const ALL_PROJECTS = "all";
 
 export function Sidebar({
   projects,
@@ -19,7 +28,7 @@ export function Sidebar({
 }: {
   projects: Project[];
   selectedProjectId: number | null;
-  onSelectProject: (id: number) => void;
+  onSelectProject: (id: number | null) => void;
   onAddProject: () => void;
   view: AppView;
   onSelectView: (view: AppView) => void;
@@ -32,6 +41,7 @@ export function Sidebar({
     () => window.localStorage.getItem("histometer-sidebar-collapsed") === "true",
   );
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   function toggleCollapsed() {
     setCollapsed((current) => {
       window.localStorage.setItem("histometer-sidebar-collapsed", String(!current));
@@ -80,7 +90,7 @@ export function Sidebar({
           // A viewer cannot create a project; the dialog's Save was rejected
           // downstream with no feedback (#72).
           disabled={readOnly}
-          title={readOnly ? "Read-only viewer — projects are created on the workstation" : "Add project"}
+          title={readOnly ? readOnlyNotice(reason, "Read-only viewer — projects are created on the workstation") : "Add project"}
           className="rounded-md p-1 text-ink-soft transition hover:bg-brand/10 hover:text-ink"
         >
           <Plus size={16} />
@@ -100,6 +110,44 @@ export function Sidebar({
           <p className="px-2 py-4 text-sm text-ink-faint">
             No projects yet. Add one to begin.
           </p>
+        )}
+        {/* #131 — the selection drives the whole dashboard, so there has to be a
+            way to say "no filter".
+
+            Deliberately NOT shaped like a project. The first version copied the
+            project row exactly — same card, same Selected badge, same count pill
+            — and read as a project called "All", which is a lie about what the
+            list contains. It is a control that clears the filter, so it says so:
+            an icon no project has, one line instead of two, a plain count rather
+            than a pill, and a rule under it separating the control from the
+            things it acts on. */}
+        {projects.length > 0 && (
+          <>
+            <button
+              onClick={() => onSelectProject(null)}
+              title={collapsed ? "All projects" : undefined}
+              aria-current={selectedProjectId === null ? "true" : undefined}
+              aria-label="All projects"
+              className={cn(
+                "mb-1 flex w-full items-center gap-2 rounded-md py-1.5 text-left text-sm transition",
+                collapsed ? "justify-center px-1" : "px-2",
+                selectedProjectId === null
+                  ? "bg-brand/20 font-semibold text-ink"
+                  : "text-ink-soft hover:bg-brand/8 hover:text-ink",
+              )}
+            >
+              <Layers size={14} className="shrink-0" />
+              {!collapsed && (
+                <>
+                  <span className="flex-1 truncate">All projects</span>
+                  <span className="shrink-0 text-[11px] text-ink-faint">
+                    {projects.reduce((total, project) => total + (project.sample_count ?? 0), 0)}
+                  </span>
+                </>
+              )}
+            </button>
+            <div className={cn("mb-2 border-t border-line/60", collapsed ? "mx-1" : "mx-2")} />
+          </>
         )}
         {projects.map((p) => {
           const active = p.id === selectedProjectId;

@@ -214,7 +214,10 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
 
   // #41a: the embedded tile is flagged. It says NEEDS CUT (#110): the
   // slide that will carry the stain has not been cut yet.
-  await expect(page.getByText(/needs cut/i)).toBeVisible();
+  // Scoped to the FLAG on the card. Since #129 the Embedded Inventory header
+  // also carries "Needs cut" twice — a filter option and a sort option — so an
+  // unscoped text match now finds the controls as well as the thing they act on.
+  await expect(page.getByText("⚑ needs cut")).toBeVisible();
 
   // #41b: Send for Cutting is prefilled from the block's preselected stains.
   await page.getByText("EE-1", { exact: true }).first().click();
@@ -276,7 +279,6 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   // Run the whole stain protocol (Stained → Coverslipped → Dried). Finishing the
   // last step auto-advances the rack to Ready for Imaging, scattering it into a
   // per-sample imaging stack (which is where the aggregate row loses the stamps).
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -345,7 +347,6 @@ test("Logs status partition + CSV export", async ({ page }) => {
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
   await staining.getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -463,7 +464,6 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
 
   // Run the stain protocol → scatter into Ready for Imaging.
   await col("Staining / IHC").getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   const steps = ["Stained", "Coverslipped"];
   for (let i = 0; i < steps.length; i += 1) {
     await page.getByRole("button", { name: steps[i], exact: true }).click();
@@ -499,7 +499,6 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
 
   // Scatter into Ready for Imaging.
   await col("Staining / IHC").getByText("Alcian Blue").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }

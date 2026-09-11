@@ -10,7 +10,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { compareSampleCodes, compareSlideCodes } from "../lib/utils";
 import { useViewPref } from "../hooks/useViewPref";
-import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack } from "../lib/types";
+import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack, Project } from "../lib/types";
 import {
   BLOCK_QUEUE_KEYS,
   BOARD_LANES,
@@ -23,6 +23,7 @@ import {
   STAGE_ORDER,
   STAGE_TO_QUEUE,
 } from "../lib/stages";
+import { sampleNeedsCut } from "../lib/db";
 import { ProcessingBatchRow } from "./ProcessingBatchRow";
 import { QueueColumn } from "./QueueColumn";
 import { SampleCard } from "./SampleCard";
@@ -30,13 +31,51 @@ import { SectionCard } from "./SectionCard";
 import { StackCard } from "./StackCard";
 import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
-type EmbeddedSort = "embedded_date" | "name" | "sample_id";
+// #129 — "needs cut" is a SORT key and nothing else. It shipped in 0.15.0 with a
+// filter beside it, which was the wrong shape: a block that owes a cut is a
+// priority, not a category, and hiding the rest of the drawer to see the urgent
+// ones costs you the context of what else is in there. Sorting puts them at the
+// top and keeps the drawer whole.
+type EmbeddedSort = "needs_cut" | "embedded_date" | "name" | "sample_id";
 type ExtraSlidesSort = "sample_id" | "name";
 // #89 — Pre-processing is where every sample enters, so it fills up fastest and
 // needs the same project filter and sort the downstream queues already have.
 type PreprocessingSort = "received_date" | "name" | "sample_id";
 type NeedsEmbeddingSort = "picked_up_date" | "name" | "sample_id";
 type NeedsSectioningSort = "queued_date" | "name" | "sample_id";
+
+/**
+ * Keep the SELECTED project on a column's menu even when that column is empty
+ * of it (#131 follow-up).
+ *
+ * Each column offered only the projects it currently holds, and a guard dropped
+ * the filter back to "all" the moment the selected one fell off that list. So
+ * choosing a project in the sidebar and looking at a stage with none of its work
+ * gave you every other project's work instead — the opposite of what filtering
+ * to a project should do.
+ *
+ * The guard was right about the underlying hazard and wrong about the trigger. A
+ * controlled `<select>` whose value is not among its options does not go blank:
+ * react-dom re-selects the FIRST option and fires no change event, so the
+ * control and the state silently disagree (#85). Keeping an option for the
+ * current value closes that off directly, and then an empty column can honestly
+ * render empty. The guard now fires only for a project that no longer EXISTS —
+ * deleted or deactivated — which is the case it was actually written for.
+ */
+function withSelectedProject(
+  present: Array<[number, string]>,
+  selected: number | "all",
+  projects: Project[],
+): Array<[number, string]> {
+  if (selected === "all" || present.some(([id]) => id === selected)) return present;
+  const project = projects.find((candidate) => candidate.id === selected);
+  return project ? [...present, [project.id, project.code] as [number, string]] : present;
+}
+
+function withSelectedCode(present: string[], selected: string, projects: Project[]): string[] {
+  if (selected === "all" || present.includes(selected)) return present;
+  return projects.some((candidate) => candidate.code === selected) ? [...present, selected] : present;
+}
 
 /** Shared empty list so an absent queue keeps a stable identity across renders. */
 const NO_STACKS: SlideStack[] = [];
@@ -51,6 +90,15 @@ function sortEmbedded(samples: Sample[], key: EmbeddedSort): Sample[] {
   const copy = [...samples];
   copy.sort((a, b) => {
     if (a.is_priority !== b.is_priority) return b.is_priority - a.is_priority;
+    // Flagged first, then oldest-flagged first, because "needs cut" is not an
+    // ordering on its own — it is one bit, and it would leave the whole flagged
+    // group in whatever order the query happened to return.
+    if (key === "needs_cut") {
+      const aFlag = sampleNeedsCut(a) ? 1 : 0;
+      const bFlag = sampleNeedsCut(b) ? 1 : 0;
+      if (aFlag !== bFlag) return bFlag - aFlag;
+      return (a.stage_embedded_at ?? "").localeCompare(b.stage_embedded_at ?? "");
+    }
     switch (key) {
       case "name":
         return (a.sample_description || a.sample_code).localeCompare(
@@ -217,6 +265,9 @@ export function Board({
   onSelectProcessingBatch,
   onConfirmProcessingBatchStart,
   onToggleSamplePriority,
+  projectFilterId,
+  projectFilterCode,
+  projects,
   readOnly = false,
 }: {
   samples: Sample[];
@@ -244,6 +295,21 @@ export function Board({
   onSelectProcessingBatch: (batchId: number) => void;
   onConfirmProcessingBatchStart: (batchId: number) => void;
   onToggleSamplePriority: (sampleId: number) => void;
+  /**
+   * The sidebar's project selection (#131); "all" when none is chosen.
+   *
+   * Both the id AND the code, because the six column filters are not one kind
+   * of thing: four match `project_id`, and the Extras and Ready-for-Imaging ones
+   * match `project_code`. Passing only the id set those two to a number that no
+   * code can equal, and both columns silently rendered empty — caught by the
+   * sync specs, not by the first version of the #131 test, which only looked at
+   * Pre-processing.
+   */
+  projectFilterId: number | "all";
+  projectFilterCode: string;
+  /** Every live project, so a column can offer the selected one even when it
+   *  holds none of its work (#131). */
+  projects: Project[];
   /** Viewer role: disable drag-to-move and the priority toggle. */
   readOnly?: boolean;
 }) {
@@ -272,6 +338,47 @@ export function Board({
   // Ready for Imaging fills up fast, so it gets its own project + stain filters (#82).
   const [imagingProjectFilter, setImagingProjectFilter] = useViewPref<string>("board.imagingProjectFilter", "all");
   const [imagingStainFilter, setImagingStainFilter] = useViewPref<string>("board.imagingStainFilter", "all");
+  // #131 — CHANGING the sidebar selection sets every column's project filter.
+  //
+  // It SETS rather than replaces: each column keeps its own control, so "show me
+  // all of Staining while I work through one project's Embedded Inventory" is
+  // still reachable. Picking a project is the broad stroke; the per-column
+  // dropdown is the exception you make afterwards.
+  //
+  // The mount run is skipped, and that is the whole subtlety. `useEffect` with a
+  // dependency array still runs once on mount, and the Board REMOUNTS every time
+  // you come back from the Logs — so without this guard, a trip to the Logs
+  // stamped the sidebar's selection over the column filter you had just set, and
+  // #104 ("filters survive a view switch") was quietly broken. It survived the
+  // local run by timing and failed all three attempts in CI.
+  //
+  // The consequence, stated because it is a real trade: on a fresh load the
+  // columns show whatever was stored for them, not whatever the sidebar restored
+  // to. That is the correct half to lose. #104 is about a choice the user made
+  // by hand surviving; #131 is about what happens when they PICK a project, and
+  // picking is an action, not a restore.
+  const lastSelection = useRef<string | null>(null);
+  useEffect(() => {
+    const selection = `${projectFilterId}|${projectFilterCode}`;
+    if (lastSelection.current === null) {
+      // First render of this Board instance: adopt nothing, remember where we
+      // came in at, and let the stored column preferences stand.
+      lastSelection.current = selection;
+      return;
+    }
+    if (lastSelection.current === selection) return;
+    lastSelection.current = selection;
+    setEmbeddedFilter(projectFilterId);
+    setPreprocessingFilter(projectFilterId);
+    setNeedsEmbeddingFilter(projectFilterId);
+    setNeedsSectioningFilter(projectFilterId);
+    // Code, not id — see the prop's note.
+    setExtraSlidesFilter(projectFilterCode);
+    setImagingProjectFilter(projectFilterCode);
+    // The setters are stable (useViewPref), so the selection is the only trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectFilterId, projectFilterCode]);
+
   const [topLaneHeight, setTopLaneHeight] = useState(
     () => Number(window.localStorage.getItem("histometer-board-top-height") ?? "50"),
   );
@@ -385,8 +492,8 @@ export function Board({
         seen.set(section.project_id, section.project_code);
       }
     }
-    return [...seen.entries()];
-  }, [needsSectioningGroups]);
+    return withSelectedProject([...seen.entries()], needsSectioningFilter, projects);
+  }, [needsSectioningGroups, needsSectioningFilter, projects]);
 
   const displayedSectionGroups = useMemo(() => {
     let items = needsSectioningGroups;
@@ -420,8 +527,8 @@ export function Board({
     for (const sample of blocksByQueue.embedded_inventory ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], embeddedFilter, projects);
+  }, [blocksByQueue, embeddedFilter, projects]);
 
   const displayedEmbeddedItems = useMemo(() => {
     let items = blocksByQueue.embedded_inventory ?? [];
@@ -437,8 +544,8 @@ export function Board({
     for (const sample of blocksByQueue.preprocessing ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], preprocessingFilter, projects);
+  }, [blocksByQueue, preprocessingFilter, projects]);
 
   const displayedPreprocessingItems = useMemo(() => {
     let items = blocksByQueue.preprocessing ?? [];
@@ -467,8 +574,8 @@ export function Board({
     for (const sample of blocksByQueue.needs_embedding ?? []) {
       if (sample.project_code) seen.set(sample.project_id, sample.project_code);
     }
-    return [...seen.entries()];
-  }, [blocksByQueue]);
+    return withSelectedProject([...seen.entries()], needsEmbeddingFilter, projects);
+  }, [blocksByQueue, needsEmbeddingFilter, projects]);
 
   const displayedNeedsEmbeddingItems = useMemo(() => {
     let items = blocksByQueue.needs_embedding ?? [];
@@ -498,8 +605,13 @@ export function Board({
   // don't re-run on every render just because `?? []` minted a new array.
   const imagingStacks = stacksByQueue.analysis_pending ?? NO_STACKS;
   const projectsInImaging = useMemo(
-    () => [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
-    [imagingStacks],
+    () =>
+      withSelectedCode(
+        [...new Set(imagingStacks.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
+        imagingProjectFilter,
+        projects,
+      ),
+    [imagingStacks, imagingProjectFilter, projects],
   );
   const stainsInImaging = useMemo(
     () => [...new Set(imagingStacks.flatMap(agentsOf))].sort((a, b) => a.localeCompare(b)),
@@ -539,8 +651,9 @@ export function Board({
   }, [imagingStainFilter, stainsInImaging]);
 
   const projectsInExtraSlides = useMemo(() => {
-    return [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
-  }, [extraSlides]);
+    const present = [...new Set(extraSlides.map((slide) => slide.project_code).filter(Boolean) as string[])];
+    return withSelectedCode(present, extraSlidesFilter, projects);
+  }, [extraSlides, extraSlidesFilter, projects]);
 
   const displayedExtraSlides = useMemo(() => {
     let items = extraSlides;
@@ -1026,21 +1139,6 @@ export function Board({
                                 stack={stack}
                                 selected={selectedStacks.has(stack.id)}
                                 onSelect={selectStack}
-                                // A rack that came after an existing one for the
-                                // same agent. `visibleStacks` is already in
-                                // creation order, so "is there an earlier one?"
-                                // is just a look backwards.
-                                laterRackFor={
-                                  stack.kind === "stain" &&
-                                  visibleStacks
-                                    .slice(0, visibleStacks.indexOf(stack))
-                                    .some(
-                                      (other) =>
-                                        other.kind === "stain" &&
-                                        other.assay_type === stack.assay_type &&
-                                        other.assay_name === stack.assay_name,
-                                    )
-                                }
                               />
                             ))
                           : groups.map((group) => (
@@ -1107,10 +1205,12 @@ export function Board({
                               ))}
                             </select>
                             <select
+                              aria-label="Sort embedded inventory"
                               className={selectClass}
                               value={embeddedSort}
                               onChange={(event) => setEmbeddedSort(event.target.value as EmbeddedSort)}
                             >
+                              <option value="needs_cut">Needs cut first</option>
                               <option value="embedded_date">Date embedded</option>
                               <option value="name">Name</option>
                               <option value="sample_id">Sample ID</option>

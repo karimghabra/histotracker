@@ -11,6 +11,9 @@ name: Workflow tests
 on:
   push:
   pull_request:
+  # The installer workflow runs this whole file on the commit it is about to
+  # release, and publishes nothing unless every job here passes.
+  workflow_call:
 
 jobs:
   workflow-harness:

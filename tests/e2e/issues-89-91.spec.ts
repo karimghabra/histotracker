@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -31,9 +31,11 @@ async function addProject(page: Page, code: string, name: string) {
   await page.getByRole("button", { name: "Save Project" }).click();
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode: string) {
+  // #132 — the dialog asks which project rather than inheriting the sidebar's
+  // selection, so every caller has to say. Named explicitly even when only one
+  // project exists, because that is the thing the test means.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
 }
@@ -68,8 +70,8 @@ async function dragOnto(page: Page, sourceText: string, columnTitle: string) {
 // started, which is exactly when the old planned-only rule refused to help.
 test("#91: a sample can be added to and removed from a RUNNING processor run", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "in the run");
-  await addSample(page, "forgotten");
+  await addSample(page, "in the run", "EE");
+  await addSample(page, "forgotten", "EE");
   await completePreprocessing(page, "EE-1");
   await completePreprocessing(page, "EE-2");
 
@@ -123,8 +125,8 @@ test("#91: a sample can be added to and removed from a RUNNING processor run", a
 // around the guard that starting one already enforces.
 test("#91: a half-preprocessed sample is not offered for a running run", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "ready to go");
-  await addSample(page, "still in fixative");
+  await addSample(page, "ready to go", "EE");
+  await addSample(page, "still in fixative", "EE");
   await completePreprocessing(page, "EE-1");
   // EE-2 gets only the first step — it is not eligible for the processor.
   await page.getByText("EE-2", { exact: true }).first().click();
@@ -147,9 +149,13 @@ test("#91: a half-preprocessed sample is not offered for a running run", async (
 // #89 — Pre-processing is where every sample enters, so it fills up fastest.
 test("#89: Pre-processing filters by project and sorts", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "enthesis one");
+  await addSample(page, "enthesis one", "EE");
   await addProject(page, "CART", "Cartilage Repair");
-  await addSample(page, "cartilage one");
+  await addSample(page, "cartilage one", "CART");
+  // #131 — creating a project selects it, and the selection now filters the
+  // board. This test is about the COLUMN control, so it starts from a board
+  // that is showing everything.
+  await page.getByRole("button", { name: "All projects" }).click();
 
   const preprocessing = page
     .locator("div.rounded-lg")
@@ -176,11 +182,12 @@ test("#89: Pre-processing filters by project and sorts", async ({ page }) => {
 // #89 — the stale-filter trap that produced bug #85: a <select> whose selected
 // option disappears keeps reporting the old value and fires no change event, so
 // the column silently filters itself down to nothing.
-test("#89: the pre-processing filter clears itself when its project empties", async ({ page }) => {
+test("#89: an emptied filter shows nothing, and says which project it is showing nothing of", async ({ page }) => {
   await signInAndProject(page);
-  await addSample(page, "enthesis one");
+  await addSample(page, "enthesis one", "EE");
   await addProject(page, "CART", "Cartilage Repair");
-  await addSample(page, "cartilage one");
+  await addSample(page, "cartilage one", "CART");
+  await page.getByRole("button", { name: "All projects" }).click();
 
   const preprocessing = page
     .locator("div.rounded-lg")
@@ -197,9 +204,110 @@ test("#89: the pre-processing filter clears itself when its project empties", as
     await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 25000 });
 
-  // The filter must drop back to All Projects rather than hiding EE-1 forever.
-  await expect(page.getByLabel("Filter pre-processing by project")).toHaveValue("all", {
-    timeout: 15000,
-  });
+  // This used to assert the opposite: the filter dropped back to All Projects,
+  // and the column filled up with EE's work. That was the wrong half of the fix
+  // and #131's follow-up says so — asking for CART and being shown EE is not
+  // filtering. The column now shows NOTHING.
+  await expect(preprocessing.getByText("EE-1", { exact: true })).toHaveCount(0, { timeout: 15000 });
+  await expect(preprocessing.getByText("CART-1", { exact: true })).toHaveCount(0);
+
+  // What #85/#89 were actually protecting is still protected, and it is the
+  // part that matters: the control must not LIE. A controlled <select> whose
+  // value is off the menu silently re-selects the first option and fires no
+  // change event, so the board would filter to CART while the control read "All
+  // Projects" and nothing on screen explained the empty column. CART stays on
+  // the menu and stays selected, so the emptiness is legible and one click from
+  // being undone.
+  const filter = page.getByLabel("Filter pre-processing by project");
+  await expect(filter).not.toHaveValue("all");
+  expect(await filter.locator("option:checked").innerText()).toContain("CART");
+
+  // And clearing it by hand brings EE-1 back, so nothing is stranded.
+  await filter.selectOption("all");
   await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible();
+});
+
+// #135 — the run with one sample in it could not be emptied. The remove control
+// was hidden on the last member, and the data layer refused an empty membership,
+// so the only way out was to start a run that was not happening and mark it done.
+test("#135: taking the last sample out removes the run", async ({ page }) => {
+  await signInAndProject(page);
+  await addSample(page, "the only block", "EE");
+  await completePreprocessing(page, "EE-1");
+
+  await dragOnto(page, "EE-1", "Processor");
+  await expect(page.getByRole("heading", { name: /Processing Batch/ })).toBeVisible();
+  await expect(async () => {
+    const btn = page.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 25000 });
+
+  await page.getByText("Batch 1", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Processing Batch 1" })).toBeVisible();
+  const drawer = page.locator("aside").filter({ hasText: "Processing Batch 1" });
+
+  // The control exists at all, which it did not before: the last member had no
+  // remove button, so a run of one was a dead end.
+  const remove = drawer.getByRole("button", { name: "Remove EE-1 from this run" });
+  await expect(remove).toBeVisible();
+  await remove.click();
+
+  // The run is gone from the board, and the block is back where it waits.
+  await expect(page.getByText("Batch 1", { exact: true })).toHaveCount(0, { timeout: 15_000 });
+  const preprocessing = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Pre-processing", exact: true }) });
+  await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible({ timeout: 15_000 });
+
+  // The run is removed outright, with its membership (0.16.3). A deliberate
+  // exception to #83, decided at the bench: an emptied run is a plan withdrawn,
+  // not work erased. 0.16.2 kept it as a `cancelled` shell, which could say a
+  // run had existed but not what was in it.
+  await expect(async () => {
+    const rows = (await page.evaluate(() =>
+      (
+        (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+          `SELECT (SELECT COUNT(*) FROM processing_batches) AS batches,
+                  (SELECT COUNT(*) FROM processing_batch_members) AS members`,
+        )
+      ) as Array<{ batches: number; members: number }>,
+    ))[0] as { batches: number; members: number };
+    expect(rows.batches, "the run is gone").toBe(0);
+    expect(rows.members, "and its membership with it").toBe(0);
+  }).toPass({ timeout: 15_000 });
+
+  // What HAPPENED is not lost: the Manifest still holds the run's creation and
+  // the block's trip in and out of the machine. That is where "who did what"
+  // lives, and it is the reason removing the batch row costs nothing.
+  const trail = (await page.evaluate(() =>
+    (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT summary FROM audit_events WHERE entity_type = 'batch' OR summary LIKE '%processing_started%'`,
+      )
+    ) as Array<{ summary: string }>,
+  )) as Array<{ summary: string }>;
+  expect(trail.length, "the Manifest still records the run and the block's stage changes")
+    .toBeGreaterThan(0);
+
+  // And the BLOCK survives — the run goes, the sample does not.
+  const survives = (await page.evaluate(() =>
+    (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT COUNT(*) AS n FROM samples`,
+      )
+    ) as Array<{ n: number }>,
+  ))[0] as { n: number };
+  expect(survives.n, "the block is untouched").toBe(1);
+
+  // And the block carries no start time for a run it is no longer in.
+  const stage = (await page.evaluate(() =>
+    (
+      (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
+        `SELECT current_stage AS s, processing_started_at AS t FROM samples LIMIT 1`,
+      )
+    ) as Array<{ s: string; t: string | null }>,
+  ))[0] as { s: string; t: string | null };
+  expect(stage.s).toBe("in_ethanol");
+  expect(stage.t).toBeNull();
 });

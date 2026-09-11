@@ -320,8 +320,6 @@ export async function markSectioned(page: Page, cardText: string): Promise<void>
  * Returns how many steps it completed.
  */
 export async function runProtocolSteps(page: Page, operator = "Alex"): Promise<number> {
-  const operatorField = page.getByLabel("Active operator");
-  if (await operatorField.count()) await operatorField.fill(operator);
   let done = 0;
   for (let guard = 0; guard < 12; guard += 1) {
     const pending = drawer(page).locator("ol li button:not(:has(svg.lucide-check))");

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
 
@@ -37,9 +37,9 @@ async function signInAndProject(page: Page) {
   await addProject(page, "EE", "Enthesis Engineering");
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode?: string) {
+  // #132 — the dialog asks which project. Single-project tests can leave it out.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
   await expect(page.getByRole("heading", { name: /New Sample/ })).toHaveCount(0);
@@ -207,15 +207,18 @@ test("#111: Needs Sectioning can be filtered by project and sorted", async ({ pa
   await addProject(page, "ZZ", "Zebrafish Zone");
 
   await page.locator("aside").first().getByRole("button", { name: /Enthesis/ }).click();
-  await addSample(page, "enthesis block");
+  await addSample(page, "enthesis block", "EE");
   await embed(page, "EE-1", "Batch 1");
   await cutWithAgent(page, "EE-1");
 
   await page.locator("aside").first().getByRole("button", { name: /Zebrafish/ }).click();
-  await addSample(page, "zebrafish block");
+  await addSample(page, "zebrafish block", "ZZ");
   await embed(page, "ZZ-1", "Batch 2");
   await cutWithAgent(page, "ZZ-1");
 
+  // #131 — the sidebar selection filters the board now, and this test is about
+  // the COLUMN's own filter, so it starts from a board showing everything.
+  await page.getByRole("button", { name: "All projects" }).click();
   const col = column(page, "Needs Sectioning");
   await expect(col.getByText("EE-1", { exact: true })).toBeVisible();
   await expect(col.getByText("ZZ-1", { exact: true })).toBeVisible();

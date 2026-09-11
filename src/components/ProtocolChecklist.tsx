@@ -2,6 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
 import { ensureChecklist, setChecklistItemComplete, snapshotDb } from "../lib/db";
+import { useActiveUser } from "../hooks/useData";
+import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { useUndoStore } from "../lib/undo";
 import { cn } from "../lib/utils";
 
@@ -28,16 +30,29 @@ export function ProtocolChecklist({
     queryKey,
     queryFn: () => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels }),
   });
-  const [operator, setOperator] = useState(
-    () => window.localStorage.getItem("histometer-active-operator") ?? "",
-  );
+  // The operator IS the signed-in user (#127).
+  //
+  // There used to be a free-text "Operator" box here, and a localStorage mirror
+  // of the signed-in user's name to prefill it — a second, editable identity
+  // sitting beside the real one. It could be typed over, it could go stale, and
+  // it was the only thing standing between an unsigned session and a completed
+  // protocol step. The user directory is the answer to "who did this"; there is
+  // no reason for a second one.
+  const { data: activeUser = null } = useActiveUser();
+  const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
+  const operator = activeUser?.name ?? "";
   const [error, setError] = useState<string | null>(null);
   const record = useUndoStore((s) => s.record);
   const complete = items.filter((item) => item.is_complete === 1).length;
+  // Two ways to be locked out, one greyed-out checklist, and the message says
+  // which: a viewer is told to use the workstation, an unsigned user to sign in.
+  const gateReason = readOnly ? reason : operator.trim() ? null : "signed-out";
+  const disabled = gateReason !== null;
 
   async function toggle(itemId: number, value: boolean) {
-    if (!operator.trim()) {
-      setError("Enter the active operator before completing protocol steps.");
+    if (disabled) {
+      setError(readOnlyMessage(gateReason));
       return;
     }
     setError(null);
@@ -48,7 +63,6 @@ export function ProtocolChecklist({
       // staining→imaging scatter it triggers) at a time, instead of jumping to
       // the last board-level action (#56).
       const before = await snapshotDb();
-      window.localStorage.setItem("histometer-active-operator", operator.trim());
       await setChecklistItemComplete(itemId, value, operator.trim());
       if (item) {
         for (const targetScopeId of scopeIds) {
@@ -91,19 +105,16 @@ export function ProtocolChecklist({
           </h3>
           <p className="text-[10px] text-ink-faint">Protocol v1 · {complete}/{items.length} complete</p>
         </div>
-        <input
-          value={operator}
-          onChange={(event) => setOperator(event.target.value)}
-          placeholder="Operator"
-          aria-label="Active operator"
-          className="w-24 rounded border border-line bg-panel px-2 py-1 text-xs text-ink outline-none focus:border-brand"
-        />
+        {operator && (
+          <span
+            className="truncate text-[11px] text-ink-faint"
+            title="Steps are recorded under this name"
+          >
+            {operator}
+          </span>
+        )}
       </div>
-      {!operator.trim() && (
-        <p className="mb-2 text-[11px] text-amber-700">
-          Enter an operator before checking workflow steps.
-        </p>
-      )}
+      {disabled && <p className="mb-2 text-[11px] text-amber-700">{readOnlyMessage(gateReason)}</p>}
       <ol className="space-y-1.5">
         {items.map((item) => {
           const done = item.is_complete === 1;
@@ -111,12 +122,16 @@ export function ProtocolChecklist({
             <li key={item.id}>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => void toggle(item.id, !done)}
                 className={cn(
                   "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition",
                   done
                     ? "border-brand/30 bg-brand/5 text-ink"
-                    : "border-line bg-panel text-ink hover:border-brand/50",
+                    : "border-line bg-panel text-ink",
+                  // Greyed rather than merely inert, so the message above reads
+                  // as the explanation for something visibly unavailable (#127).
+                  disabled ? "cursor-not-allowed opacity-50" : "hover:border-brand/50",
                 )}
               >
                 <span

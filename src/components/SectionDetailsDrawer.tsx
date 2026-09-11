@@ -8,8 +8,8 @@ import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/u
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
-import { useReadOnly } from "../lib/readOnly";
-import { displayCode, slideLetterOf } from "../lib/utils";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
+import { displayCode, slideLetterOf, parseAgent, CATALOG_SEP } from "../lib/utils";
 
 const STATUS_ONLY_STAGES = new Set(["needs_sectioning", "assignment_required", "stain_requested"]);
 
@@ -62,11 +62,11 @@ function SlideAssignmentRow({
             if (next === "extra") {
               onDraftChange(slide.id, { purpose: "extra", assayType: "", assayName: "" });
             } else {
-              const [assayType, ...nameParts] = next.split(":");
+              const { assayType, assayName } = parseAgent(next);
               onDraftChange(slide.id, {
                 purpose: "stain",
                 assayType: assayType as "stain" | "ihc",
-                assayName: nameParts.join(":"),
+                assayName,
               });
             }
           }}
@@ -125,6 +125,7 @@ export function SectionDetailsDrawer({
   const [addFlash, setAddFlash] = useState<string | null>(null);
   // A viewer reads the cutting plan and its progress, but drives none of it (#72).
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   // A Needs-Sectioning card groups every cut group of a sample, so the drawer
   // shows the slides of ALL grouped sections, not just the primary one (#55).
   const drawerSections = selectedSections.length > 0 ? selectedSections : [section];
@@ -293,7 +294,7 @@ export function SectionDetailsDrawer({
                 disabled={!addChoice}
                 onClick={async () => {
                   try {
-                    const [type, name] = addChoice.split("::");
+                    const { assayType: type, assayName: name } = parseAgent(addChoice, CATALOG_SEP);
                     await addSlideToSection(
                       section.id,
                       type === "extra" ? { extra: true } : { assayType: type as "stain" | "ihc", assayName: name },
@@ -440,7 +441,7 @@ export function SectionDetailsDrawer({
         {/* Ticking a protocol step writes, so it is workstation-only (#72). */}
         {readOnly && section.current_stage === "stain_requested" && (
           <p className="mb-4 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-            Read-only viewer — the stain protocol is run on the workstation.
+            {readOnlyNotice(reason, "Read-only viewer — the stain protocol is run on the workstation.")}
           </p>
         )}
         {!readOnly && section.current_stage === "stain_requested" && selectedAssayTypes.includes("stain") && (

@@ -19,14 +19,17 @@ workflow. The top lane is *Processing & Embedding*; the bottom lane is
 
 ![Empty board](img/01-board-empty.png)
 
-Top‑right you'll find the signed‑in user, **Manage**, **Backups**, **Requests**,
-the theme picker, **undo/redo**, **Export**, and **New Sample**. The current app
-version is shown at the bottom of the sidebar.
+Top‑right you'll find the signed‑in user, **Requests**, **undo/redo**,
+**Export** and **New Sample**. **Manage**, **Backups** and the theme picker are
+under **Settings** at the foot of the sidebar, which also shows the current app
+version.
 
 ## 2. Set up people, projects and stains
 
-Open **Manage** to add lab users, projects and the stain/IHC catalog. Add
-yourself and sign in — actions are attributed to the signed‑in user.
+Open **Manage** (under **Settings**) to add lab users, projects and the
+stain/IHC catalog. Add yourself and sign in: the board can be read by anyone,
+but nothing can be changed until somebody is signed in, and every change is
+recorded against that person.
 
 ![Manage dialog](img/02-manage.png)
 
@@ -38,7 +41,8 @@ exports.
 
 ## 3. Log a sample
 
-**New Sample** records a block: description, processing type (Short/Long),
+**New Sample** records a block: the project it belongs to (asked only when the
+lab has more than one), description, processing type (Short/Long),
 fixative, whether it needs decalcification, **embedding notes** for whoever
 picks up the mould (how it should be oriented, whether it is bisected), and any
 stains you already know you want. It lands in **Pre‑processing**.
@@ -97,9 +101,10 @@ The cut appears in **Needs Sectioning**. The tile shows a compact tally, e.g.
 ## 7. Staining protocol
 
 Open the Needs Sectioning card and **Mark Sectioned**. Slides carrying a stain
-form a **rack** in *Staining / IHC*; extras drop into inventory. Open a rack,
-enter the operator, and tick off the protocol steps (**Stained → Coverslipped →
-Dried**). Finishing the last step advances the slides to *Ready for Imaging*.
+form a **rack** in *Staining / IHC*; extras drop into inventory. Open a rack and
+tick off the protocol steps (**Stained → Coverslipped**); each step is recorded
+against the signed‑in user. Finishing the last step advances the slides
+to *Ready for Imaging*.
 
 ![Staining protocol](img/12-staining-protocol.png)
 
@@ -124,7 +129,8 @@ condensed timeline and notes.
 ## 9. Depth tagging (optional)
 
 Depth tags are a **low‑effort, relative** way to group slides — nothing requires
-them. Tick the slides that belong together; a bar appears.
+them. Tick the slides that belong together; a bar appears. The same bar can
+also reassign the ticked slides to another agent or remove them, with a reason.
 
 ![Select slides](img/15-logs-slides-selected.png)
 
@@ -174,7 +180,8 @@ time — a revert first takes a safety backup, so it's itself reversible.
 
 - **Undo / redo** (Ctrl+Z / Ctrl+Y, or the toolbar arrows) revert whole actions —
   moves, cuts, protocol steps, tags — one step at a time.
-- **Themes** — the palette picker in the header offers many light and dark themes.
+- **Themes** live under **Settings**: many light and dark ones, and **Customize
+  colours…** to build your own while the board repaints behind it.
 - **Sync** — a workstation can publish its database to a private repo that
   read‑only **viewer** installs pull from; viewers can submit stain requests back.
   All instances must run the same version.

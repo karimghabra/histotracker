@@ -14,18 +14,21 @@ pnpm test                  # data-layer workflow harness (see below)
 pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
 pnpm test:compat           # the released build in use vs this tree, both directions
+pnpm test:release          # release checks' own tests, then this tree's version sources agree
 cd src-tauri && cargo check
 ```
 
 `pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All of the
 above should pass before pushing.
 
-Two Playwright suites drive the real app in Chromium against the sql.js Tauri
-shim, and a schema or workflow change should run both:
+Playwright suites drive the real app in Chromium against the sql.js Tauri
+shim. A schema or workflow change should run the first two; the third walks the
+screen and Undo/Redo (`docs/stress_test_v3.md`):
 
 ```bash
 npx playwright test                                       # e2e
 npx playwright test --config playwright.stress2.config.ts  # scale + invariants
+npx playwright test --config playwright.stress3.config.ts  # the explorer
 ```
 
 If Chromium fails to launch with `libnspr4.so: cannot open shared object file`
@@ -72,6 +75,8 @@ breaks at runtime. Update all of these in the same change:
 - `tests/compat/lab.ts` — the `addSample` payload in `newSample()`, and
   `runTheLab()` must write every column you add (the compat harness fails on a
   new column left at its default).
+- Inline `db.addSample({...})` payloads in e2e and tutorial specs;
+  `git grep -n 'slide_notes:' tests` lists every hand-written payload.
 
 ## Where things live
 
@@ -109,28 +114,31 @@ breaks at runtime. Update all of these in the same change:
 
 ## Releases
 
-The Windows installer is built in CI (`.github/workflows/build-installer.yml`)
-on every push to a `claude/**` branch (and on `v*` tags). It publishes a GitHub
-Release tagged `app-v<version>`, where `<version>` comes from
-`src-tauri/tauri.conf.json`.
+Releases are cut from **master only**, by starting **Build Windows Installer**
+by hand on master (`gh workflow run build-installer.yml --ref master`). Its
+`plan` job (`node scripts/release-check.mjs plan`) refuses any other ref, a
+version already released or not newer than the newest, version files out of
+step, a `CHANGELOG.md` with no `## <version>` section, and any `app-v*` tag
+master lacks; it then runs all of `test.yml` on that
+commit and publishes `app-v<version>` tagged there. Procedure:
+`docs/releasing.md`. Why: `docs/release_line_reconciliation.md` (0.14.3 to
+0.17.0 shipped from branches master never received).
 
-- **Feature branches do not pick versions.** The build in use is cut from a
-  long-running `claude/**` release line that is ahead of `master` (check
-  `gh release list`); a bump on a branch off `master` names a version
-  *behind* what ships. Whoever cuts the release bumps it, in sync across
-  `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and the
-  `Cargo.lock` / `package-lock.json` entries). Put changelog prose under the
-  existing unreleased heading.
-- **Every push to a `claude/**` branch republishes the release for its
-  version**, so a release-line push must bump first or it overwrites a release
-  a tester is already using.
+- **Master's version names the next release.** It is written in five places
+  kept in step: `package.json`, `src-tauri/tauri.conf.json`,
+  `src-tauri/Cargo.toml`, and the `Cargo.lock` / `package-lock.json` entries
+  (`node scripts/release-check.mjs versions`). Bump it in the PR that prepares
+  a release, not in feature PRs. Merging publishes nothing.
+- **Never rebase, move or rebuild a released commit.** The release-integrity
+  workflow fails every PR while a release tag is missing from master or
+  master's version is behind the newest release; the fix is a merge.
 - **Every PR states its compatibility with the version in use** (a standing
   requirement from the lab): whether its schema change, if any, applies cleanly
-  to the release line's database, and how it merges onto that line. The proof
-  is `pnpm test:compat` (CI job `release-compat`): the release's own tagged
-  data layer and this tree open, work on and revert each other's database, and
-  sync it (`docs/release_compat.md`). When the lab installs a new release,
-  bump `IN_USE_RELEASE` in `scripts/compat-releases.mjs`.
+  to the database of the release in use. The proof is `pnpm test:compat` (CI
+  job `release-compat`): the release's own tagged data layer and this tree
+  open, work on and revert each other's database, and sync it
+  (`docs/release_compat.md`). When the lab installs a new release, bump
+  `IN_USE_RELEASE` in `scripts/compat-releases.mjs`.
 
 ## Maintaining this file
 

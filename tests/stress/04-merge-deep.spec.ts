@@ -16,6 +16,7 @@ import {
   checkIntegrity,
   storedCode,
 } from "./lib";
+import { reassignFirstInRack } from "../helpers/rack";
 
 /**
  * The consequences of a merge, rather than the merge itself.
@@ -267,8 +268,6 @@ test("merge: the cut-group checkbox path guards the loading rack too", async ({
   let steppedVia = "none";
   if (usedRackDrawer) {
     await groupCard.click();
-    const op = page.getByLabel("Active operator");
-    if (await op.count()) await op.fill("Alex");
     const step = drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first();
     if (await step.count()) {
       await step.click();
@@ -420,10 +419,8 @@ test("merge: undo of a merge puts the racks back the way they were", async ({
 
   // Move the H&E slide into the PAS rack, then undo.
   expect(await openRack(page, "H&E")).toBe(true);
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  const label = (await move.first().getAttribute("aria-label")) ?? "";
-  const code = label.replace("Reassign ", "");
-  await move.first().selectOption("stain:PAS");
+  // One selection, not a per-row dropdown (0.14.1).
+  const code = (await reassignFirstInRack(page, "stain:PAS")) ?? "";
   await page.waitForTimeout(600);
   await closeDrawer(page);
 

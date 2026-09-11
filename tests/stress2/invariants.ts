@@ -220,6 +220,79 @@ export const INVARIANTS: Invariant[] = [
              WHERE event_type LIKE 'slide_relabelled%'
             HAVING COUNT(*) % 2 <> 0`,
   },
+  // ---- 0.14: racks as physical objects, and what that makes impossible ------
+  //
+  // Capacity, split and merge shipped in 0.14.0 with unit and e2e coverage and
+  // NO fuzz coverage at all — the newest code in the app was the least walked.
+  // These are the properties those operations must preserve no matter what
+  // sequence reaches them.
+  {
+    id: "rack-within-capacity",
+    claim: "no open staining rack holds more slides than a rack holds",
+    because:
+      "#123: a rack is 24 slides of physical hardware. A rack of forty is a board " +
+      "showing something nobody can pick up — the complaint the setting exists for.",
+    query: `SELECT ss.id AS rack, ss.assay_name AS agent, COUNT(sl.id) AS held,
+                   COALESCE((SELECT CAST(value AS INTEGER) FROM app_settings
+                              WHERE key = CASE WHEN ss.assay_type = 'ihc'
+                                               THEN 'max_ihc_rack_slides'
+                                               ELSE 'max_stain_rack_slides' END), 24) AS cap
+              FROM slide_stacks ss
+              JOIN slides sl ON sl.stack_id = ss.id AND sl.current_stage <> 'removed'
+             WHERE ss.kind = 'stain' AND ss.closed_at IS NULL
+             GROUP BY ss.id
+            HAVING held > cap`,
+  },
+  {
+    id: "rack-holds-one-agent",
+    claim: "every slide in a staining rack carries that rack's agent",
+    because:
+      "A rack IS an agent plus the glass going through it. Split and merge both " +
+      "move slides between racks, and either could put PAS glass in the H&E rack — " +
+      "which is a mis-stain at the bench, not a display bug.",
+    query: `SELECT sl.slide_code AS code, sl.assay_name AS slide_agent,
+                   ss.assay_name AS rack_agent
+              FROM slides sl JOIN slide_stacks ss ON ss.id = sl.stack_id
+             WHERE ss.kind = 'stain' AND sl.purpose = 'stain'
+               AND sl.current_stage <> 'removed'
+               AND (sl.assay_name <> ss.assay_name OR sl.assay_type <> ss.assay_type)`,
+  },
+  {
+    id: "racked-slide-was-cut",
+    claim: "no slide sits in a staining rack before it was cut",
+    because:
+      "0.14.2: a retracted cut left its glass in the rack, and the next tick of " +
+      "that rack stained a slide the app said was not cut. The stamp invariant " +
+      "catches the consequence; this catches the state that causes it.",
+    query: `SELECT sl.slide_code AS code, sl.stack_id AS rack
+              FROM slides sl JOIN slide_stacks ss ON ss.id = sl.stack_id
+             WHERE ss.kind = 'stain' AND sl.purpose = 'stain'
+               AND sl.current_stage <> 'removed' AND sl.stage_cut_at IS NULL`,
+  },
+  {
+    id: "removed-slide-keeps-its-record",
+    claim: "a removed slide that was stained still says when it was cut",
+    because:
+      "0.14.2, and the founding rule (#83): a slide cut, stained and then broken " +
+      "at the bench must not come back reading 'stained, never cut'. That is the " +
+      "record of real work being rewritten.",
+    query: `SELECT slide_code AS code, stage_stained_at AS stained
+              FROM slides
+             WHERE current_stage = 'removed'
+               AND stage_stained_at IS NOT NULL AND stage_cut_at IS NULL`,
+  },
+  // There is no "rack-numbers-are-unique" invariant, and the self-check is why.
+  //
+  // It was written, and it could not fail. The number is defined as "how many
+  // racks for this agent have an id at or below mine", which is injective over
+  // distinct ids by construction — two racks can no more share a number than two
+  // integers can. A query that cannot return a row is not a check, it is
+  // decoration that reads like one, and a green run past it means nothing.
+  //
+  // The property that actually matters is that a rack's number does not MOVE,
+  // and that is temporal: it compares two points in time, which no single
+  // SELECT can do. It lives in tests/e2e/racks.spec.ts, where a rack is retired
+  // and the survivors are checked to still show what they showed before.
   {
     id: "timeline-points-at-real-blocks",
     claim: "every timeline event names a block that exists",
