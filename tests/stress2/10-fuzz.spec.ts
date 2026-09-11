@@ -98,6 +98,9 @@ const ACTIONS: Action[] = [
         args: [rack.id, rack.assay_type, random() < 0.7 ? 0 : 1, true],
       };
     },
+    // Step 1 (coverslipping) on a rack not yet stained: the protocol order is
+    // enforced (0.13.2), so this is refused, with the reason.
+    refusals: [/has not been stained yet/i],
   },
   {
     name: "untick a rack's protocol step",
