@@ -97,5 +97,8 @@ The ones to fix first, all present in 0.17.0:
 - **Emptying a processing run that is already running deletes it** with its protocol checklist, and nothing records who removed it (#135, 0.16.3).
 - Partial bulk slide moves are written but neither refreshed nor undoable; rack capacity can be exceeded by multi-slide cut groups; a rack can be split from any stack, including a stained one.
 
+Two tests fail on the release line itself, and fail the same way on the union: the #115 case in `tests/e2e/issues-113-120.spec.ts`, intermittently, and the stress3 explorer, which stops at its baseline because its view check predates the project filtering of #131 (0.15.0).
+No gate here had ever run them, since the fleet only ran master, and stress3 is not in CI.
+
 The full review, with file and line references and a recommended order of follow-ups, was delivered with the reconciliation to the lab's owner.
 None of these was fixed in the merge itself, so that the merge changes nothing about behaviour the lab already had except what PR 138 adds.
