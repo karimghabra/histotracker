@@ -23,6 +23,13 @@
 //!    partly applied;
 //!  * a migration fails on it, e.g. on a column its record does not account for.
 //!
+//! The staging copy is a whole copy of the lab's database, so it is written
+//! inside the app's own data directory (`migrating/`, next to `backups/`,
+//! resolved the way `backup.rs` resolves its own) rather than in the machine's
+//! shared temp directory. `Staging`'s `Drop` removes it on both the normal and
+//! the error path; a process killed before that runs leaves one behind, and the
+//! next run sweeps it.
+//!
 //! Every refusal reason is worded to follow a caller's lead-in, "This backup
 //! cannot be restored: " or "The workstation's latest snapshot cannot be opened
 //! here: ", and each caller adds its own what-to-do. The test harnesses model
@@ -41,6 +48,15 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// Where staging copies live, under the app's own data directory, alongside
+/// `backups/` and resolved the same way. A database image never lands in a
+/// directory the app shares with the rest of the machine.
+const STAGING_DIR: &str = "migrating";
+
+/// The start of every staging copy's name, so one left behind by a process that
+/// was killed before `Staging`'s `Drop` could run is recognisable as ours.
+const STAGING_STEM: &str = "histometer-migrate";
 
 /// The registered migrations exactly as tauri-plugin-sql 2.4.0 hands them to
 /// sqlx (its private `MigrationList::resolve`): Up only, in registration order,
@@ -91,8 +107,18 @@ impl Refusal {
 
 /// The image, brought up to this build's migrations, or why it cannot be.
 #[tauri::command]
-pub async fn db_migrate_image(bytes: Vec<u8>) -> Result<Vec<u8>, Refusal> {
-    migrate_image(&bytes, crate::migrations(), &std::env::temp_dir()).await
+pub async fn db_migrate_image(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<Vec<u8>, Refusal> {
+    let dir = staging_dir(&app).map_err(|e| {
+        Refusal::because(format!("it could not be copied aside to be checked ({e})"))
+    })?;
+    migrate_image(&bytes, crate::migrations(), &dir).await
+}
+
+/// The staging directory, created if missing, under the app's own data dir.
+fn staging_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = crate::backup::app_dir(app)?.join(STAGING_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
 }
 
 /// A name no other staging copy has, in this process or another.
@@ -111,7 +137,27 @@ struct Staging(PathBuf);
 
 impl Staging {
     fn new(dir: &Path) -> Self {
-        Staging(dir.join(format!("{}.db", unique_name("histometer-migrate"))))
+        Staging(dir.join(format!("{}.db", unique_name(STAGING_STEM))))
+    }
+}
+
+/// Remove staging copies an interrupted run left behind, the way `backup_list`
+/// sweeps a crashed write's `.tmp` files. A name carries the process that wrote
+/// it, so a run sweeps neither its own copy nor one a sibling run in this
+/// process is still using; whatever else is in the directory is left alone.
+fn sweep(dir: &Path) {
+    let mine = format!("{STAGING_STEM}-{}-", std::process::id());
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with(STAGING_STEM) && !name.starts_with(&mine) {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
@@ -170,6 +216,7 @@ async fn migrate_image(
     let migrator = Migrator::new(Registered(migrations))
         .await
         .map_err(refusal)?;
+    sweep(dir);
     let staging = Staging::new(dir);
     std::fs::write(&staging.0, bytes).map_err(|e| {
         Refusal::because(format!("it could not be copied aside to be checked ({e})"))
@@ -316,13 +363,37 @@ mod tests {
         .await
     }
 
+    /// What is in `dir`, by name, sorted.
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// The command, checking it cleans up after itself.
     async fn migrate(bytes: &[u8]) -> Result<Vec<u8>, Refusal> {
         let dir = Scratch::new();
         let out = migrate_image(bytes, crate::migrations(), &dir.0).await;
-        let left = std::fs::read_dir(&dir.0).unwrap().count();
-        assert_eq!(left, 0, "the staging copy was left behind");
+        assert_eq!(
+            entries(&dir.0),
+            Vec::<String>::new(),
+            "the staging copy was left behind"
+        );
         out
+    }
+
+    /// A staging copy as a process killed mid-run leaves it: the file, and the
+    /// journal beside it, named for the process that wrote them.
+    fn leftover(dir: &Path, pid: u32) -> (PathBuf, PathBuf) {
+        let file = dir.join(format!("{STAGING_STEM}-{pid}-1-0.db"));
+        let journal = dir.join(format!("{STAGING_STEM}-{pid}-1-0.db-wal"));
+        std::fs::write(&file, b"SQLite format 3\0 and the rest of a lab database").unwrap();
+        std::fs::write(&journal, b"a journal").unwrap();
+        (file, journal)
     }
 
     #[test]
@@ -435,6 +506,51 @@ mod tests {
                 migrate(&[0u8; 4096]).await.unwrap_err(),
                 Refusal::because("it is not a database file")
             );
+        });
+    }
+
+    #[test]
+    fn no_staging_copy_outlives_the_run_that_made_it() {
+        block_on(async {
+            let dir = Scratch::new();
+            migrate_image(&image_at(22).await, crate::migrations(), &dir.0)
+                .await
+                .expect("an older image is brought up to date");
+            assert_eq!(entries(&dir.0), Vec::<String>::new());
+            // And when the image is refused, which unwinds through the same Drop.
+            migrate_image(b"not a database", crate::migrations(), &dir.0)
+                .await
+                .unwrap_err();
+            assert_eq!(entries(&dir.0), Vec::<String>::new());
+        });
+    }
+
+    /// A process killed between the write and the `Drop` cannot be staged in a
+    /// unit test, so this plants what such a kill leaves behind: the files, with
+    /// another process's id in their names.
+    #[test]
+    fn a_staging_copy_an_interrupted_run_left_behind_is_swept() {
+        block_on(async {
+            let dir = Scratch::new();
+            let (stale, stale_journal) = leftover(&dir.0, std::process::id() + 1);
+            // A sibling run in this process is still using its own copy.
+            let (sibling, sibling_journal) = leftover(&dir.0, std::process::id());
+            let theirs = dir.0.join("histometer-backup-20260101-000000-scheduled.db");
+            std::fs::write(&theirs, b"not ours to remove").unwrap();
+
+            let current = image_at(newest()).await;
+            assert_eq!(
+                migrate_image(&current, crate::migrations(), &dir.0)
+                    .await
+                    .unwrap(),
+                current
+            );
+
+            assert!(!stale.exists(), "the leftover copy was not swept");
+            assert!(!stale_journal.exists(), "its journal was not swept");
+            assert!(sibling.exists(), "a sibling run's copy was swept");
+            assert!(sibling_journal.exists(), "a sibling run's journal was swept");
+            assert!(theirs.exists(), "another file was swept");
         });
     }
 

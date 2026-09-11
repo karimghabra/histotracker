@@ -52,6 +52,11 @@ A refused pull shows as a sync error, telling the viewer to update Histometer wh
 A numbered migration still makes the upgrade one-way: an older build refuses a database recording a version it does not know, and so does every sync viewer still running it.
 But neither a revert nor a pull can leave a newer build unable to launch.
 
+One hazard survives in a new form, and it is a further reason to reach for rule 3 below.
+A numbered migration that adds a column `ensureRuntimeSchema()` already converges makes every image the previous build wrote refusable: the column is in the image, while its ledger does not record the migration, so `db_migrate_image` gets `ExecuteMigration` and refuses it ("duplicate column name").
+The captain then cannot revert to any backup the previous build took, and a viewer on the new build pulling from a workstation still on the old one is refused on every sync cycle and never advances `last_synced_version`, so it stops syncing until the workstation updates.
+A column that is converged at runtime stays converged at runtime; giving it a numbered migration later is not a safe tidy-up.
+
 Three rules keep updates compatible with existing databases:
 
 1. **Migrations are additive.** New numbered migration files only `ADD COLUMN` /
