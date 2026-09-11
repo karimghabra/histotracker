@@ -118,6 +118,37 @@ export function currentBuild(): Build {
 }
 
 /**
+ * The installer workflow republishes a release on every push at the same
+ * version, but the tag stays where it was first cut. So a branch that carries
+ * the tag and still builds the same version past it may be what the installer
+ * was last built from. Only remote branches this clone has fetched are seen
+ * (none in CI's shallow checkout); name the branch to test it instead.
+ */
+function warnIfRebuiltLater(ref: string, commit: string, version: string): void {
+  let branches: string[] = [];
+  try {
+    branches = git("for-each-ref", "--contains", commit, "--format=%(refname:short)", "refs/remotes/origin").split("\n");
+  } catch {
+    return;
+  }
+  for (const branch of branches.filter(Boolean)) {
+    const tip = git("rev-parse", branch);
+    if (tip === commit) continue;
+    try {
+      const conf = git("show", `${tip}:src-tauri/tauri.conf.json`);
+      if (JSON.parse(conf).version === version) {
+        console.warn(
+          `  [compat] ${branch} is past ${ref} and still builds ${version}; the installer may have been ` +
+            `rebuilt from it. Check it too: pnpm test:compat ${branch}`,
+        );
+      }
+    } catch {
+      /* not a Histometer tree at that tip */
+    }
+  }
+}
+
+/**
  * A released build, from its tag (`app-v<version>`, which the installer
  * workflow creates from the exact commit it built). Any other ref works too —
  * a release line's tip before it is tagged, say — but only a tag is checked
@@ -142,6 +173,7 @@ export function releaseBuild(ref: string): Build {
   if (tagged && tagged[1] !== version) {
     throw new Error(`[compat] ${ref} builds version ${version}, not ${tagged[1]}`);
   }
+  if (tagged) warnIfRebuiltLater(ref, commit, version);
   const build: Build = {
     label: `release ${ref}`,
     ref,

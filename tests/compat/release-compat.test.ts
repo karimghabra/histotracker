@@ -271,28 +271,36 @@ describe("backups across the version change", () => {
 });
 
 describe("sync between a workstation and a viewer on different builds", () => {
-  for (const direction of ["branch to release", "release to branch"] as const) {
-    const [from, to] = direction === "branch to release" ? ["this branch", "the release"] : ["the release", "this branch"];
-    it(`a viewer on ${to} pulls what a workstation on ${from} published, reads it, and relaunches`, async ({ skip }) => {
-      if (acceptedOneWay() && direction === "branch to release") skip();
-      const [workstation, viewerBuild] = direction === "branch to release" ? [branch, release] : [release, branch];
-      const viewer = newMachine(`viewer ${direction}`, "viewer");
-      // A viewer that has been running its own build for a while.
-      await quit(await launch(viewerBuild, viewer));
-      await using(await launch(workstation, lab), async (app) => {
-        await app.sync.publishSnapshot();
-      });
-      const published = dump(lab.dbFile);
-      await using(await launch(viewerBuild, viewer), async (app) => {
-        expect((await app.sync.pullSnapshotIfNewer()).updated).toBe(true);
-        await readEverything(app);
-      });
-      await using(await launch(viewerBuild, viewer), async (app) => {
-        await readEverything(app);
-      });
-      expect(lostOrChanged(published, dump(viewer.dbFile))).toEqual([]);
+  /** Publish from `workstation`, pull on a viewer that has been running `viewerBuild`, relaunch it. */
+  async function publishAndPull(workstation: () => Promise<App>, viewerBuild: Build, viewerName: string): Promise<void> {
+    const viewer = newMachine(viewerName, "viewer");
+    await quit(await launch(viewerBuild, viewer)); // a viewer that has been running its own build
+    const published = await using(await workstation(), async (app) => {
+      await app.sync.publishSnapshot();
+      return app.machine.dbFile;
+    }).then(dump);
+    await using(await launch(viewerBuild, viewer), async (app) => {
+      expect((await app.sync.pullSnapshotIfNewer()).updated).toBe(true);
+      await readEverything(app);
     });
+    // The swap happened under a running app; the migrator meets the pulled
+    // ledger only at the next launch.
+    await using(await launch(viewerBuild, viewer), async (app) => {
+      await readEverything(app);
+    });
+    expect(lostOrChanged(published, dump(viewer.dbFile))).toEqual([]);
   }
+
+  it("the workstation updates first: a viewer still on the release pulls what this branch published", async ({ skip }) => {
+    if (acceptedOneWay()) skip();
+    await publishAndPull(() => launch(branch, lab), release, "viewer on the release");
+  });
+
+  it("a viewer updates first: this branch pulls what a workstation still on the release published", async () => {
+    const workstation = newMachine("workstation still on the release");
+    await using(await launch(release, workstation), (app) => runTheLab(app, "release workstation"));
+    await publishAndPull(() => launch(release, workstation), branch, "viewer on this branch");
+  });
 });
 
 describe("the populated legacy database (tests/fixtures/legacy-pre-0023.b64)", () => {
