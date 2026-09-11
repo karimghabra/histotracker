@@ -13,7 +13,7 @@
     "test:legacy": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs",
     "test:ui": "vitest run",
     "test:compat": "node scripts/release-compat.mjs",
-    "test:release": "node --test scripts/release-check.test.mjs",
+    "test:release": "node --test scripts/release-check.test.mjs && node scripts/release-check.mjs versions",
     "dev:browser": "vite --config vite.config.playwright.ts",
     "test:e2e": "playwright test",
     "test:stress": "playwright test --config playwright.stress.config.ts",

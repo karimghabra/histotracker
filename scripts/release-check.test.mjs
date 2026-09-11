@@ -14,6 +14,7 @@ import {
   checkProvenance,
   checkVersions,
   compareVersions,
+  hasChangelogSection,
   makeGit,
   newestRelease,
   planRelease,
@@ -40,6 +41,7 @@ function versionFiles(version, overrides = {}) {
         null,
         2,
       ) + "\n",
+    "CHANGELOG.md": `# Changelog\n\n## ${version} - unreleased\n\nWhat ${version} ships.\n`,
   };
 }
 
@@ -141,6 +143,29 @@ test("versions: a missing file is a problem, not a crash", () => {
   delete files["package-lock.json"];
   const { problems } = checkVersions(readVersionSources(reader(files)));
   assert.ok(problems.some((p) => p.startsWith("package-lock.json: no version")), problems.join(" | "));
+});
+
+test("changelog: a level-2 heading for the version counts, and nothing else does", () => {
+  for (const text of [
+    "## 0.18.0 - unreleased\n",
+    "## 0.18.0",
+    "## 0.18.0\n\nnotes\n",
+    "# Changelog\n\n## 0.18.0 - unreleased\n\n## 0.17.0 - 2026-09-04\n",
+    "# Changelog\r\n\r\n## 0.18.0\r\n",
+  ]) {
+    assert.equal(hasChangelogSection(text, "0.18.0"), true, JSON.stringify(text));
+  }
+  for (const text of [
+    "### 0.18.0\n",
+    "## 0.18.01\n",
+    "## 10.18.0\n",
+    "## 0x18x0\n",
+    "0.18.0 fixes the export.\n",
+    "# Changelog\n\nThe next release, 0.18.0, will ship this.\n\n## 0.17.0 - 2026-09-04\n",
+    "",
+  ]) {
+    assert.equal(hasChangelogSection(text, "0.18.0"), false, JSON.stringify(text));
+  }
 });
 
 // ---- provenance -------------------------------------------------------------------
@@ -258,4 +283,22 @@ test("plan: version files out of step block the release", (t) => {
   const plan = planRelease({ git: r.git, ref: "refs/heads/master", head: r.head(), read: r.read });
   assert.equal(plan.publish, false);
   assert.match(plan.problems[0], /disagree/);
+});
+
+test("plan: a version with no changelog section is refused", (t) => {
+  const r = repo(t);
+  r.commit("0.17.0");
+  r.tag("app-v0.17.0");
+  r.commit("0.18.0");
+  writeFileSync(join(r.dir, "CHANGELOG.md"), "# Changelog\n\n## 0.17.0 - 2026-09-04\n\nThemes.\n");
+  r.run("commit", "--quiet", "-am", "0.18.0 without its changelog section");
+  let plan = planRelease({ git: r.git, ref: "refs/heads/master", head: r.head(), read: r.read });
+  assert.equal(plan.publish, false);
+  assert.ok(plan.problems.some((p) => /CHANGELOG\.md .*0\.18\.0/.test(p)), plan.problems.join("\n"));
+
+  rmSync(join(r.dir, "CHANGELOG.md"));
+  r.run("commit", "--quiet", "-am", "no changelog at all");
+  plan = planRelease({ git: r.git, ref: "refs/heads/master", head: r.head(), read: r.read });
+  assert.equal(plan.publish, false);
+  assert.ok(plan.problems.some((p) => /CHANGELOG\.md .*0\.18\.0/.test(p)), plan.problems.join("\n"));
 });

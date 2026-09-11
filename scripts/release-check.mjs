@@ -95,6 +95,11 @@ export function checkVersions(sources) {
   return { version: problems.length === 0 ? values[0] : null, problems };
 }
 
+/** True when `text` has a level-2 heading for `version`: `## 0.18.0` or `## 0.18.0 - unreleased`. */
+export function hasChangelogSection(text, version) {
+  return new RegExp(`^## ${version.replaceAll(".", "\\.")}(?:\\s|$)`, "m").test(text);
+}
+
 // ---- git --------------------------------------------------------------------
 
 export function makeGit(cwd) {
@@ -182,6 +187,20 @@ export function planRelease({ git, ref, head, read }) {
   }
   const { version, problems: versionProblems } = checkVersions(readVersionSources(read));
   problems.push(...versionProblems);
+  if (version) {
+    let changelog = null;
+    try {
+      changelog = read("CHANGELOG.md");
+    } catch {
+      changelog = null;
+    }
+    if (changelog == null || !hasChangelogSection(changelog, version)) {
+      problems.push(
+        `CHANGELOG.md has no section for ${version}: add a "## ${version}" section with what the release ` +
+          `ships before cutting it (docs/releasing.md).`,
+      );
+    }
+  }
   const provenance = checkProvenance(git, head, version);
   problems.push(...provenance.problems);
   const tag = version ? `${TAG_PREFIX}${version}` : null;

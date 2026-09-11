@@ -15,6 +15,8 @@ Everything below exists so that it cannot happen again without the repository sa
    `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, the `histometer` entry in `src-tauri/Cargo.lock`, and both `version` fields in `package-lock.json`.
    `node scripts/release-check.mjs versions` checks them, and so does CI.
    The new version must be newer than every release already published.
+   The new version also needs a `## <version>` section in `CHANGELOG.md` saying what the release ships.
+   `plan` refuses a release without one.
 2. **Merge it.**
    Merging publishes nothing.
    Master may carry an unreleased version for as long as it needs to while further fixes land.
@@ -23,8 +25,8 @@ Everything below exists so that it cannot happen again without the repository sa
    From a terminal: `gh workflow run build-installer.yml --ref master`.
 4. **Watch it.**
    The run has four jobs, and each one can stop the release:
-   - `plan` runs `node scripts/release-check.mjs plan`. It refuses a run on any ref but master, version files that disagree, a version that is already released or is not newer than the newest release, and any release tag that master does not contain.
-   - `tests` runs the whole of `.github/workflows/test.yml` on the same commit: the harness, the legacy upgrade, the unit and browser tests, the Rust check, and `pnpm test:compat` against the release in use.
+   - `plan` runs `node scripts/release-check.mjs plan`. It refuses a run on any ref but master, version files that disagree, a version that is already released or is not newer than the newest release, a `CHANGELOG.md` with no `## <version>` section, and any release tag that master does not contain.
+   - `tests` runs the whole of `.github/workflows/test.yml` on the same commit: the harness, the legacy upgrade, the unit and browser tests, and `pnpm test:compat` against the release in use.
    - `build` compiles the app on Windows and publishes the release, tagged at the commit `plan` and `tests` passed.
    - `verify` checks that the new tag names that commit.
 5. **After the lab installs it,** bump `IN_USE_RELEASE` in `scripts/compat-releases.mjs` so every later pull request is checked against what the bench actually runs.

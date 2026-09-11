@@ -74,11 +74,11 @@ Hygiene that the merge made visible, fixed in the same change:
 
 ### The changelog, as merged
 
-`CHANGELOG.md` was merged by git and not rewritten by hand, so two headings in it are out of date.
-On master, PR 138's entry had been written under "0.13.2 - unreleased", and the release line later corrected that heading to "0.13.2 - 2026-08-13".
-The merged file therefore shows PR 138's work (#136, #137, the Excel export fix and `pnpm test:compat`) inside the 0.13.2 section, although it first ships in 0.18.0.
-And the release line's top heading still reads "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
-Whoever cuts 0.18.0 should settle both in the changelog.
+`CHANGELOG.md` currently attributes PR 138's work (#136, #137, the Excel export fix and `pnpm test:compat`) to 0.13.2, inside the "0.13.2 - 2026-08-13" section, although it first ships in 0.18.0.
+Its top heading still reads "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
+Both are wrong.
+The lab owner's standing order that agents never hand-edit `CHANGELOG.md` prevented the agent doing this merge from correcting them.
+`scripts/release-check.mjs plan` now refuses to cut 0.18.0 until `CHANGELOG.md` has a 0.18.0 section, so writing that section forces the correction.
 
 ## How releases work now
 

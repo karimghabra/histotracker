@@ -14,7 +14,7 @@ pnpm test                  # data-layer workflow harness (see below)
 pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
 pnpm test:compat           # the released build in use vs this tree, both directions
-pnpm test:release          # release-check.mjs: version sources agree, releases are on master
+pnpm test:release          # release checks' own tests, then this tree's version sources agree
 cd src-tauri && cargo check
 ```
 
@@ -118,7 +118,8 @@ Releases are cut from **master only**, by starting **Build Windows Installer**
 by hand on master (`gh workflow run build-installer.yml --ref master`). Its
 `plan` job (`node scripts/release-check.mjs plan`) refuses any other ref, a
 version already released or not newer than the newest, version files out of
-step, and any `app-v*` tag master lacks; it then runs all of `test.yml` on that
+step, a `CHANGELOG.md` with no `## <version>` section, and any `app-v*` tag
+master lacks; it then runs all of `test.yml` on that
 commit and publishes `app-v<version>` tagged there. Procedure:
 `docs/releasing.md`. Why: `docs/release_line_reconciliation.md` (0.14.3 to
 0.17.0 shipped from branches master never received).

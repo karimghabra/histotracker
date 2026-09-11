@@ -16,8 +16,9 @@ name: Build Windows Installer
 #   - It runs only when started by hand ("Run workflow") on master. No push, no
 #     branch and no tag can publish a release.
 #   - `plan` refuses any other ref, version files out of step, a version that is
-#     already released or is not newer than the newest release, and any release
-#     tag that master does not contain (scripts/release-check.mjs).
+#     already released or is not newer than the newest release, a CHANGELOG.md
+#     with no `## <version>` section, and any release tag that master does not
+#     contain (scripts/release-check.mjs).
 #   - `tests` runs the whole test workflow on that exact commit, including the
 #     compatibility check against the release in use. 0.15.0 was published from
 #     a push whose test run had failed; that cannot happen from here.
