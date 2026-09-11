@@ -429,7 +429,7 @@ console.log("\nPATH C — upgrade from the build in use, revert to its backup, r
     assertDataIntact(db, "C-upgraded");
   });
 
-  // Problem 1 — the upgrade must not be a one-way door. A version recorded by
+  // Problem 1: the upgrade must not be a one-way door. A version recorded by
   // this build that the build in use does not know makes the build in use
   // refuse the file outright; so does every sync viewer still running it.
   check("the build in use can still open a database this build has opened", () => {
@@ -442,7 +442,7 @@ console.log("\nPATH C — upgrade from the build in use, revert to its backup, r
     }
   });
 
-  // Problem 2 — the one reproduced on this fixture. A revert swaps the backup
+  // Problem 2: the one reproduced on this fixture. A revert swaps the backup
   // in mid-session, after this launch's migrations have run, and getDb() then
   // converges its columns. Swapped in as it was, the file's record never heard
   // of a migration that also adds one of those columns, so the next launch ran

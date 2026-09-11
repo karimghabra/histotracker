@@ -128,9 +128,9 @@ jobs:
   # what brings a backup or a pulled snapshot up to this build's migrations on
   # the lab's machine. The e2e and compat suites exercise only its TypeScript
   # model (src/test/sqlx-migrator.ts), so without this job a change to the real
-  # command would first be tried in the captain's Backups dialog. Linux because
-  # it is cheap and catches the breakage that matters; the installer build
-  # compiles for Windows at release time.
+  # command would first be tried in the captain's Backups dialog. Linux, because
+  # nothing in migrate.rs or its tests depends on the platform; the installer
+  # build compiles for Windows at release time.
   rust:
     runs-on: ubuntu-latest
     steps:

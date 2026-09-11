@@ -100,8 +100,8 @@ breaks at runtime. Update all of these in the same change:
 - `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
-  An image from elsewhere, a backup or a pulled sync snapshot, goes through `bringImageUpToDate()` (`src/lib/db.ts`) before it is swapped in.
-  That runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations so the migration record in the file stays true, or refuses it with nothing changed.
+  An image from elsewhere, a backup or a pulled sync snapshot, goes live only through `swapInImageFromElsewhere()` (`src/lib/db.ts`).
+  That first runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations so the migration record in the file stays true, or refuses it with nothing changed.
   The test harnesses model that command in `src/test/sqlx-migrator.ts`, refusal wording included; the CI `rust` job runs the real command's tests.
 
 ## Docs worth reading

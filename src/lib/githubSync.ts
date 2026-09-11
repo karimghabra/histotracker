@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   acknowledgeRequestsForSlide,
   assayTypeByName,
-  bringImageUpToDate,
   findSampleIdByCode,
   getActiveUser,
   getDbFilePath,
@@ -10,7 +9,7 @@ import {
   insertStainRequest,
   rejectStainRequestByUuid,
   requestStainForSample,
-  resetDb,
+  swapInImageFromElsewhere,
 } from "./db";
 import { buildStatusWorkbookBytes } from "./export";
 import { getSyncConfig, setLastSyncedVersion } from "./syncConfig";
@@ -267,8 +266,9 @@ export interface PullResult {
 /**
  * Download and swap in the published snapshot when it is newer than the one
  * this viewer last synced. Sequence: read manifest → compare → download DB →
- * bring it up to this build's migrations → close connection → overwrite the
- * SQLite file → let getDb() reopen it.
+ * swap it in through {@link swapInImageFromElsewhere}, which brings it up to
+ * this build's migrations, closes the connection, overwrites the SQLite file
+ * and reopens it → record the version pulled.
  *
  * The workstation may run another version of Histometer. A snapshot this build
  * cannot bring up to date (one made by a newer version, say) is refused before
@@ -284,10 +284,11 @@ export async function pullSnapshotIfNewer(): Promise<PullResult> {
     return { updated: false };
   }
 
-  const downloaded = await githubDownloadReleaseAsset(RELEASE_TAG, manifest.db_asset || DB_ASSET);
-  let dbBytes: Uint8Array;
+  const dbBytes = await githubDownloadReleaseAsset(RELEASE_TAG, manifest.db_asset || DB_ASSET);
   try {
-    dbBytes = await bringImageUpToDate(downloaded);
+    // The viewer's own users and settings are not kept: it mirrors the
+    // workstation's database whole.
+    await swapInImageFromElsewhere(dbBytes, { keepSession: false });
   } catch (err) {
     if (!(err instanceof ImageRefusedError)) throw err;
     const remedy = err.newer ? " Update Histometer on this computer to open it." : "";
@@ -296,12 +297,6 @@ export async function pullSnapshotIfNewer(): Promise<PullResult> {
         `This computer's copy has not been changed.`,
     );
   }
-
-  // Resolve the path while the connection is open, then close it so the file
-  // is not locked when we overwrite it, then reopen against the new bytes.
-  const dbPath = await getDbFilePath();
-  await resetDb();
-  await invoke("save_file", { path: dbPath, contents: Array.from(dbBytes) });
 
   await setLastSyncedVersion(manifest.version);
   return { updated: true, version: manifest.version, publishedBy: manifest.published_by };

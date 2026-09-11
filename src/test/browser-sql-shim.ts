@@ -6,9 +6,9 @@
 // It is wired in via resolve.alias in vite.config.playwright.ts; production and
 // `tauri dev` are untouched. The schema is the actual production migrations,
 // the ones `src-tauri/src/lib.rs` registers, run the way the plugin runs them:
-// through the sqlx migrator (./sqlx-migrator.ts) on the FIRST load of each page
-// — a page load is a process here, so a reload is a relaunch — with the
-// `_sqlx_migrations` ledger kept inside the image. A reopen after an undo or a
+// through the sqlx migrator (./sqlx-migrator.ts) on the FIRST load of each page,
+// with the `_sqlx_migrations` ledger kept inside the image. A page load is a
+// process here, so a reload is a relaunch. A reopen after an undo or a
 // sync pull does not migrate again, exactly as in the app.
 //
 // One exception, for fixtures only: an image with no ledger at all was not

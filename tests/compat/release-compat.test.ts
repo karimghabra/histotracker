@@ -28,7 +28,7 @@ if (!RELEASE) throw new Error("Set COMPAT_RELEASE to a release tag, or run `pnpm
  * ("migration N was previously applied but is missing"), and so does every
  * sync viewer still running it. (This build itself is safe either way: a
  * backup revert and a sync pull run its migrations on the image first, see
- * bringImageUpToDate in src/lib/db.ts.) Empty is the normal state: a column can
+ * swapInImageFromElsewhere in src/lib/db.ts.) Empty is the normal state: a column can
  * be converged at runtime instead (AGENTS.md, embedding_notes).
  * Add a version only with the captain's sign-off, saying why; the stories
  * below then stop at the refusal instead of failing on it.
