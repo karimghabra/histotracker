@@ -254,3 +254,34 @@ export function composeDescription(shared: string, own: string): string {
   if (s && o) return `${s} | ${o}`;
   return o || s;
 }
+
+/**
+ * The two encodings of an agent pair, in one place (0.15.1 cleanup).
+ *
+ * A `<select>` whose options are agents has to carry the pair as one string, and
+ * the app grew two conventions for it: `stain::PAS` for "pick an agent from the
+ * catalogue" and `stain:PAS` for "move this glass onto that agent".
+ * `SectionDetailsDrawer` uses both, twenty lines apart, with nothing saying so.
+ *
+ * Both formats are kept — they are option VALUES, so changing them would change
+ * the DOM for no gain — but there is now one implementation, and it is the
+ * careful one. The five `::` sites destructured two elements
+ * (`const [type, name] = value.split("::")`), which silently truncates any agent
+ * name containing the separator; the `:` sites rejoined the tail and did not.
+ * Splitting once at the FIRST separator is correct for both and cannot truncate.
+ */
+export const AGENT_SEP = ":";
+export const CATALOG_SEP = "::";
+
+export function formatAgent(assayType: string, assayName: string, sep: string = AGENT_SEP): string {
+  return `${assayType}${sep}${assayName}`;
+}
+
+export function parseAgent(
+  value: string,
+  sep: string = AGENT_SEP,
+): { assayType: string; assayName: string } {
+  const at = value.indexOf(sep);
+  if (at < 0) return { assayType: value, assayName: "" };
+  return { assayType: value.slice(0, at), assayName: value.slice(at + sep.length) };
+}

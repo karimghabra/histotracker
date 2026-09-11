@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { addStainFromLogs } from "../helpers/stains";
-import { settleAfterDrop } from "../helpers/drag";
+import { cutBlockFor } from "../helpers/cut";
 import { readSheet, readWorkbook } from "../helpers/xlsx";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -44,48 +44,6 @@ async function newSample(
     await page.locator("label").filter({ hasText: stain }).last().getByRole("checkbox").check();
   }
   await page.getByRole("button", { name: /Create Sample/ }).click();
-}
-
-async function drag(page: Page, src: string, col: string) {
-  const card = page.getByText(src, { exact: true }).first();
-  const header = page.getByRole("heading", { name: col, exact: true });
-  const f = await card.boundingBox();
-  const t = await header.boundingBox();
-  if (!f || !t) throw new Error("drag endpoints missing");
-  await page.mouse.move(f.x + f.width / 2, f.y + f.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(f.x + f.width / 2 + 10, f.y + f.height / 2 + 10, { steps: 4 });
-  await page.mouse.move(t.x + t.width / 2, t.y + 140, { steps: 10 });
-  await page.mouse.move(t.x + t.width / 2, t.y + 142, { steps: 3 });
-  await page.mouse.up();
-  await settleAfterDrop(page);
-}
-
-/** Walk a block from intake to Embedded Inventory and cut it for one agent. */
-async function cutBlockFor(page: Page, code: string, agent: string) {
-  await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: "Placed in fixative" }).click();
-  await page.getByRole("button", { name: "Removed from fixative" }).click();
-  await page.getByRole("button", { name: "Placed in ethanol" }).click();
-  await page.locator("button:has(svg.lucide-x)").first().click();
-  await drag(page, code, "Processor");
-  await expect(async () => {
-    const btn = page.getByRole("button", { name: "Start Batch" });
-    if (await btn.isVisible().catch(() => false)) await btn.click();
-    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
-  }).toPass({ timeout: 15000 });
-  await drag(page, "Batch 1", "Needs Embedding");
-  await drag(page, code, "Embedded Inventory");
-
-  await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page
-    .locator("select")
-    .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
-    .first()
-    .selectOption(`stain::${agent}`);
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await page.locator("button:has(svg.lucide-x)").first().click();
 }
 
 /** The bytes of the most recently saved file whose path ends with `suffix`. */

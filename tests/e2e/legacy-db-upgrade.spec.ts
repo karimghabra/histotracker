@@ -90,6 +90,14 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
     timeout: 20_000,
   });
 
+  // Sign in first (#128) — and note this is not test scaffolding, it is the
+  // upgrade path itself. A lab opening its existing database in the new build
+  // comes up unsigned, exactly like this, and picks its name from the users the
+  // old database already holds. That the legacy directory still populates that
+  // picker is part of what "the update must not compromise a database that is
+  // already in use" means.
+  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+
   // #74 — archive a pre-existing sample, then bring it back.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await showRemoved(page);

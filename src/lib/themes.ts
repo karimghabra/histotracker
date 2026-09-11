@@ -8,6 +8,10 @@
  */
 export const THEME_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "system", label: "◐ System" },
+  // Last in the list would bury it; first after System is where somebody
+  // looks for the theme they made. Selecting it with nothing saved falls
+  // back to the stylesheet, which is why applyPalette tolerates null.
+  { value: "custom", label: "✎ Custom" },
   { value: "light", label: "☀ Clinical Light" },
   { value: "dark", label: "☾ Night Shift" },
   { value: "contrast", label: "☾ High Contrast" },

@@ -123,12 +123,19 @@ export function ProcessingBatchDetailsDrawer({
                 <div className="text-xs font-semibold text-ink">{displayCode(sample.sample_code)}</div>
                 {sample.sample_description && <div className="truncate text-[11px] text-ink-soft">{sample.sample_description}</div>}
               </div>
-              {canEditMembers && samples.length > 1 && (
+              {/* No `samples.length > 1` gate any more (#135). Hiding the
+                  control on the last sample meant a run could be emptied down to
+                  one and then never dissolved — the technician had to start a
+                  run that was not happening and mark it done, which puts a lie
+                  in the record. Taking the last one out removes the run. */}
+              {canEditMembers && (
                 <button
                   title={
-                    isRunning
-                      ? `Take ${displayCode(sample.sample_code)} out of this run — it returns to pre-processing`
-                      : "Remove from this planned run"
+                    samples.length === 1
+                      ? `Take ${displayCode(sample.sample_code)} out — this removes the run`
+                      : isRunning
+                        ? `Take ${displayCode(sample.sample_code)} out of this run — it returns to pre-processing`
+                        : "Remove from this planned run"
                   }
                   aria-label={`Remove ${displayCode(sample.sample_code)} from this run`}
                   onClick={() => onEditMembers?.(batch.id, memberIds.filter((id) => id !== sample.id))}

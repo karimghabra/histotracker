@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Send } from "lucide-react";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { submitRequest } from "../lib/githubSync";
-import { displayCode } from "../lib/utils";
+import { displayCode, parseAgent, CATALOG_SEP } from "../lib/utils";
 import { addPendingRequest } from "../lib/pendingRequests";
 import { nowTimestamp } from "../lib/utils";
 
@@ -54,7 +54,7 @@ export function RequestStainDialog({
       setError("Choose the stain or IHC agent you're requesting.");
       return;
     }
-    const [assayType, assayName] = agent.split("::");
+    const { assayType, assayName } = parseAgent(agent, CATALOG_SEP);
     setBusy(true);
     setError(null);
     try {

@@ -136,6 +136,21 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   // tile would now DE-select it — #61).
   await expect(page.getByText(/Stains preselected/i)).toHaveCount(0);
 
+  // Now actually TAKE the sections.
+  //
+  // This step used to be missing, and the test passed anyway because nothing
+  // read the difference. Sending for cutting only queues the group; the glass
+  // does not exist until somebody stands at the microtome (#95). #125 is the
+  // first behaviour to ask "is this block still waiting to be cut?", and the
+  // honest answer here — before this step — was yes. Without it the re-request
+  // below correctly joins the queued cut, and this test would be asserting the
+  // behaviour #125 deliberately replaced.
+  await page.locator("button:has(svg.lucide-x)").first().click();
+  await page.getByText(/^\d+ slides? · /).first().click();
+  await page.getByRole("button", { name: /Mark Sectioned/ }).click();
+  await page.locator("button:has(svg.lucide-x)").first().click();
+  await page.getByText("EE-1", { exact: true }).first().click();
+
   // Re-request H&E: no extras exist, so it must flag the block AGAIN and the
   // Send-for-Cutting dialog must prefill with H&E (the old model hid this).
   await requestStain(page, "stain::H&E");
@@ -144,4 +159,38 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   await expect(page.getByText(/Prefilled from/i)).toBeVisible();
   const values = await cutRows(page);
   expect(values.filter((v) => v === "stain::H&E").length).toBeGreaterThanOrEqual(1);
+});
+
+test("#125: a stain requested while the block is queued for cutting joins that cut", async ({
+  page,
+}) => {
+  await boot(page);
+  await embed(page, "EE-1");
+  await page.getByText("EE-1", { exact: true }).first().click();
+
+  // The plan the issue describes: one stain, plus the default extras, SENT for
+  // cutting but not yet cut.
+  await requestStain(page, "stain::H&E");
+  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+
+  const sectioning = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Needs Sectioning", exact: true }) });
+  await expect(sectioning.getByText(/H&E/).first()).toBeVisible();
+  const before = (await sectioning.getByText(/^\d+ slides? · /).first().innerText()).trim();
+
+  // Ask for a second agent while that cut is still waiting. It must join the
+  // cut — not send the technician back to the block for a second one.
+  await page.getByText("EE-1", { exact: true }).first().click();
+  await requestStain(page, "stain::PAS");
+
+  // The block is NOT flagged for a fresh cut…
+  await expect(page.getByText(/Stains preselected/i)).toHaveCount(0);
+
+  // …and the waiting cut now carries PAS as well as H&E, one slide larger.
+  await expect(sectioning.getByText(/PAS/).first()).toBeVisible();
+  const after = (await sectioning.getByText(/^\d+ slides? · /).first().innerText()).trim();
+  expect(after).not.toBe(before);
 });

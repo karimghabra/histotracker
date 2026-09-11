@@ -31,6 +31,9 @@ describe("Board — a planned run appears in the Processor window (issues #4, #2
   it("renders the planned batch tile with its PLANNED FOR tag", () => {
     render(
       <Board
+        projectFilterId="all"
+        projectFilterCode="all"
+        projects={[]}
         samples={[]}
         sections={[]}
         stacks={[]}

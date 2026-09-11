@@ -167,7 +167,7 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
 
   // Open the rack and tick a slide for removal.
   await staining.getByText(agentName).first().click();
-  await page.getByRole("button", { name: "Select slides to remove" }).click();
+  await page.getByRole("button", { name: "Select slides" }).click();
   // By aria-label, not `.first()` — the drawer also renders protocol-checklist
   // checkboxes, and the first one in the DOM is not a slide.
   await page.getByLabel(/^Select EE-1-[A-Z]+$/).first().check();

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CATALOG_SEP,
+  formatAgent,
+  parseAgent,
   compareSampleCodes,
   composeDescription,
   compareSlideCodes,
@@ -196,5 +199,37 @@ describe("matchesSearch (#120)", () => {
     expect(matchesSearch("", block)).toBe(true);
     expect(matchesSearch("   ", block)).toBe(true);
     expect(matchesSearch("femur", [null, undefined, "", "left femur"])).toBe(true);
+  });
+});
+
+describe("agent pairs", () => {
+  it("round-trips both encodings", () => {
+    expect(formatAgent("stain", "PAS")).toBe("stain:PAS");
+    expect(formatAgent("ihc", "CD31", CATALOG_SEP)).toBe("ihc::CD31");
+    expect(parseAgent("stain:PAS")).toEqual({ assayType: "stain", assayName: "PAS" });
+    expect(parseAgent("ihc::CD31", CATALOG_SEP)).toEqual({ assayType: "ihc", assayName: "CD31" });
+  });
+
+  it("keeps a separator that is part of the agent NAME", () => {
+    // The bug this replaces: `const [type, name] = value.split("::")` drops
+    // everything after the second separator, so an agent the lab named with one
+    // in it silently became a different agent. Splitting at the first occurrence
+    // only cannot truncate.
+    expect(parseAgent("stain:CD31: clone 2")).toEqual({
+      assayType: "stain",
+      assayName: "CD31: clone 2",
+    });
+    expect(parseAgent("ihc::CD31::clone2", CATALOG_SEP)).toEqual({
+      assayType: "ihc",
+      assayName: "CD31::clone2",
+    });
+    // And the round trip survives it, which is what the select depends on.
+    const name = "CD31: clone 2";
+    expect(parseAgent(formatAgent("stain", name)).assayName).toBe(name);
+  });
+
+  it("is total on a value with no separator", () => {
+    // "extra" is a real option value in these selects and must not throw.
+    expect(parseAgent("extra")).toEqual({ assayType: "extra", assayName: "" });
   });
 });

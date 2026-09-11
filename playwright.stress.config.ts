@@ -33,7 +33,11 @@ export default defineConfig({
   webServer: {
     command: "npx vite --config vite.config.playwright.ts",
     url: `http://localhost:${PORT}`,
-    reuseExistingServer: true,
+    // Same reason as playwright.stress3.config.ts: a server that has hot-reloaded
+    // serves two copies of db.ts, and therefore two sql.js connections over one
+    // virtual file. It failed the stack-merge spec exactly once that way, and
+    // passed on a clean server with nothing changed.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

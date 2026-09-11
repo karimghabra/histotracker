@@ -4,7 +4,7 @@ import { Button, Modal } from "./ui";
 import { useAppSettings, useSettingsMutations } from "../hooks/useData";
 import { DEFAULT_SETTINGS, SETTING_LIMITS, clampSetting, type AppSettings } from "../lib/settings";
 import { THEME_OPTIONS } from "../lib/themes";
-import { useReadOnly } from "../lib/readOnly";
+import { useIsViewer, useReadOnly } from "../lib/readOnly";
 
 /**
  * Workstation settings (#92), reached from the cog at the bottom of the left
@@ -22,17 +22,23 @@ import { useReadOnly } from "../lib/readOnly";
 export function SettingsDialog({
   theme,
   onThemeChange,
+  onCustomizeTheme,
   onOpenManage,
   onOpenBackups,
   onClose,
 }: {
   theme: string;
   onThemeChange: (theme: string) => void;
+  /** Opens the docked customizer, which needs this dialog out of the way. */
+  onCustomizeTheme: () => void;
   onOpenManage: () => void;
   onOpenBackups: () => void;
   onClose: () => void;
 }) {
   const readOnly = useReadOnly();
+  // Viewer-gated, not read-only-gated: "Manage users" is the door an unsigned
+  // user walks through to sign in, so hiding it from them locks the app (#128).
+  const isViewer = useIsViewer();
   const { data: saved = DEFAULT_SETTINGS } = useAppSettings();
   const save = useSettingsMutations();
   const [draft, setDraft] = useState<AppSettings>(saved);
@@ -50,6 +56,8 @@ export function SettingsDialog({
       defaultTotalSlides: clampSetting("defaultTotalSlides", draft.defaultTotalSlides),
       defaultExtraSlides: clampSetting("defaultExtraSlides", draft.defaultExtraSlides),
       idleLogoutMinutes: clampSetting("idleLogoutMinutes", draft.idleLogoutMinutes),
+      maxStainRackSlides: clampSetting("maxStainRackSlides", draft.maxStainRackSlides),
+      maxIhcRackSlides: clampSetting("maxIhcRackSlides", draft.maxIhcRackSlides),
       manifestVisible: draft.manifestVisible,
     };
     setDraft(next);
@@ -83,6 +91,29 @@ export function SettingsDialog({
           limits={SETTING_LIMITS.defaultExtraSlides}
           disabled={readOnly}
           onChange={(raw) => setNumber("defaultExtraSlides", raw)}
+        />
+      </Section>
+
+      <Section title="Racks">
+        <p className="mb-2 text-[11px] text-ink-faint">
+          How many slides fit in one rack. A rack that is full is left alone and the next
+          slide starts a fresh one, so what the board shows is something you can pick up.
+        </p>
+        <NumberRow
+          label="Slides per staining rack"
+          hint="The standard histology rack holds 24."
+          value={draft.maxStainRackSlides}
+          limits={SETTING_LIMITS.maxStainRackSlides}
+          disabled={readOnly}
+          onChange={(raw) => setNumber("maxStainRackSlides", raw)}
+        />
+        <NumberRow
+          label="Slides per IHC rack"
+          hint="Separate, because IHC is often run on different hardware."
+          value={draft.maxIhcRackSlides}
+          limits={SETTING_LIMITS.maxIhcRackSlides}
+          disabled={readOnly}
+          onChange={(raw) => setNumber("maxIhcRackSlides", raw)}
         />
       </Section>
 
@@ -141,9 +172,14 @@ export function SettingsDialog({
             ))}
           </select>
         </label>
+        {/* Opening the customizer CLOSES this dialog, which is the point: you
+            cannot tune a palette against a board you cannot see. */}
+        <Button variant="subtle" className="w-full" onClick={onCustomizeTheme}>
+          <Palette size={14} /> Customize colours…
+        </Button>
       </Section>
 
-      {!readOnly && (
+      {!isViewer && (
         <Section title="Data">
           <div className="flex flex-wrap gap-2">
             <Button onClick={onOpenManage}>

@@ -44,6 +44,205 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## 0.16.0 — bench feedback on 0.15, and #134
+
+### #131 — an empty stage was showing every project
+
+Reported after using 0.15: "if no samples or slides from the selected project are
+in a particular stage, that stage simply shows all projects. instead, it should
+show nothing."
+
+Each column's `<select>` offered only the projects that column currently held,
+and a guard reset the filter to "all" the moment the selection fell off that
+list. So selecting a project and looking at a stage with none of its work handed
+you everyone else's — the opposite of filtering.
+
+**The guard was right about the hazard and wrong about the trigger.** A
+controlled `<select>` whose value is not among its options does not go blank:
+react-dom re-selects the first option and fires no change event, so the control
+and the state disagree silently (#85). Keeping an option for the CURRENT value
+closes that directly, and an empty column is then free to render empty. The reset
+now fires only for a project that no longer EXISTS — deleted or deactivated —
+which is the case the guard was written for.
+
+Two older specs asserted the behaviour being removed and were rewritten rather
+than deleted, because what they were really protecting still holds: `#85` and
+`#89` now assert that an empty column NAMES the project it is empty of, and that
+clearing the filter by hand brings the other work back. A column that is empty
+while its control reads "All Projects" remains the thing neither may do.
+
+**I had already met this and missed it.** During 0.15.0's own testing a column
+read "all" where I expected a project; I wrote around it in the test instead of
+recognising the defect. The lesson is the same one 0.15.1 taught: an assertion
+you have to weaken to make pass is evidence, not an obstacle.
+
+### #129 — a sort, not a filter
+
+0.15.0 shipped both. A block that owes a cut is a priority, not a category, and
+hiding the drawer's other contents to find the urgent ones costs the context of
+what else is in there. The filter is gone and its absence is asserted.
+
+### #131 — the sidebar control
+
+"It almost looks like 'ALL' is a project of its own." It was: the first version
+copied the project row exactly, badge and count pill included. It is a control
+that clears a filter, and now looks like one — icon, single line, plain count, a
+rule separating it from the list it acts on.
+
+### #134 — Short ⇄ Long before the processor
+
+`setSamplesProcessingType(ids, type)` switches blocks in bulk, skipping any that
+are past pre-processing rather than refusing the whole call. Every switch writes
+a timeline event naming both ends: the duration a block was processed for is part
+of its record.
+
+**One guard the issue does not ask for.** A block committed to a PLANNED batch is
+still in pre-processing, so the stage rule alone lets it through — and a planned
+batch carries its own `processing_type`, checked when the batch is formed and
+never again. `confirmProcessingBatchStart` stamps the ready time from the BATCH,
+so switching a member would process it for a duration it no longer has, silently.
+Refused, naming the block.
+
+---
+
+## 0.15.0 — #129, #131, #132, #133
+
+### #132 before #131, deliberately
+
+The two are one change seen from opposite sides. The sidebar selection meant two
+unrelated things at once — which project you are looking at, and where new
+samples get filed — and it could only be made to mean one of them cleanly after
+the other had somewhere else to live. So #132 (the dialog asks) lands first, and
+#131 (the selection filters) lands on top of it.
+
+**#132.** `NewSampleDialog` takes `projects` + `initialProjectId` instead of a
+single `project`, and asks. Nothing is preselected when there is a real choice:
+a prefilled picker is one Enter away from being no question at all, and the harm
+it prevents — a batch of twenty filed under the wrong project, noticed weeks
+later — is the same harm #84 was about. A single-project lab is not asked.
+
+**#131.** The sidebar gains an **All projects** row and the selection sets every
+column's project filter. It *sets* rather than replaces, so the per-column
+controls still work and still say what the board is doing.
+
+`null` used to mean two things in `App.tsx` — "nothing restored yet" and "no
+project" — which was harmless while every session had to land on some project.
+Now that null is choosable it is stored explicitly (`ALL_PROJECTS`), with a
+separate `projectRestored` flag for the other meaning. Without that separation,
+choosing All Projects snapped back to the first project on the next render.
+
+### The bug this introduced, and why the first test missed it
+
+The six column filters are **not one kind of thing**. Four match `project_id`;
+Extras and Ready for Imaging match `project_code`. The first version set all six
+from the id, so the two code-matched columns were handed a number that no code
+can equal and rendered **empty for every selection**.
+
+The #131 spec did not catch it — it only looked at Pre-processing, a project_id
+column. `sync.spec.ts` caught it. The spec now checks one column of each kind,
+through cards on screen rather than through the control, because a column with
+nothing in it legitimately resets its own filter to "all" (#85's stale-filter
+guard) and therefore proves nothing either way.
+
+### #129 — one predicate, not two
+
+The `needs cut` flag has been on the card since #110; nothing could sort or
+filter on it. `sampleNeedsCut()` now lives in `db.ts` — next to
+`parsePreselectedStains`, which it needs, and which `stages.ts` cannot import
+without a cycle — and the card, the sort and the filter all call it. Two copies
+would be two answers, and a filter that hides a flagged card is worse than no
+filter.
+
+### #133 — scoped to what the issue names
+
+Removal and stain reassignment, both hung off the tick list that was already
+there for tagging. They act on the **live** slides in the selection, matching how
+tagging already behaves (#69): eleven ticked slides with one broken should do the
+ten, not refuse all eleven.
+
+"Anything that can be done in the dashboard should be completable in the logs" is
+a direction, not a change. The rest of it should be argued one action at a time.
+
+### Cost to the existing suite
+
+A dozen specs assumed the sidebar decided where a sample was filed, and that the
+board showed every project. Both assumptions were the thing being removed, so
+they are updated rather than worked around, and the New Sample flow now goes
+through `openNewSample()` in `tests/helpers/app.ts` — one helper, for the same
+reason `helpers/rack.ts` exists.
+
+One locator needed scoping for an unrelated reason: `getByText(/needs cut/i)` now
+matches the two new #129 controls as well as the flag they act on.
+
+## 0.14.4 — the two issues that shipped with no test, and a finding that did not survive
+
+`#121`–`#128` all shipped in 0.14.0–0.14.3, and six of them carry gates. **Two
+did not: #121 and #122.** Both are pure screen changes — a control deleted and a
+block of markup moved — and both were verified by reading the JSX, which is the
+same standard the audit banner above already recorded as insufficient. They are
+covered now, in `tests/e2e/issues-121-122.spec.ts`, and both were watched failing
+with their change undone before being trusted.
+
+The #121 test needs a note. It asserts an ABSENCE, which passes just as happily
+when the panel never rendered, so the slide panel is proved open first and only
+then is the missing control asserted. It also checks that
+`relabelSlideToSample` is still exported: #121 removed the affordance and
+deliberately kept the capability, so a "fix" that deleted the function would
+otherwise satisfy the test while doing the wrong thing.
+
+### A suspected defect in #125, investigated and RETRACTED
+
+While writing the above I reported that a stain requested against a `sectioned`
+cut group asks for a recut it does not need — the group has been cut, it can hold
+free extras, and `requestStainForSample` still flags the block. It is not a
+defect, and the way it fell apart is the useful part.
+
+**The stage order is the answer.** `SECTION_STAGES` runs `needs_sectioning` (0),
+`sectioned` (1), `assignment_required` (2), `stain_requested` (3). `sectioned`
+comes *before* assignment, so a slide labelled "extra" at that stage has been cut
+but not yet dispositioned — nobody has said which slide is a stain and which is
+spare. The three excluded stages are exactly the ones before `stain_requested`,
+which makes the filter one rule, not three special cases: **an extra is not
+inventory until its group's disposition is settled.**
+
+Two experiments, both run:
+
+1. Rewriting the filter to ask `stage_cut_at IS NOT NULL` — "has this glass been
+   cut?" — makes the suspected case pass and **breaks issue #12**, which exists
+   precisely to keep provisional extras out of the inventory.
+2. Removing the three stages one at a time says which carry weight. Without
+   `needs_sectioning`, three checks fail. Without `assignment_required`, #12
+   fails. Without **`sectioned`, nothing fails at all** — it is unreachable from
+   either direction: a legacy group never holds slides at
+   `current_stage = 'extra'` (assignment set them to `'cut'`), and a modern group
+   never reaches that stage.
+
+**How the false finding was manufactured**, since the next one will be built the
+same way: the probe advanced a MODERN pre-assigned cut group into a LEGACY
+pre-assignment stage. No build has ever written that combination. The state
+looked like a defect because it was incoherent, not because the app was wrong.
+The first version of the probe was worse still — it planted the stage with a raw
+`UPDATE`, producing a group that claimed to be cut while its slides carried no
+cut date.
+
+**No migration is needed, and none should be written.** The behaviour is correct
+for every state any build can produce, so there is nothing to translate.
+
+A guard for the unreachable case was written and then deleted: it could not be
+made to fail, the same as `rack-numbers-are-unique` in 0.14.3. What replaces it
+is an invariant that names the disposition rule and reads the stage order out of
+`src/lib/stages.ts` rather than retyping it — revert-verified by dropping
+`needs_sectioning` from the filter and watching it fail.
+
+### A correction to the audit banner above
+
+Point 2 — "Playwright does not run in CI" — is no longer true.
+`.github/workflows/test.yml` runs `pnpm exec playwright test` on every push, so
+the new spec is enforced rather than merely present. Left in place above because
+it was true when written, and the banner is a record.
+
+---
+
 Covers the 11 open issues in `karimghabra/histotracker` (as of 2026-07-17).
 Each entry is anchored to the real code, states the root cause, the proposed
 fix, blast radius, effort, and how it's tested. A runnable regression harness

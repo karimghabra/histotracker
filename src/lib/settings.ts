@@ -22,6 +22,18 @@ export interface AppSettings {
   defaultExtraSlides: number;
   /** Idle minutes before the signed-in user is dropped (#76). */
   idleLogoutMinutes: number;
+  /**
+   * How many slides fit in one staining rack, and one IHC rack (#123).
+   *
+   * This is a physical fact about the bench, not a preference: a rack holds 24
+   * slides and a 25th does not go in. Until now the app would happily pile every
+   * slide waiting for an agent into a single rack, so what the board showed and
+   * what the technician could actually carry diverged the moment a busy day
+   * produced more than one rack's worth. Separate numbers because IHC is
+   * commonly run on different hardware.
+   */
+  maxStainRackSlides: number;
+  maxIhcRackSlides: number;
   /** Whether the Manifest view is offered at all. */
   manifestVisible: boolean;
 }
@@ -35,6 +47,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultTotalSlides: 3,
   defaultExtraSlides: 2,
   idleLogoutMinutes: 30,
+  // The standard histology rack.
+  maxStainRackSlides: 24,
+  maxIhcRackSlides: 24,
   manifestVisible: true,
 };
 
@@ -42,6 +57,8 @@ export const SETTING_KEYS = {
   defaultTotalSlides: "default_total_slides",
   defaultExtraSlides: "default_extra_slides",
   idleLogoutMinutes: "idle_logout_minutes",
+  maxStainRackSlides: "max_stain_rack_slides",
+  maxIhcRackSlides: "max_ihc_rack_slides",
   manifestVisible: "manifest_visible",
 } as const;
 
@@ -51,6 +68,10 @@ export const SETTING_LIMITS = {
   defaultTotalSlides: { min: 1, max: 40 },
   defaultExtraSlides: { min: 0, max: 40 },
   idleLogoutMinutes: { min: 1, max: 480 },
+  // One slide per rack is silly but harmless; the ceiling is generous because
+  // nobody should have to argue with the app about their own hardware.
+  maxStainRackSlides: { min: 1, max: 500 },
+  maxIhcRackSlides: { min: 1, max: 500 },
 } as const;
 
 export function clampSetting(
@@ -82,6 +103,8 @@ export function parseSettings(rows: Array<{ key: string; value: string }>): AppS
     defaultTotalSlides: num("defaultTotalSlides"),
     defaultExtraSlides: num("defaultExtraSlides"),
     idleLogoutMinutes: num("idleLogoutMinutes"),
+    maxStainRackSlides: num("maxStainRackSlides"),
+    maxIhcRackSlides: num("maxIhcRackSlides"),
     manifestVisible:
       manifestRaw == null || manifestRaw.trim() === ""
         ? DEFAULT_SETTINGS.manifestVisible
@@ -95,6 +118,8 @@ export function settingsToRows(settings: AppSettings): Array<{ key: string; valu
     { key: SETTING_KEYS.defaultTotalSlides, value: String(settings.defaultTotalSlides) },
     { key: SETTING_KEYS.defaultExtraSlides, value: String(settings.defaultExtraSlides) },
     { key: SETTING_KEYS.idleLogoutMinutes, value: String(settings.idleLogoutMinutes) },
+    { key: SETTING_KEYS.maxStainRackSlides, value: String(settings.maxStainRackSlides) },
+    { key: SETTING_KEYS.maxIhcRackSlides, value: String(settings.maxIhcRackSlides) },
     { key: SETTING_KEYS.manifestVisible, value: settings.manifestVisible ? "1" : "0" },
   ];
 }
@@ -108,4 +133,9 @@ export function settingsToRows(settings: AppSettings): Array<{ key: string; valu
  */
 export function plannedExtras(settings: AppSettings, stainCount: number): number {
   return Math.max(settings.defaultExtraSlides, settings.defaultTotalSlides - stainCount);
+}
+
+/** The rack ceiling for an agent type (#123). */
+export function rackCapacity(settings: AppSettings, assayType: string): number {
+  return assayType === "ihc" ? settings.maxIhcRackSlides : settings.maxStainRackSlides;
 }

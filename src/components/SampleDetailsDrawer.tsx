@@ -5,8 +5,7 @@ import {
   BLOCK_TIMELINE_STAGES,
   SECTION_STAGE_LABELS,
   STAGE_LABELS,
-  STAGE_ORDER,
-} from "../lib/stages";
+  STAGE_ORDER, PROCESSING_OPTIONS } from "../lib/stages";
 import { Button } from "./ui";
 import { PreprocessingChecklist } from "./PreprocessingChecklist";
 import { SectioningPlanDialog } from "./SectioningPlanDialog";
@@ -14,8 +13,8 @@ import { RemovalReasonDialog } from "./RemovalReasonDialog";
 import { useActions } from "../hooks/useActions";
 import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useSampleSlides, useSampleTimelineEvents } from "../hooks/useData";
-import { cn, displayCode } from "../lib/utils";
-import { useReadOnly } from "../lib/readOnly";
+import { cn, displayCode, parseAgent, CATALOG_SEP } from "../lib/utils";
+import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
   sample,
@@ -40,6 +39,7 @@ export function SampleDetailsDrawer({
     sendPlansToCutting,
     setExhausted,
     setExhaustedSamples,
+    setSamplesProcessingType,
     editTimestamp,
     requestStainForSamples,
     withdrawStainRequest,
@@ -48,6 +48,7 @@ export function SampleDetailsDrawer({
   // Viewers mirror the workstation read-only; the write controls below are
   // hidden rather than left to fail silently (#72).
   const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
   const { data: timelineEvents = [] } = useSampleTimelineEvents(sample.id);
   const { data: catalog = [] } = useAssayCatalog();
   const { data: sampleSlides = [] } = useSampleSlides(sample.id);
@@ -57,6 +58,7 @@ export function SampleDetailsDrawer({
   const [draft, setDraft] = useState("");
   const [requestAgent, setRequestAgent] = useState("");
   const [requestFlash, setRequestFlash] = useState<string | null>(null);
+  const [runFlash, setRunFlash] = useState<string | null>(null);
   const [requestFailed, setRequestFailed] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
@@ -141,7 +143,7 @@ export function SampleDetailsDrawer({
             simply did nothing (#72). */}
         {showPreprocessing && readOnly && (
           <p className="mb-3 rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-            Read-only viewer — the preprocessing checklist is completed on the workstation.
+            {readOnlyNotice(reason, "Read-only viewer — the preprocessing checklist is completed on the workstation.")}
           </p>
         )}
         {showPreprocessing && !readOnly && (
@@ -278,8 +280,21 @@ export function SampleDetailsDrawer({
               </p>
             )}
             <p className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-              Read-only viewer — cutting and stain requests are made on the workstation.
-              Use <span className="font-medium text-ink-soft">Request stain</span> in the header to ask for one.
+              {readOnlyNotice(reason, "Read-only viewer — cutting and stain requests are made on the workstation.")}
+              {/* Viewers only. "Use Request stain in the header" is advice for
+                  somebody on a mirror who wants to ask the workstation for
+                  something; an unsigned user cannot raise a request either, and
+                  telling them to try would send them round a loop. The leading
+                  space is explicit because JSX will not put one between an
+                  expression and the text that follows it — without it this read
+                  "…on the workstation.Use Request stain…". */}
+              {reason === "viewer" && (
+                <>
+                  {" "}
+                  Use <span className="font-medium text-ink-soft">Request stain</span> in the header
+                  to ask for one.
+                </>
+              )}
             </p>
           </div>
         ) : (
@@ -358,7 +373,7 @@ export function SampleDetailsDrawer({
               className="px-2 py-1"
               disabled={!requestAgent}
               onClick={async () => {
-                const [assayType, assayName] = requestAgent.split("::");
+                const { assayType, assayName } = parseAgent(requestAgent, CATALOG_SEP);
                 // The request can be legitimately refused — e.g. an exhausted
                 // block with no extras left to fulfil it (#70). Surface the
                 // reason instead of failing silently.
@@ -367,16 +382,21 @@ export function SampleDetailsDrawer({
                   // with no extras left cannot fulfil one (#70), and that must
                   // not abandon the blocks behind it in the loop. The outcome is
                   // summarised rather than thrown.
-                  const { added, pulled, failed } = await requestStainForSamples(
+                  const { added, pulled, joined, failed } = await requestStainForSamples(
                     stainTargets,
                     assayType as "stain" | "ihc",
                     assayName,
                   );
                   setRequestAgent("");
-                  setRequestFailed(failed.length > 0 && added.length + pulled.length === 0);
+                  setRequestFailed(
+                    failed.length > 0 && added.length + pulled.length + joined.length === 0,
+                  );
                   const parts: string[] = [];
                   if (pulled.length) {
                     parts.push(`${pulled.length} pulled from an extra slide → now in Staining`);
+                  }
+                  if (joined.length) {
+                    parts.push(`${joined.length} added to the cut already waiting — no second cut`);
                   }
                   if (added.length) {
                     parts.push(`${added.length} flagged on the block — a new cut is needed`);
@@ -487,6 +507,64 @@ export function SampleDetailsDrawer({
           <p className="mb-2 text-xs text-amber-700">
             Complete the preprocessing checklist for every selected sample before moving to the processor.
           </p>
+        )}
+        {/* #134 — the run a block is booked for is a decision, and decisions get
+            revised once somebody looks at the tissue. Only offered before the
+            processor: past that, the duration belongs to a run that is already
+            happening, and changing it would move a finish time somebody is
+            waiting on. */}
+        {preprocessingSamples.length > 0 && (
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-xs text-ink-soft">
+              Processing run
+              {preprocessingSamples.length > 1 ? ` · ${preprocessingSamples.length} blocks` : ""}
+            </span>
+            <div className="flex gap-1">
+              {PROCESSING_OPTIONS.map((option) => {
+                const all = preprocessingSamples.every((s2) => s2.processing_type === option);
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-label={`Switch to the ${option} run`}
+                    aria-pressed={all}
+                    disabled={all}
+                    title={
+                      all
+                        ? `Already on the ${option} run`
+                        : `Move ${preprocessingSamples.length > 1 ? `${preprocessingSamples.length} blocks` : "this block"} to the ${option} run`
+                    }
+                    onClick={() => {
+                      setRunFlash(null);
+                      void setSamplesProcessingType(
+                        preprocessingSamples.map((s2) => s2.id),
+                        option,
+                      )
+                        .then((n) =>
+                          setRunFlash(
+                            n === 0
+                              ? `Already on the ${option} run.`
+                              : `${n} block${n === 1 ? "" : "s"} moved to the ${option} run.`,
+                          ),
+                        )
+                        .catch((err: unknown) =>
+                          setRunFlash(err instanceof Error ? err.message : "Could not switch."),
+                        );
+                    }}
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-xs font-medium transition",
+                      all
+                        ? "border-brand bg-brand/15 text-ink"
+                        : "border-line text-ink-soft hover:border-brand/50 hover:text-ink",
+                    )}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+            {runFlash && <span className="text-[11px] text-ink-faint">{runFlash}</span>}
+          </div>
         )}
         <div className="flex items-center gap-2">
         {isEmbedded ? (

@@ -22,6 +22,7 @@ import {
   SECTION_STAGE_COLUMNS,
   SECTION_STAGE_ORDER,
   PREPROCESSING_STAGES,
+  PROCESSING_OPTIONS,
   processingDurationHours,
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
@@ -29,6 +30,7 @@ import {
   type AppSettings,
   parseSettings,
   plannedExtras,
+  rackCapacity,
   settingsToRows,
 } from "./settings";
 import {
@@ -57,6 +59,55 @@ export function setViewerReadOnly(readOnly: boolean): void {
   viewerReadOnly = readOnly;
 }
 
+/**
+ * When true, every write is rejected because NOBODY IS SIGNED IN (#128).
+ *
+ * An unsigned user had the run of the workstation: sectioning, consuming
+ * extras, requesting stains, recording images, marking blocks analyzed. In a
+ * posterity application that is worse than it sounds — the work still happened,
+ * but the record of who did it says "Unsigned", permanently and unfixably.
+ *
+ * The gate lives HERE rather than in `useActions`, because `useActions` is not
+ * the only way in: the protocol checklist, the cut-group drawer and the rack
+ * drawer all call `db.ts` directly. This is the one place every write passes
+ * through, so a surface that forgets to gate itself is merely ugly, not unsafe —
+ * the same argument the #72 viewer gate is built on.
+ */
+let signedOutReadOnly = false;
+
+export function setSignedOutReadOnly(readOnly: boolean): void {
+  signedOutReadOnly = readOnly;
+}
+
+export const VIEWER_REFUSAL = "This is a read-only viewer — changes are made on the workstation.";
+export const SIGNED_OUT_REFUSAL = "Sign in before making modifications.";
+
+/**
+ * The unwrapped `execute` for each open connection.
+ *
+ * Signing in is itself a write, so the session writes below have to reach past
+ * the signed-out gate or nobody could ever get through it. Keyed per connection
+ * because the file is swapped and reopened at runtime (undo, restore, sync).
+ */
+const rawExecutes = new WeakMap<Database, Database["execute"]>();
+
+/**
+ * Perform a write that manages the SESSION rather than the lab record.
+ *
+ * Exempt from the signed-out gate — adding a user, choosing one, retiring one,
+ * and the audit rows that narrate all three. NOT exempt from the viewer gate: a
+ * viewer is a read-only mirror of somebody else's database, and always was.
+ */
+async function sessionExecute(
+  db: Database,
+  query: string,
+  params: unknown[] = [],
+): Promise<{ rowsAffected: number; lastInsertId?: number }> {
+  if (viewerReadOnly) throw new Error(VIEWER_REFUSAL);
+  const raw = rawExecutes.get(db);
+  return raw ? raw(query, params) : db.execute(query, params);
+}
+
 export async function recordAuditEvent(
   action: string,
   entityType: string,
@@ -64,7 +115,10 @@ export async function recordAuditEvent(
   details = "",
 ): Promise<void> {
   const db = await getDb();
-  await db.execute(
+  // A session write: the audit trail must record a sign-out even though signing
+  // out is the moment the gate closes.
+  await sessionExecute(
+    db,
     `INSERT INTO audit_events (user_id, action, entity_type, summary, details)
      VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
              ?, ?, ?, ?)`,
@@ -74,12 +128,10 @@ export async function recordAuditEvent(
 
 function guardWrites(db: Database): Database {
   const original = db.execute.bind(db);
+  rawExecutes.set(db, original);
   db.execute = ((query: string, bindValues?: unknown[]) => {
-    if (viewerReadOnly) {
-      return Promise.reject(
-        new Error("This is a read-only viewer — changes are made on the workstation."),
-      );
-    }
+    if (viewerReadOnly) return Promise.reject(new Error(VIEWER_REFUSAL));
+    if (signedOutReadOnly) return Promise.reject(new Error(SIGNED_OUT_REFUSAL));
     return original(query, bindValues);
   }) as typeof db.execute;
   return db;
@@ -601,9 +653,12 @@ export async function listUsers(activeOnly = false): Promise<LabUser[]> {
   );
 }
 
+// The three session writes (#128). Each one is how somebody gets THROUGH the
+// signed-out gate, so none of them can be behind it.
 export async function addUser(input: { name: string; initials: string }): Promise<number> {
   const db = await getDb();
-  const res = await db.execute(
+  const res = await sessionExecute(
+    db,
     `INSERT INTO users (name, initials) VALUES (?, ?)`,
     [input.name.trim(), input.initials.trim().toUpperCase()],
   );
@@ -612,9 +667,13 @@ export async function addUser(input: { name: string; initials: string }): Promis
 
 export async function setUserActive(userId: number, isActive: boolean): Promise<void> {
   const db = await getDb();
-  await db.execute(`UPDATE users SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, userId]);
+  await sessionExecute(db, `UPDATE users SET is_active = ? WHERE id = ?`, [
+    isActive ? 1 : 0,
+    userId,
+  ]);
   if (!isActive) {
-    await db.execute(
+    await sessionExecute(
+      db,
       `UPDATE app_settings SET value = '' WHERE key = 'active_user_id' AND value = ?`,
       [String(userId)],
     );
@@ -640,7 +699,8 @@ export async function setActiveUser(userId: number | null): Promise<void> {
     );
     if (!rows.length) throw new Error("That user is no longer active.");
   }
-  await db.execute(
+  await sessionExecute(
+    db,
     `INSERT INTO app_settings (key, value) VALUES ('active_user_id', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [userId === null ? "" : String(userId)],
@@ -960,20 +1020,6 @@ export async function getSample(sampleId: number): Promise<Sample | null> {
   return rows[0] ?? null;
 }
 
-// Columns that a snapshot restore is allowed to overwrite (everything mutable).
-const RESTORE_COLUMNS = [
-  "project_sample_number", "sample_code", "sample_description", "date_added",
-  "processing_type", "fixative_agent", "needs_decalcification", "cut_notes",
-  "slide_notes", "embedding_notes", "stains", "preselected_stains", "overall_notes",
-  "sectioning_plan", "current_stage",
-  "stage_received_at", "decalc_completed_at", "fixative_placed_at", "fixative_removed_at",
-  "ethanol_placed_at", "processing_started_at", "stage_processed_at", "stage_needs_embedding_at",
-  "stage_embedded_at", "stage_needs_sectioning_at", "stage_sectioned_at", "stage_stain_requested_at",
-  "stage_stained_at", "stage_deparaffinized_at", "stage_ihc_at", "stage_pictures_taken_at",
-  "stage_analyzed_at", "stage_picked_up_at", "block_exhausted",
-  "is_priority", "prioritized_at",
-] as const;
-
 export async function setSamplePriority(sampleId: number, priority: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(
@@ -982,23 +1028,6 @@ export async function setSamplePriority(sampleId: number, priority: boolean): Pr
       WHERE id = ?`,
     [priority ? 1 : 0, priority ? 1 : 0, nowTimestamp(), sampleId],
   );
-}
-
-/** Restore a previously captured sample snapshot (for undo of moves/edits). */
-export async function restoreSample(snapshot: Sample): Promise<void> {
-  const db = await getDb();
-  const assignments = RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`UPDATE samples SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
-
-/** Re-insert a deleted sample with its original id (for undo of delete). */
-export async function reinsertSample(snapshot: Sample): Promise<void> {
-  const db = await getDb();
-  const cols = ["id", "project_id", ...RESTORE_COLUMNS, "created_at"];
-  const placeholders = cols.map(() => "?").join(", ");
-  const values = cols.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`INSERT INTO samples (${cols.join(", ")}) VALUES (${placeholders})`, values);
 }
 
 export async function updateSectioningPlan(
@@ -1235,6 +1264,107 @@ export async function setSamplesArchived(sampleIds: number[], archived: boolean)
   for (const id of sampleIds) await setSampleArchived(id, archived);
 }
 
+/**
+ * Move blocks between the Short and Long processing runs (#134).
+ *
+ * A lab decides how long a block needs in the processor when it is booked in,
+ * and then the tissue turns out denser than it looked. Until now the only way to
+ * change that answer was to book the block in again.
+ *
+ * Only blocks that have NOT reached the processor can be switched, which is the
+ * issue's own condition and also the honest one: `processing_type` decides a
+ * run's duration, so changing it under a block already in the machine would
+ * rewrite when a run that is happening is due to end. Ineligible ids are
+ * SKIPPED, not thrown on — this acts on a selection, and a technician switching
+ * eleven blocks with one already loaded should get the ten moved rather than an
+ * error and nothing (the rule `setSlidesDepthTag` already follows).
+ *
+ * Every switch writes a timeline event naming both ends, because the duration a
+ * block was processed for is part of its record, and "it says Long now" with no
+ * trace of it having been Short is the kind of silent rewrite this application
+ * exists not to do (#83).
+ *
+ * Returns how many blocks were actually switched, so the caller can say so.
+ */
+export async function setSamplesProcessingType(
+  sampleIds: number[],
+  processingType: "Short" | "Long",
+): Promise<number> {
+  if (sampleIds.length === 0) return 0;
+  // The column carries a CHECK constraint on exactly these two, so a bad value
+  // would otherwise fail at the write with a message nobody can read.
+  if (!PROCESSING_OPTIONS.includes(processingType)) {
+    throw new Error(`${processingType} is not a processing run.`);
+  }
+  const db = await getDb();
+  const stages = [...PREPROCESSING_STAGES];
+  const placeholders = sampleIds.map(() => "?").join(", ");
+  const rows = await db.select<
+    Array<{ id: number; current_stage: string; processing_type: string }>
+  >(
+    `SELECT id, current_stage, processing_type FROM samples WHERE id IN (${placeholders})`,
+    sampleIds,
+  );
+  // A block committed to a PLANNED batch is still in pre-processing, so the
+  // stage test above lets it through — and a planned batch carries its own
+  // `processing_type`, chosen when the batch was formed and enforced only then.
+  // Switching a member afterwards would leave the batch holding a block whose
+  // run no longer matches it, and `confirmProcessingBatchStart` stamps the ready
+  // time from the BATCH, so the block would be processed for the wrong duration
+  // with nothing on screen saying so. Take the block out of the batch first, or
+  // change the batch.
+  const committed = await db.select<Array<{ sample_code: string }>>(
+    `SELECT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${placeholders})
+        AND pb.status IN ('planned', 'processing')`,
+    sampleIds,
+  );
+  if (committed.length > 0) {
+    throw new Error(
+      `${committed.map((row) => row.sample_code).join(", ")} ${committed.length === 1 ? "is" : "are"} ` +
+        `already committed to a run — remove ${committed.length === 1 ? "it" : "them"} from the batch before switching.`,
+    );
+  }
+
+  const eligible = rows.filter(
+    (row) => PREPROCESSING_STAGES.has(row.current_stage) && row.processing_type !== processingType,
+  );
+  if (eligible.length === 0) return 0;
+
+  const timestamp = nowTimestamp();
+  let switched = 0;
+  for (const row of eligible) {
+    // The stage goes in the STATEMENT, not only in the filter above: a check and
+    // a write separated by an `await` is a window, and a block that entered the
+    // processor in between must not be switched. Same lesson as the coverslip
+    // guard in syncAssayStackWorkflowStep, which the swarm walked straight
+    // through before the condition moved into the SQL.
+    const result = await db.execute(
+      `UPDATE samples SET processing_type = ?
+        WHERE id = ? AND current_stage IN (${stages.map(() => "?").join(", ")})`,
+      [processingType, row.id, ...stages],
+    );
+    if ((result.rowsAffected ?? 0) === 0) continue;
+    switched += 1;
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'processing_type', ?, ?, ?)`,
+      [
+        row.id,
+        `Processing run changed from ${row.processing_type} to ${processingType}`,
+        JSON.stringify({ before: row.processing_type, after: processingType }),
+        timestamp,
+      ],
+    );
+  }
+  return switched;
+}
+
 export async function setBlockExhausted(sampleId: number, exhausted: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE samples SET block_exhausted = ? WHERE id = ?`, [
@@ -1278,8 +1408,18 @@ export async function setSlidesDepthTag(
   if (slideIds.length === 0) return;
   const db = await getDb();
   const placeholders = slideIds.map(() => "?").join(", ");
+  // Removed slides are excluded rather than rejected. Every sibling mutation
+  // (setSlidePicturesTaken, reassignSlide, relabelSlideToSample, removeSlide)
+  // refuses a removed slide outright, and this one silently retagged one — a
+  // removed slide is the record of glass that is gone, so its depth can no
+  // longer be established by anyone.
+  //
+  // Skipping rather than throwing because this is the only one of the five that
+  // acts on a SELECTION: a technician tagging eleven slides, one of which was
+  // broken last week, should get the ten tagged, not an error and nothing done.
   await db.execute(
-    `UPDATE slides SET depth_label = ?, depth_note = ? WHERE id IN (${placeholders})`,
+    `UPDATE slides SET depth_label = ?, depth_note = ?
+      WHERE id IN (${placeholders}) AND current_stage <> 'removed'`,
     [label.trim(), note.trim(), ...slideIds],
   );
 }
@@ -1602,7 +1742,6 @@ export async function updateBatchMembers(
   batchId: number,
   sampleIds: number[],
 ): Promise<void> {
-  if (sampleIds.length === 0) throw new Error("A run needs at least one sample.");
   const db = await getDb();
   const batchRows = await db.select<
     Array<{ status: string; processing_type: string; started_at: string }>
@@ -1616,6 +1755,70 @@ export async function updateBatchMembers(
     throw new Error("Only a planned or running batch's samples can be edited.");
   }
   const running = batch.status === "processing";
+
+  // Read the membership before anything is rewritten. Both the empty case below
+  // and the join/leave diff further down need to know who was in it.
+  const previousIds = (
+    await db.select<Array<{ sample_id: number }>>(
+      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
+      [batchId],
+    )
+  ).map((r) => r.sample_id);
+
+  // Taking the LAST sample out dissolves the run (#135).
+  //
+  // This used to throw "A run needs at least one sample", which is true and
+  // unhelpful: a run with nothing in it is not a run, and the technician
+  // emptying it is saying so. Refusing left them with a batch they could not get
+  // rid of except by starting it and marking it done — a lie in the record about
+  // a machine that never ran.
+  //
+  // The run is DELETED, and that is a deliberate exception to #83 rather than an
+  // oversight, so it is worth saying why. #83 protects the record of work that
+  // HAPPENED — glass that was cut, tissue that was processed. A run emptied of
+  // its samples is the opposite: a plan withdrawn. Nothing was cut, nothing was
+  // embedded, and for a planned run nothing physically moved at all.
+  //
+  // 0.16.2 shipped this as a `cancelled` status instead, and that was worse than
+  // either choice. It kept the batch row and deleted its membership, so the
+  // surviving record answered "did batch 3 exist?" — which nobody asks — and not
+  // "what was in it?", which is the only useful question. A shell is not a
+  // record.
+  //
+  // What actually happened is not lost. `audit_events` keeps the batch's
+  // creation and every stage transition its samples made, so "EE-1 went into a
+  // machine at 09:14 and came out at 09:20" is still answerable from the
+  // Manifest — which is where "who did what" belongs, and where it is now
+  // tested (#77). Ids are AUTOINCREMENT, so a deleted batch number is never
+  // handed to a later run.
+  if (sampleIds.length === 0) {
+    // Samples first: if the delete fails, they are at least out of a run that
+    // is about to stop existing, rather than pinned to one that already does not.
+    // Only a RUNNING batch moved them; a planned one leaves them in
+    // pre-processing, so there is nothing to put back.
+    if (running) {
+      for (const id of previousIds) await revertToStage(id, "in_ethanol");
+    }
+    // Same order as startProcessingBatch's abort unwind: children before parent,
+    // and members explicitly rather than relying on ON DELETE CASCADE, which
+    // needs `PRAGMA foreign_keys` to be on.
+    await db.execute(
+      `DELETE FROM checklist_items
+        WHERE checklist_run_id IN (
+          SELECT id FROM checklist_runs
+           WHERE scope_type = 'processing_batch' AND scope_id = ?
+        )`,
+      [batchId],
+    );
+    await db.execute(
+      `DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
+      [batchId],
+    );
+    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+    await db.execute(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
+    return;
+  }
+
   const placeholders = sampleIds.map(() => "?").join(", ");
   const samples = await db.select<Sample[]>(
     `SELECT * FROM samples WHERE id IN (${placeholders}) ORDER BY id`,
@@ -1623,16 +1826,10 @@ export async function updateBatchMembers(
   );
   if (samples.length !== sampleIds.length) throw new Error("One or more samples no longer exist.");
 
-  // Who is joining and who is leaving — read BEFORE the membership is rewritten,
-  // and before validation, because the rules differ. A sample already IN the run
-  // is past pre-processing by definition once the run starts, so the "still
-  // waiting to be processed" check below can only be applied to newcomers.
-  const previousIds = (
-    await db.select<Array<{ sample_id: number }>>(
-      `SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`,
-      [batchId],
-    )
-  ).map((r) => r.sample_id);
+  // Who is joining and who is leaving. `previousIds` is read above, before any
+  // rewrite, because the rules differ: a sample already IN the run is past
+  // pre-processing by definition once the run starts, so the "still waiting to
+  // be processed" check below can only be applied to newcomers.
   const next = new Set(sampleIds);
   const joined = sampleIds.filter((id) => !previousIds.includes(id));
   const left = previousIds.filter((id) => !next.has(id));
@@ -1863,11 +2060,17 @@ export async function updateProcessingBatchStart(
   );
 }
 
-// deleteProcessingBatch() is GONE (#83). It erased a processing run, its members
-// and its protocol checklist — the evidence that the run happened and that its
-// steps were performed. Nothing ever called it, so it was a loaded gun with no
-// trigger; under "nothing is ever deleted" it should not be sitting there for a
-// future button to wire up either.
+// deleteProcessingBatch() is still GONE (#83). It erased ANY processing run — its
+// members and its protocol checklist with it — which for a run that happened is
+// the evidence that it happened and that its steps were performed. Nothing ever
+// called it, so it was a loaded gun with no trigger.
+//
+// One narrow delete replaced it in 0.16.3: `updateBatchMembers(id, [])` removes a
+// run that has been emptied of its samples (#135). That is a plan withdrawn
+// rather than work erased — nothing was cut, nothing was processed — and the
+// Manifest still holds the batch's creation and every stage transition its
+// samples made. The distinction is the whole of it: a run that RAN keeps its
+// record; a run that never had anything in it is not a record of anything.
 
 export async function listChecklistItems(
   scopeType: string,
@@ -2148,11 +2351,6 @@ export async function syncAssayWorkflowStep(
 }
 
 // ---- Section requests (children of embedded blocks) -------------------------
-
-const SECTION_RESTORE_COLUMNS = [
-  "duplicates", "stains", "notes", "current_stage",
-  ...SECTION_STAGES.map((s) => s.column),
-] as const;
 
 const SECTION_COLUMN_SET = new Set(Object.values(SECTION_STAGE_COLUMNS));
 
@@ -2535,6 +2733,32 @@ export function parsePreselectedStains(
   }
 }
 
+/**
+ * Does this block still owe somebody a cut? (#110, #129)
+ *
+ * Defined ONCE and shared by the card that draws the flag and the board that
+ * sorts and filters on it. Two copies would be two answers to "needs cut", and
+ * the one a technician can SEE would not be the one the filter used — a filter
+ * that hides a flagged card, or surfaces an unflagged one, is worse than no
+ * filter at all.
+ *
+ * It sits here rather than in `stages.ts` because it has to go through
+ * `parsePreselectedStains`: an outstanding entry with no agent name is not an
+ * outstanding request, and a bare "is the column non-empty" test would count it.
+ * stages.ts cannot import this module without a cycle.
+ *
+ * A pending agent means the slide that will carry it does not exist yet, so the
+ * block is waiting for the microtome, not for a stainer (#110). A deliberately
+ * saved cutting plan says the same thing. `plan_saved`, not `sectioning_plan` —
+ * every block is auto-seeded a plan at embedding, so that would flag them all.
+ */
+export function sampleNeedsCut(sample: {
+  pending_stains?: string | null;
+  plan_saved?: number | null;
+}): boolean {
+  return parsePreselectedStains(sample.pending_stains).length > 0 || sample.plan_saved === 1;
+}
+
 export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
   const db = await getDb();
   return db.select<SectionRequest[]>(
@@ -2840,8 +3064,22 @@ export async function getOpenStainRack(
                OR sl.stage_coverslipped_at IS NOT NULL
                OR sl.stage_dried_at IS NOT NULL)
         )
+        -- …and it is not already FULL (#123).
+        --
+        -- A rack holds a fixed number of slides — 24 by default, configurable
+        -- because it is a fact about the lab's hardware. Without this the app
+        -- piled every slide waiting for an agent into one rack, so the board
+        -- showed a single rack of forty that nobody could actually carry. A full
+        -- rack is skipped and the next slide opens a fresh one, which is exactly
+        -- what happens at the bench.
+        --
+        -- Removed slides do not count: the glass is gone, so its place is free.
+        AND (
+          SELECT COUNT(*) FROM slides sl
+           WHERE sl.stack_id = slide_stacks.id AND sl.current_stage <> 'removed'
+        ) < ?
       ORDER BY id ASC LIMIT 1`,
-    [assayType, assayName],
+    [assayType, assayName, rackCapacity(await getAppSettings(), assayType)],
   );
   return rows[0] ?? null;
 }
@@ -2960,72 +3198,6 @@ export async function reopenSlideStackIfPopulated(id: number): Promise<boolean> 
   return result.rowsAffected > 0;
 }
 
-export async function reinsertSlideStack(snapshot: SlideStack): Promise<void> {
-  const db = await getDb();
-  const columns = [
-    "id", "kind", "assay_type", "assay_name", "sample_id", "current_stage",
-    ...Object.values(STACK_STAGE_COLUMNS), "closed_at", "created_at",
-  ];
-  const values = columns.map((column) => (snapshot as unknown as Record<string, unknown>)[column]);
-  await db.execute(
-    `INSERT INTO slide_stacks (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-    values,
-  );
-}
-
-export interface ChecklistRunSnapshot {
-  id: number;
-  scope_type: string;
-  scope_id: number;
-  stage_key: string;
-  protocol_name: string;
-  protocol_version: number;
-  completed_at: string | null;
-  created_at: string;
-  items: ChecklistItem[];
-}
-
-export async function listChecklistRunsForScope(
-  scopeType: string,
-  scopeId: number,
-): Promise<ChecklistRunSnapshot[]> {
-  const db = await getDb();
-  const runs = await db.select<Array<Omit<ChecklistRunSnapshot, "items">>>(
-    `SELECT * FROM checklist_runs WHERE scope_type = ? AND scope_id = ? ORDER BY id`,
-    [scopeType, scopeId],
-  );
-  return Promise.all(runs.map(async (run) => ({
-    ...run,
-    items: await db.select<ChecklistItem[]>(
-      `SELECT * FROM checklist_items WHERE checklist_run_id = ? ORDER BY sort_order, id`,
-      [run.id],
-    ),
-  })));
-}
-
-export async function reinsertChecklistRuns(snapshots: ChecklistRunSnapshot[]): Promise<void> {
-  const db = await getDb();
-  for (const run of snapshots) {
-    await db.execute(
-      `INSERT INTO checklist_runs
-        (id, scope_type, scope_id, stage_key, protocol_name, protocol_version, completed_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [run.id, run.scope_type, run.scope_id, run.stage_key, run.protocol_name,
-        run.protocol_version, run.completed_at, run.created_at],
-    );
-    for (const item of run.items) {
-      await db.execute(
-        `INSERT INTO checklist_items
-          (id, checklist_run_id, item_key, label, sort_order, is_required, is_complete,
-           completed_by, completed_at, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, item.checklist_run_id, item.item_key, item.label, item.sort_order,
-          item.is_required, item.is_complete, item.completed_by, item.completed_at, item.notes],
-      );
-    }
-  }
-}
-
 /** The loading rack for an agent, creating it if none is open. */
 async function getOrCreateStainRack(assayType: string, assayName: string): Promise<number> {
   const existing = await getOpenStainRack(assayType, assayName);
@@ -3101,20 +3273,6 @@ const STACK_STAGE_COLUMNS: Record<string, string> = {
   analyzed: "stage_analyzed_at",
 };
 
-const STACK_RESTORE_COLUMNS = [
-  "kind", "assay_type", "assay_name", "sample_id", "current_stage",
-  ...Object.values(STACK_STAGE_COLUMNS), "closed_at",
-] as const;
-
-export async function restoreSlideStack(snapshot: SlideStack): Promise<void> {
-  const db = await getDb();
-  const assignments = STACK_RESTORE_COLUMNS.map((column) => `${column} = ?`).join(", ");
-  const values = STACK_RESTORE_COLUMNS.map(
-    (column) => (snapshot as unknown as Record<string, unknown>)[column],
-  );
-  await db.execute(`UPDATE slide_stacks SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
-
 export async function listOpenSlideStacks(): Promise<SlideStack[]> {
   const db = await getDb();
   // A 'stain' rack spans samples (sample_id NULL); a 'sample' stack owns one.
@@ -3148,7 +3306,25 @@ export async function listOpenSlideStacks(): Promise<SlideStack[]> {
             ), '') AS slide_summary,
             -- Plain, delimited agent list for filtering (issue #82). slide_summary
             -- is display text; parsing it back out would be brittle.
-            COALESCE(GROUP_CONCAT(DISTINCT NULLIF(sl.assay_name, '')), '') AS agent_names
+            COALESCE(GROUP_CONCAT(DISTINCT NULLIF(sl.assay_name, '')), '') AS agent_names,
+            -- Which H&E rack this is: the 1st, the 7th, the 30th.
+            --
+            -- Two racks for the same agent are two identical cards, and "the H&E
+            -- rack" stops identifying anything the moment there are two of them.
+            -- This replaces the amber "new rack" tag, which only said THAT there
+            -- was an earlier one, never which of them you were looking at.
+            --
+            -- Counted over EVERY rack for the agent, closed ones included, so the
+            -- number is fixed for the life of the rack. Counting only open racks
+            -- would renumber the survivors each time one finished — the rack a
+            -- technician wrote "H&E 2" on in marker would silently become H&E 1.
+            CASE WHEN ss.kind = 'stain' THEN (
+              SELECT COUNT(*) FROM slide_stacks earlier
+               WHERE earlier.kind = 'stain'
+                 AND earlier.assay_type = ss.assay_type
+                 AND earlier.assay_name = ss.assay_name
+                 AND earlier.id <= ss.id
+            ) END AS rack_ordinal
        FROM slide_stacks ss
        LEFT JOIN samples s ON s.id = ss.sample_id
        LEFT JOIN projects p ON p.id = s.project_id
@@ -3565,10 +3741,11 @@ export async function requestStainForSample(input: {
   assayType: "stain" | "ihc";
   assayName: string;
 }): Promise<{
-  target: "extra" | "block";
+  target: "extra" | "cut" | "block";
   slideId: number | null;
   stackId: number | null;
   createdStackId: number | null;
+  sectionId?: number;
 }> {
   const db = await getDb();
   const assayName = input.assayName.trim();
@@ -3619,9 +3796,46 @@ export async function requestStainForSample(input: {
       createdStackId: openRack ? null : stackId,
     };
   }
-  // No free extra: the request would flag the BLOCK for a fresh cut. An
-  // exhausted block has no tissue left to cut, so that flag could never be
-  // satisfied and the block would sit lit up forever — refuse it (issue #70).
+  // No free extra — but the block may already be ON ITS WAY to the microtome
+  // (#125). If a cut group is sitting in Needs Sectioning, the honest answer is
+  // to put this agent on that cut, not to raise a second one.
+  //
+  // The old behaviour flagged the block for a fresh cut, so a block whose plan
+  // read "H&E, extra, extra" and had not been cut yet came back asking to be
+  // cut AGAIN the moment somebody requested PAS — two trips to the block for
+  // work that was always going to happen in one. Nobody sections twice for that;
+  // they add a slide to the ribbon they are about to take.
+  //
+  // Deliberately `needs_sectioning` only. A group that has left the queue has
+  // been cut, and its glass exists — putting a new agent on it would be claiming
+  // a section that was never taken. Those blocks still route to the extras
+  // branch above, or to a genuine new cut below.
+  const pendingCut = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests
+      WHERE sample_id = ? AND current_stage = 'needs_sectioning'
+      ORDER BY id LIMIT 1`,
+    [input.sampleId],
+  );
+  if (pendingCut.length > 0) {
+    // Appended, not inserted among the extras: slide_ordinal is the order the
+    // glass comes off the block, and renumbering the existing slides to make the
+    // list read prettily would rewrite a record of something already planned.
+    const slideId = await addSlideToSection(pendingCut[0].id, {
+      assayType: input.assayType,
+      assayName,
+    });
+    return {
+      target: "cut",
+      slideId,
+      stackId: null,
+      createdStackId: null,
+      sectionId: pendingCut[0].id,
+    };
+  }
+
+  // Nothing free and nothing pending: the request flags the BLOCK for a fresh
+  // cut. An exhausted block has no tissue left to cut, so that flag could never
+  // be satisfied and the block would sit lit up forever — refuse it (issue #70).
   // Note this guards the cut path only: a request that an already-cut extra can
   // fulfil is handled above and stays allowed, because that slide physically
   // exists regardless of the block being spent.
@@ -3832,6 +4046,248 @@ export async function updateSlideAssignment(
       id,
     ],
   );
+}
+
+/**
+ * Split slides out of their rack into a fresh one (#124).
+ *
+ * A rack is a physical thing: two dozen slides that travel together through the
+ * reagents. Sometimes half of them need to go now and half tomorrow, or a rack
+ * turns out to be over capacity after a busy morning. Until now the only way to
+ * divide one was to reassign each slide to another agent and back, which is a
+ * lie about the agent and does not reliably produce two racks anyway.
+ *
+ * Rules, each one a consequence of the rack model:
+ *  · Every slide must come from the SAME rack. Splitting across racks is not a
+ *    split, it is two of them, and doing it in one call would hide which slides
+ *    came from where.
+ *  · Not the whole rack. Moving every slide out retires the old rack and creates
+ *    an identical one — a no-op with extra steps that silently changes the rack
+ *    id the board has been pointing at.
+ *  · One agent. A rack IS an agent plus the glass going through it.
+ *  · The new rack starts empty, so the split cannot exceed capacity (#123) —
+ *    checked anyway, because the ceiling is configurable and somebody will lower
+ *    it below a rack that is already full.
+ *
+ * Work already done is untouched. A stained slide stays stained: it is the same
+ * glass, in a different holder.
+ */
+export async function splitSlidesIntoNewRack(slideIds: number[]): Promise<number> {
+  if (slideIds.length === 0) throw new Error("Choose the slides to move into a new rack.");
+  const db = await getDb();
+  const placeholders = slideIds.map(() => "?").join(", ");
+  const rows = await db.select<
+    Array<{
+      id: number;
+      stack_id: number | null;
+      slide_code: string;
+      assay_type: string;
+      assay_name: string;
+      current_stage: string;
+      sample_id: number;
+    }>
+  >(
+    `SELECT sl.id, sl.stack_id, sl.slide_code, sl.assay_type, sl.assay_name,
+            sl.current_stage, sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.id IN (${placeholders})`,
+    slideIds,
+  );
+  if (rows.length === 0) throw new Error("Those slides no longer exist.");
+
+  const live = rows.filter((row) => row.current_stage !== "removed");
+  if (live.length === 0) throw new Error("Every one of those slides has been removed.");
+
+  const sourceIds = [...new Set(live.map((row) => row.stack_id))];
+  if (sourceIds.length > 1 || sourceIds[0] == null) {
+    throw new Error("Split one rack at a time — those slides are not all in the same rack.");
+  }
+  const sourceId = sourceIds[0];
+
+  const agents = [...new Set(live.map((row) => `${row.assay_type}:${row.assay_name}`))];
+  if (agents.length > 1) {
+    throw new Error("Those slides carry different agents — move them one agent at a time.");
+  }
+
+  const held = await db.select<Array<{ n: number }>>(
+    `SELECT COUNT(*) AS n FROM slides WHERE stack_id = ? AND current_stage <> 'removed'`,
+    [sourceId],
+  );
+  if (Number(held[0]?.n ?? 0) <= live.length) {
+    throw new Error("That is the whole rack — there would be nothing left to split from.");
+  }
+
+  const assayType = live[0].assay_type;
+  const assayName = live[0].assay_name;
+  const capacity = rackCapacity(await getAppSettings(), assayType);
+  if (live.length > capacity) {
+    // Pluralised rather than articled: "a Alcian Blue rack" is what an "a/an"
+    // guess produces the moment an agent starts with a vowel, and the catalogue
+    // is the lab's to fill in.
+    throw new Error(
+      `${assayName} racks hold ${capacity} slides; you chose ${live.length}.`,
+    );
+  }
+
+  // A NEW rack, deliberately — not getOpenStainRack, which would hand back a
+  // half-full rack for the same agent and quietly merge instead of splitting.
+  const timestamp = nowTimestamp();
+  const created = await db.execute(
+    `INSERT INTO slide_stacks
+      (kind, assay_type, assay_name, sample_id, current_stage, stage_stain_requested_at)
+     VALUES ('stain', ?, ?, NULL, 'stain_requested', ?)`,
+    [assayType, assayName, timestamp],
+  );
+  if (created.lastInsertId == null) throw new Error("Could not create the new rack.");
+  const newStackId = created.lastInsertId;
+
+  const movedIds = live.map((row) => row.id);
+  await db.execute(
+    `UPDATE slides SET stack_id = ? WHERE id IN (${movedIds.map(() => "?").join(", ")})`,
+    [newStackId, ...movedIds],
+  );
+
+  // One event per block, naming its own slides — a technician reading EE-4's
+  // timeline should not have to read about somebody else's glass.
+  for (const sampleId of new Set(live.map((row) => row.sample_id))) {
+    const codes = live
+      .filter((row) => row.sample_id === sampleId)
+      .map((row) => displayCode(row.slide_code))
+      .join(", ");
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'rack_split', ?, ?, ?)`,
+      [
+        sampleId,
+        `${codes} moved into a new ${assayName} rack`,
+        JSON.stringify({ from_stack: sourceId, to_stack: newStackId, slides: movedIds }),
+        timestamp,
+      ],
+    );
+  }
+
+  await closeSlideStackIfEmpty(sourceId);
+  return newStackId;
+}
+
+/**
+ * Pour several racks into one (#124).
+ *
+ * The inverse of a split and the more dangerous direction, because merging is
+ * how a rack ends up holding glass at two different points in the protocol —
+ * which is exactly what #81 was about. So the rule is strict: only racks that
+ * have not started work can be merged.
+ *
+ * Rules:
+ *  · Same agent, for the same reason a split is single-agent.
+ *  · Nothing started. If any slide in any of them has been stained,
+ *    coverslipped or dried, the racks are at different points, and merging would
+ *    drop unstained glass into a batch that has already been through reagents.
+ *  · The result must fit on the bench (#123).
+ *  · Emptied racks are RETIRED, never deleted — the row stays, closed.
+ */
+export async function mergeSlideStacks(stackIds: number[]): Promise<number> {
+  const unique = [...new Set(stackIds)];
+  if (unique.length < 2) throw new Error("Choose at least two racks to merge.");
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const racks = await db.select<
+    Array<{
+      id: number;
+      kind: string;
+      assay_type: string;
+      assay_name: string;
+      current_stage: string;
+      closed_at: string | null;
+      held: number;
+      worked: number;
+    }>
+  >(
+    `SELECT ss.id, ss.kind, ss.assay_type, ss.assay_name, ss.current_stage, ss.closed_at,
+            (SELECT COUNT(*) FROM slides sl
+              WHERE sl.stack_id = ss.id AND sl.current_stage <> 'removed') AS held,
+            (SELECT COUNT(*) FROM slides sl
+              WHERE sl.stack_id = ss.id AND sl.purpose = 'stain'
+                AND (sl.stage_stained_at IS NOT NULL OR sl.stage_refrax_at IS NOT NULL
+                  OR sl.stage_coverslipped_at IS NOT NULL OR sl.stage_dried_at IS NOT NULL)) AS worked
+       FROM slide_stacks ss
+      WHERE ss.id IN (${placeholders})
+      ORDER BY ss.id`,
+    unique,
+  );
+  if (racks.length < 2) throw new Error("Those racks no longer exist.");
+  if (racks.some((rack) => rack.closed_at != null)) {
+    throw new Error("One of those racks has been retired.");
+  }
+  if (racks.some((rack) => rack.kind !== "stain")) {
+    throw new Error("Only staining and IHC racks can be merged.");
+  }
+  const agents = [...new Set(racks.map((rack) => `${rack.assay_type}:${rack.assay_name}`))];
+  if (agents.length > 1) {
+    const names = [...new Set(racks.map((rack) => rack.assay_name))].join(", ");
+    throw new Error(`Those racks are for different agents (${names}).`);
+  }
+  if (racks.some((rack) => rack.worked > 0 || rack.current_stage !== "stain_requested")) {
+    throw new Error(
+      "One of those racks has already been through the reagents — merging it would put " +
+        "unstained glass in with stained.",
+    );
+  }
+
+  const total = racks.reduce((sum, rack) => sum + rack.held, 0);
+  const capacity = rackCapacity(await getAppSettings(), racks[0].assay_type);
+  if (total > capacity) {
+    throw new Error(
+      `That would make a rack of ${total}; ${racks[0].assay_name} racks hold ${capacity}.`,
+    );
+  }
+
+  // The oldest rack wins, so the merged rack keeps the identity the board has
+  // been showing all along instead of appearing as something new.
+  const target = racks[0].id;
+  const sources = racks.slice(1).map((rack) => rack.id);
+  const sourceMarks = sources.map(() => "?").join(", ");
+  const timestamp = nowTimestamp();
+
+  const moving = await db.select<Array<{ id: number; slide_code: string; sample_id: number }>>(
+    `SELECT sl.id, sl.slide_code, sr.sample_id
+       FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
+      WHERE sl.stack_id IN (${sourceMarks}) AND sl.current_stage <> 'removed'`,
+    sources,
+  );
+  await db.execute(`UPDATE slides SET stack_id = ? WHERE stack_id IN (${sourceMarks})`, [
+    target,
+    ...sources,
+  ]);
+
+  for (const sampleId of new Set(moving.map((row) => row.sample_id))) {
+    const codes = moving
+      .filter((row) => row.sample_id === sampleId)
+      .map((row) => displayCode(row.slide_code))
+      .join(", ");
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'rack_merged', ?, ?, ?)`,
+      [
+        sampleId,
+        `${codes} merged into one ${racks[0].assay_name} rack`,
+        JSON.stringify({
+          into_stack: target,
+          from_stacks: sources,
+          slides: moving.map((row) => row.id),
+        }),
+        timestamp,
+      ],
+    );
+  }
+
+  for (const source of sources) await closeSlideStackIfEmpty(source);
+  await reopenSlideStackIfPopulated(target);
+  return target;
 }
 
 /**
@@ -4647,6 +5103,38 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
   const db = await getDb();
   const targetOrder = SECTION_STAGE_ORDER[stageKey];
   if (targetOrder === undefined) throw new Error(`Unknown section stage: ${stageKey}`);
+
+  // Retracting the cut is refused once the glass has been worked on.
+  //
+  // Reverting to needs_sectioning clears stage_cut_at on every slide in the
+  // group (below). If one of those slides has already been stained, that leaves
+  // a slide asserting it was stained on a day it had not yet been cut — a
+  // physical impossibility, and one the swarm produced by simply dragging a
+  // group backwards, which is a thing people do on the board every day.
+  //
+  // The alternative fix — cascade the revert and clear the staining dates too —
+  // was rejected: it destroys the record of work that genuinely happened, which
+  // is the one thing this application exists not to do. Once a section is on a
+  // slide and stained, the cut is a fact. Fix the slide (reassign it, or remove
+  // it with a reason), not the history.
+  if (stageKey === "needs_sectioning") {
+    const worked = await db.select<Array<{ slide_code: string }>>(
+      `SELECT slide_code FROM slides
+        WHERE section_request_id = ? AND current_stage <> 'removed'
+          AND (stage_stained_at IS NOT NULL OR stage_coverslipped_at IS NOT NULL
+               OR stage_pictures_taken_at IS NOT NULL)
+        ORDER BY slide_ordinal, id`,
+      [id],
+    );
+    if (worked.length > 0) {
+      const codes = worked.map((row) => displayCode(row.slide_code)).join(", ");
+      throw new Error(
+        `${codes} ${worked.length === 1 ? "has" : "have"} already been stained or imaged, so ` +
+          `this cut cannot be retracted. Reassign or remove the slide instead.`,
+      );
+    }
+  }
+
   const clear = SECTION_STAGES.filter((s) => SECTION_STAGE_ORDER[s.key] > targetOrder).map(
     (s) => s.column,
   );
@@ -4657,7 +5145,50 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
   // on every slide, so the backward one has to take it off, or a group dragged
   // out and back keeps a cut date for a cut that was retracted.
   if (stageKey === "needs_sectioning") {
-    await db.execute(`UPDATE slides SET stage_cut_at = NULL WHERE section_request_id = ?`, [id]);
+    // The slides come OUT OF THEIR RACKS as well.
+    //
+    // Clearing the cut date alone was not enough, and the explorer found why:
+    // the slide went back to "not cut" while still sitting in a live staining
+    // rack, so the next tick of that rack's protocol stained it — a slide
+    // stained on a day it had not yet been cut, which is the same corruption
+    // the guard above exists to prevent, reached one step later.
+    //
+    // Going back to Needs Sectioning means the glass does not exist yet, so it
+    // cannot be in a stainer. Everything the forward move (updateSectionStage →
+    // 'stain_requested') did to these slides is undone: the rack, the stage, and
+    // the request stamp.
+    const vacated = await db.select<Array<{ stack_id: number }>>(
+      `SELECT DISTINCT stack_id FROM slides
+        WHERE section_request_id = ? AND stack_id IS NOT NULL`,
+      [id],
+    );
+    await db.execute(
+      `UPDATE slides
+          SET stage_cut_at = NULL,
+              stack_id = NULL,
+              stage_stain_requested_at = NULL,
+              current_stage = CASE WHEN purpose = 'stain' THEN 'assigned' ELSE purpose END
+        WHERE section_request_id = ? AND current_stage <> 'removed'`,
+      [id],
+    );
+    // A removed slide lets go of the rack and KEEPS EVERY STAMP IT EARNED.
+    //
+    // Clearing its cut date too was the older half of this bug and it survived
+    // the first fix: a slide that was cut, stained, and then broken at the bench
+    // would come back reading "stained, never cut". That is not a retraction, it
+    // is the record of real work being rewritten — the one thing this
+    // application exists not to do (#83). The guard above cannot catch it
+    // either, because it only inspects LIVE slides, so a group whose only worked
+    // slide has since been removed reverts happily.
+    //
+    // The rack still has to let go: a retired slide left pointing at a rack
+    // makes the rack count glass that is gone.
+    await db.execute(
+      `UPDATE slides SET stack_id = NULL
+        WHERE section_request_id = ? AND current_stage = 'removed'`,
+      [id],
+    );
+    for (const row of vacated) await closeSlideStackIfEmpty(row.stack_id);
   }
 }
 
@@ -4768,69 +5299,6 @@ export async function removeSectionRequestIfEmpty(id: number): Promise<boolean> 
     [id, id],
   );
   return result.rowsAffected > 0;
-}
-
-export async function reinsertSlide(snapshot: Slide): Promise<void> {
-  const db = await getDb();
-  const columns = [
-    "id", "section_request_id", "slide_ordinal", "slide_code", "purpose", "stain_name",
-    "stack_id",
-    "current_stage", "stage_cut_at", "stage_stain_requested_at", "stage_staining_started_at",
-    "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at", "stage_dried_at", "stage_ready_for_imaging_at",
-    "stage_pictures_taken_at", "stage_analyzed_at", "location", "notes",
-    "created_at", "slice_count", "control_agent", "assay_type", "assay_name",
-    "assignment_saved",
-  ];
-  const values = columns.map(
-    (column) => (snapshot as unknown as Record<string, unknown>)[column],
-  );
-  await db.execute(
-    `INSERT INTO slides (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-    values,
-  );
-}
-
-// Mutable slide columns a snapshot restore may overwrite (everything but id
-// and created_at). Used to undo extra-slide assignment.
-const SLIDE_RESTORE_COLUMNS = [
-  "section_request_id", "slide_ordinal", "slide_code",
-  "stack_id",
-  "purpose", "stain_name", "slice_count", "control_agent", "assay_type", "assay_name",
-  "assignment_saved", "current_stage", "stage_cut_at", "stage_stain_requested_at",
-  "stage_staining_started_at", "stage_stained_at", "stage_refrax_at", "stage_coverslipped_at",
-  "stage_dried_at", "stage_ready_for_imaging_at", "stage_pictures_taken_at",
-  "stage_analyzed_at", "location", "notes",
-] as const;
-
-/** Restore a previously captured slide snapshot (for undo of assignment). */
-export async function restoreSlide(snapshot: Slide): Promise<void> {
-  const db = await getDb();
-  const assignments = SLIDE_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = SLIDE_RESTORE_COLUMNS.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(`UPDATE slides SET ${assignments} WHERE id = ?`, [...values, snapshot.id]);
-}
-
-export async function restoreSectionRequest(snapshot: SectionRequest): Promise<void> {
-  const db = await getDb();
-  const assignments = SECTION_RESTORE_COLUMNS.map((c) => `${c} = ?`).join(", ");
-  const values = SECTION_RESTORE_COLUMNS.map(
-    (c) => (snapshot as unknown as Record<string, unknown>)[c],
-  );
-  await db.execute(`UPDATE section_requests SET ${assignments} WHERE id = ?`, [
-    ...values,
-    snapshot.id,
-  ]);
-}
-
-export async function reinsertSectionRequest(snapshot: SectionRequest): Promise<void> {
-  const db = await getDb();
-  const cols = ["id", "sample_id", ...SECTION_RESTORE_COLUMNS, "created_at"];
-  const placeholders = cols.map(() => "?").join(", ");
-  const values = cols.map((c) => (snapshot as unknown as Record<string, unknown>)[c]);
-  await db.execute(
-    `INSERT INTO section_requests (${cols.join(", ")}) VALUES (${placeholders})`,
-    values,
-  );
 }
 
 /**

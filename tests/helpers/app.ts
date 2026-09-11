@@ -53,3 +53,41 @@ export async function openBackups(page: Page): Promise<void> {
     .getByRole("button", { name: /Backups/ })
     .click();
 }
+
+/**
+ * Open the New Sample dialog and answer its project picker (#132).
+ *
+ * The project used to be inherited from the sidebar, so a spec could select a
+ * project and then create samples without naming one again. #132 makes the
+ * dialog ask, which is the point of the issue and also breaks every spec that
+ * relied on the old coupling — eleven of them.
+ *
+ * Defined once rather than fixed eleven times: the next change to this dialog
+ * should be one edit, not eleven chances to look like eleven unrelated failures.
+ * That is the same reason `helpers/rack.ts` exists.
+ *
+ * `projectCode` is required whenever the lab has more than one project. With a
+ * single project the dialog answers itself, and the argument may be omitted.
+ */
+export async function openNewSample(page: Page, projectCode?: string): Promise<void> {
+  await page.getByRole("button", { name: "New Sample" }).click();
+  const picker = page.getByLabel("Project for these samples");
+  await expect(picker).toBeVisible();
+  if (!projectCode) {
+    // Nothing to choose between, so the dialog has already chosen. If it has
+    // not, the caller genuinely needed to say which project, and saying so here
+    // beats a sixty-second wait on a Create button that will never enable.
+    await expect(
+      picker,
+      "more than one project exists — openNewSample needs a project code",
+    ).not.toHaveValue("");
+    return;
+  }
+  const value = await picker
+    .locator("option")
+    .filter({ hasText: new RegExp(`^${projectCode} \u00b7`) })
+    .first()
+    .getAttribute("value");
+  expect(value, `no project named ${projectCode} in the picker`).toBeTruthy();
+  await picker.selectOption(value!);
+}

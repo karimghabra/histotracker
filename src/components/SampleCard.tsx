@@ -3,7 +3,7 @@ import { Clock, Star } from "lucide-react";
 import type { MouseEvent } from "react";
 import type { Sample } from "../lib/types";
 import { processingDurationHours } from "../lib/stages";
-import { parsePreselectedStains } from "../lib/db";
+import { parsePreselectedStains, sampleNeedsCut } from "../lib/db";
 import { cn, displayCode, parseTimestamp } from "../lib/utils";
 
 function processingRemaining(sample: Sample): string | null {
@@ -89,7 +89,9 @@ export function SampleCard({
   // somebody has decided how this block gets cut and the cut has not happened.
   // `plan_saved`, not `sectioning_plan`: every block is auto-seeded a plan at
   // embedding, so the column would be a wall of flags.
-  const needsCut = Boolean(pendingStainNames) || sample.plan_saved === 1;
+  // The predicate lives in stages.ts so the board's sort and filter (#129) ask
+  // exactly the question this flag answers.
+  const needsCut = sampleNeedsCut(sample);
   const needsCutReason = pendingStainNames
     ? `Awaiting cut for: ${pendingStainNames}`
     : "Cutting plan saved — ready to send for cutting";

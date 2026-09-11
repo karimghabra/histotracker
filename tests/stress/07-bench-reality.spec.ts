@@ -15,6 +15,7 @@ import {
   checkIntegrity,
   storedCode,
 } from "./lib";
+import { rackSlideCodes, reassignInRack } from "../helpers/rack";
 
 /**
  * Bench reality: the things that actually happen to glass, and whether the
@@ -88,12 +89,10 @@ test("bench: a slide breaks in the rack, mid-protocol", async ({ page, consoleEr
   // Only the FIRST step: completing the whole protocol scatters the rack into
   // imaging, and "it broke in the rack" means the rack is still on the bench.
   expect(await openRack(page, "H&E")).toBe(true);
-  const op0 = page.getByLabel("Active operator");
-  if (await op0.count()) await op0.fill("Alex");
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(500);
 
-  const select = drawer(page).getByRole("button", { name: /Select slides to remove/ });
+  const select = drawer(page).getByRole("button", { name: /Select slides/ });
   if (!(await select.count())) {
     findings.push({ where: "B1 breakage", detail: "DEFECT: no way to remove one slide from a rack" });
   } else {
@@ -162,15 +161,16 @@ test("bench: a slide is stained with the wrong agent", async ({ page, consoleErr
 
   // …and goes into the H&E dish by mistake. The bench truth is now: this slide
   // was REQUESTED as PAS and IS an H&E. Record it and see what survives.
-  const op1 = page.getByLabel("Active operator");
-  if (await op1.count()) await op1.fill("Alex");
   await drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first().click();
   await page.waitForTimeout(500);
-  const move = drawer(page).getByRole("combobox", { name: /^Reassign / });
-  if (!(await move.count())) {
+  // Through the selection, since 0.14.1 dropped the per-row dropdown. The
+  // question this asks is unchanged: is there ANY way to correct the agent on a
+  // slide that has already been stained?
+  const correctable = await rackSlideCodes(page);
+  if (correctable.length === 0) {
     findings.push({ where: "B2 wrong stain", detail: "DEFECT: no way to correct the agent on a stained slide" });
   } else {
-    await move.first().selectOption("stain:H&E");
+    await reassignInRack(page, [correctable[0]], "stain:H&E");
     await page.waitForTimeout(700);
     const after = await sql<{ assay: string; stained: string | null; stack_id: number | null }>(
       page,
@@ -221,8 +221,6 @@ test("bench: a mis-tick, and a rack step re-ticked over an older stain date", as
 
   // -- mis-tick: tick Stained, then untick it -------------------------------
   expect(await openRack(page, "H&E")).toBe(true);
-  const op = page.getByLabel("Active operator");
-  if (await op.count()) await op.fill("Alex");
   const step = drawer(page).locator("ol li button").first();
   await step.click();
   await page.waitForTimeout(500);
@@ -272,8 +270,6 @@ test("bench: a mis-tick, and a rack step re-ticked over an older stain date", as
     // database on every load, so reloading here would wipe the very state just
     // planted. The planted row is already in the image the app is querying.
     if (await openRack(page, "H&E")) {
-      const op2 = page.getByLabel("Active operator");
-      if (await op2.count()) await op2.fill("Sam");
       const pending = drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first();
       if (!(await pending.count())) {
         findings.push({ where: "B5 overwritten date", detail: "no pending protocol step to tick" });

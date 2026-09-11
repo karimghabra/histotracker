@@ -17,11 +17,14 @@ vi.mock("../hooks/useData", () => ({
   useAssayCatalog: () => ({ data: [] }),
   useAppSettings: () => ({ data: undefined }),
 }));
-vi.mock("../lib/db", () => ({ nextSampleCode: () => Promise.resolve("EE-0001") }));
+vi.mock("../lib/db", () => ({
+  nextSampleCode: (_id: number, code: string) => Promise.resolve(`${code}-0001`),
+}));
 
 const { NewSampleDialog } = await import("./NewSampleDialog");
 
 const project = { id: 1, code: "EE", name: "Enthesis Engineering" } as Project;
+const zebrafish = { id: 2, code: "ZZ", name: "Zebrafish" } as Project;
 
 // A controlled number input clamps "" to 1, so typing into it appends to that
 // 1; set the value the way a paste would.
@@ -30,7 +33,7 @@ const setQuantity = (n: number) =>
 
 async function openBatch(quantity: number) {
   const user = userEvent.setup();
-  render(<NewSampleDialog project={project} onClose={() => {}} />);
+  render(<NewSampleDialog projects={[project]} initialProjectId={project.id} onClose={() => {}} />);
   // The preview code resolves asynchronously; the rows are labelled by it.
   await screen.findByDisplayValue("EE-1");
   setQuantity(quantity);
@@ -45,7 +48,7 @@ beforeEach(() => createSamples.mockClear());
 
 describe("NewSampleDialog — embedding notes for a batch", () => {
   it("offers no mode switch for a single sample", async () => {
-    render(<NewSampleDialog project={project} onClose={() => {}} />);
+    render(<NewSampleDialog projects={[project]} initialProjectId={project.id} onClose={() => {}} />);
     await screen.findByDisplayValue("EE-1");
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.getByLabelText("Embedding Notes")).toBeInstanceOf(HTMLTextAreaElement);
@@ -152,5 +155,40 @@ describe("NewSampleDialog — embedding notes for a batch", () => {
     expect(quantity).toBe(1);
     expect(input.embedding_notes).toBe("orient anterior up");
     expect(each).toBeUndefined();
+  });
+});
+
+/**
+ * The two halves of this dialog arrived on two lines of history: embedding notes
+ * (#137) on master, and the project picker (#132) on the 0.14 to 0.17 release
+ * line. This pins that they work together once reconciled: in a lab with more
+ * than one project nothing is filed until a project is chosen, and the chosen
+ * project, its codes and the notes all reach createSamples together.
+ */
+describe("NewSampleDialog: the project picker and embedding notes together", () => {
+  it("files a batch, with its per-sample notes, under the project picked in the dialog", async () => {
+    const user = userEvent.setup();
+    render(<NewSampleDialog projects={[project, zebrafish]} initialProjectId={project.id} onClose={() => {}} />);
+
+    // Two projects is a real choice, so nothing is preselected and nothing can be created.
+    const picker = screen.getByLabelText("Project for these samples");
+    expect(picker).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Create Sample" })).toBeDisabled();
+
+    await user.selectOptions(picker, String(zebrafish.id));
+    await screen.findByDisplayValue("ZZ-1");
+    setQuantity(2);
+    await user.type(screen.getByPlaceholderText(/added to every sample below/), "fin regrowth");
+    await user.click(mode(/A note for each/));
+    await user.type(noteFor("ZZ-1"), "caudal fin flat");
+    await user.type(noteFor("ZZ-2"), "on edge");
+    await user.click(screen.getByRole("button", { name: "Create 2 Samples" }));
+
+    expect(createSamples).toHaveBeenCalledTimes(1);
+    const [input, projectCode, quantity, each] = createSamples.mock.calls[0];
+    expect(input.project_id).toBe(zebrafish.id);
+    expect(projectCode).toBe("ZZ");
+    expect(quantity).toBe(2);
+    expect(each.embeddingNotes).toEqual(["caudal fin flat", "on edge"]);
   });
 });

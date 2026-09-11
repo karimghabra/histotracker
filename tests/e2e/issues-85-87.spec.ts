@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage } from "../helpers/app";
+import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // The 0.7.1 wave: #85 (sticky Ready-for-Imaging filter) and the #79 follow-up
@@ -25,9 +25,10 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
   await page.getByRole("button", { name: "Save Project" }).click();
 }
 
-async function addSample(page: Page, description: string) {
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await expect(page.getByRole("heading", { name: /New Sample/ })).toBeVisible();
+async function addSample(page: Page, description: string, projectCode?: string) {
+  // #132 — the dialog asks which project rather than inheriting the sidebar
+  // selection. Single-project tests can leave it out; anything with two must say.
+  await openNewSample(page, projectCode);
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill(description);
   await page.getByRole("button", { name: /Create Sample/ }).click();
 }
@@ -90,7 +91,6 @@ const col = (page: Page, title: string) =>
 async function runProtocolOnLoneRack(page: Page) {
   const staining = col(page, "Staining / IHC");
   await staining.locator("div[aria-selected]").first().click();
-  await page.getByLabel("Active operator").fill("Alex");
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
@@ -102,7 +102,7 @@ async function runProtocolOnLoneRack(page: Page) {
 // showing "All Projects" — and before the fix, React state still filtered to the
 // departed project, leaving the column empty even though the other project's
 // stack was sitting right there.
-test("#85: analyzing the last stack of a filtered project does not empty the queue", async ({
+test("#85: emptying a filtered project leaves a legible empty queue, not a lying one", async ({
   page,
 }) => {
   await signInAndProject(page);
@@ -114,11 +114,12 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Zebrafish Study");
   await page.getByRole("button", { name: "Save Project" }).click();
 
-  // Sample in ZZ → Ready for Imaging. Creating a project does not select it, so
-  // pick it explicitly or the sample lands in EE.
+  // Sample in ZZ → Ready for Imaging. The sidebar no longer decides where a
+  // sample is filed (#132) — the dialog is told — but it does decide what the
+  // board shows (#131), so it is still selected here for the assertions below.
   await page.locator("aside").getByText("Zebrafish Study").click();
   await expect(page.locator('aside button[aria-current="true"]')).toContainText("Zebrafish Study");
-  await addSample(page, "zz block");
+  await addSample(page, "zz block", "ZZ");
   await embed(page, "ZZ-1", "Batch 1");
   await cutAndSection(page, "ZZ-1");
   await runProtocolOnLoneRack(page);
@@ -129,10 +130,13 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
 
   // Sample in EE → Ready for Imaging as well.
   await page.locator("aside").getByText("Enthesis Engineering").click();
-  await addSample(page, "ee block");
+  await addSample(page, "ee block", "EE");
   await embed(page, "EE-1", "Batch 2");
   await cutAndSection(page, "EE-1");
   await runProtocolOnLoneRack(page);
+  // #131 — with EE selected the board is filtered to EE, and this assertion is
+  // about both projects being present before the COLUMN filter narrows them.
+  await page.getByRole("button", { name: "All projects" }).click();
   await expect(tiles).toHaveCount(2, { timeout: 20000 });
 
   // Filter to EE, then analyze EE's only stack.
@@ -159,11 +163,26 @@ test("#85: analyzing the last stack of a filtered project does not empty the que
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
   await page.getByRole("button", { name: /Mark Analyzed/ }).click();
 
-  // EE is gone from the queue, so the filter must fall back to All Projects FOR
-  // REAL — ZZ's stack has to still be visible.
-  await expect(projectFilter).toHaveValue("all", { timeout: 20000 });
-  await expect(tiles).toHaveCount(1);
+  // EE is gone from the queue. This used to assert that the filter fell back to
+  // All Projects, and that ZZ's stack appeared — which #131's follow-up rejects:
+  // a queue filtered to EE must not answer with ZZ. It shows NOTHING.
+  await expect(tiles).toHaveCount(0, { timeout: 20000 });
+  await expect(imaging.getByText("ZZ-1")).toHaveCount(0);
+
+  // The hazard this test was written for is unchanged and still checked. A
+  // controlled <select> whose value leaves its option list does not go blank:
+  // react-dom re-selects the FIRST option and fires no change event, so the
+  // queue would filter to EE while the control read "All Projects" and nothing
+  // explained the empty column. EE stays on the menu and stays selected, so the
+  // emptiness is legible.
+  await expect(projectFilter).not.toHaveValue("all");
+  expect(await projectFilter.locator("option:checked").innerText()).toContain("EE");
+
+  // And clearing it by hand brings ZZ back — nothing is stranded behind a filter
+  // the user cannot see or undo, which was the real complaint in #85.
+  await projectFilter.selectOption("all");
   await expect(imaging.getByText("ZZ-1").first()).toBeVisible();
+  await expect(tiles).toHaveCount(1);
 });
 
 // #79 follow-up — the feature existed but was a 12px faint pencil next to a
