@@ -25,6 +25,8 @@ harness.
   and neither did a block already cut for one agent with a second still owed.
   Both now appear, marked *(assigned)* so a plan is never mistaken for glass,
   and the stain filter, the assay-type filter and the search all find them.
+  A removed or exhausted block lists none: it can no longer be cut, so nothing
+  is owed.
 
   This applies to the exported log too, which is the part worth saying out loud:
   the CSV and Excel exports build their rows from the same helper the on-screen

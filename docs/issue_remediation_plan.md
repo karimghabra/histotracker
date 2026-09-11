@@ -430,6 +430,9 @@ per outstanding request (blank Slide ID, Slide Stage `requested (not cut)`). The
 cell collapses to one "(all assigned)" marker only when the block has no glass
 at all; a block that has been cut marks each outstanding agent individually,
 because an agent that was cut and then re-requested is outstanding again.
+A removed or exhausted block lists nothing outstanding — it can no longer be
+cut, so nothing is owed (reasoning at `outstandingStains()`); an archived block
+keeps its requests.
 
 **The part that is easy to get wrong:** the ask was *consistency between the log
 and the main screen*, and the exported log is still the log. Fixing only the
@@ -440,10 +443,10 @@ go through the one helper for exactly that reason.
 
 **Coverage:** `src/lib/logStains.test.ts`; `src/lib/logsCsv.test.ts` and
 `src/lib/logsXlsx.test.ts` (both export shapes, red before the fix);
-`src/components/LogsView.test.tsx` for the "(all assigned)" gate and the
-assay-type filter; `tests/e2e/issues-136-137.spec.ts`, which asserts the same
-facts on screen and in the CSV exported from that same view; harness gates
-`issue(136, …)` ×2 and `issue(137, …)` over a port of `logAgents()`.
+`src/components/LogsView.test.tsx` for the "(all assigned)" gate, the
+assay-type filter and a removed block; `tests/e2e/issues-136-137.spec.ts`, which
+asserts the same facts on screen and in the CSV exported from that same view,
+including a block removed before it was cut; harness gates `issue(136, …)` ×3 and `issue(137, …)` over a port of `logAgents()`.
 
 ---
 
