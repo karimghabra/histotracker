@@ -4,9 +4,17 @@
 // without the Tauri native runtime.
 //
 // It is wired in via resolve.alias in vite.config.playwright.ts; production and
-// `tauri dev` are untouched. The schema is the actual production migrations
-// (src-tauri/migrations/*.sql) run in filename order, so there is no logic to
-// keep in sync — the same SQL the Rust plugin runs.
+// `tauri dev` are untouched. The schema is the actual production migrations,
+// the ones `src-tauri/src/lib.rs` registers, run the way the plugin runs them:
+// through the sqlx migrator (./sqlx-migrator.ts) on the FIRST load of each page
+// — a page load is a process here, so a reload is a relaunch — with the
+// `_sqlx_migrations` ledger kept inside the image. A reopen after an undo or a
+// sync pull does not migrate again, exactly as in the app.
+//
+// One exception, for fixtures only: an image with no ledger at all was not
+// written by the app (tests/fixtures/legacy-pre-0023 is built by executing the
+// migration SQL directly), and is opened as it is, the way an image swapped in
+// at runtime is. The app itself never meets such a file.
 //
 // The database is persisted as a byte image in the shared virtual filesystem
 // (shim-fs) under SHIM_DB_FILE. That same path is what getDbFilePath() resolves
@@ -15,13 +23,87 @@
 import initSqlJs, { type Database as SqlJsDb, type SqlJsStatic } from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { clearShimFs, readShimFile, writeShimFile } from "./shim-fs";
+import {
+  assertSqliteImage,
+  migrateImage,
+  parseMigrationList,
+  runMigrator,
+  type RegisteredMigration,
+  type SqlFile,
+} from "./sqlx-migrator";
 
-// Raw text of every migration, keyed by path; sorted by filename at load time.
+// Raw text of every migration file, keyed by path.
 const migrationSql = import.meta.glob("../../src-tauri/migrations/*.sql", {
   query: "?raw",
   import: "default",
   eager: true,
 }) as Record<string, string>;
+
+// lib.rs itself, for the list it registers. Globbed like the migrations: a
+// plain `import … from "…/lib.rs?raw"` stops Vite's dependency optimizer on a
+// cold cache ("No loader is configured for .rs files"), and the dev server
+// never starts.
+const libRs = Object.values(
+  import.meta.glob("../../src-tauri/src/lib.rs", { query: "?raw", import: "default", eager: true }),
+)[0] as string;
+
+let registered: Promise<RegisteredMigration[]> | null = null;
+
+/** The migrations lib.rs registers, with the SHA-384 sqlx records for each. */
+function registeredMigrations(): Promise<RegisteredMigration[]> {
+  registered ??= Promise.all(
+    parseMigrationList(libRs).map(async (m) => {
+      const sql = migrationSql[`../../src-tauri/migrations/${m.file}`];
+      if (sql === undefined) throw new Error(`lib.rs registers ${m.file}, which does not exist`);
+      const digest = await crypto.subtle.digest("SHA-384", new TextEncoder().encode(sql));
+      return { ...m, sql, checksum: new Uint8Array(digest) };
+    }),
+  );
+  return registered;
+}
+
+/** True until the first Database.load of this page runs the migrator. */
+let migrationsPending = true;
+
+function sqlFile(db: SqlJsDb): SqlFile {
+  return {
+    exec: (sql) => void db.exec(sql),
+    all: (sql, params) => {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.bind(normalizeBinds(params));
+        const rows: Array<Record<string, unknown>> = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        return rows;
+      } finally {
+        stmt.free();
+      }
+    },
+  };
+}
+
+function hasLedger(db: SqlJsDb): boolean {
+  return (
+    db.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'").length > 0
+  );
+}
+
+/**
+ * The app's `db_migrate_image` command (src-tauri/src/migrate.rs), for the core
+ * shim: the image, brought up to date by this build's migrator, or refused.
+ */
+export async function migrateImageBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  assertSqliteImage(bytes);
+  if (!SQL) SQL = await initSqlJs({ locateFile: () => wasmUrl });
+  const db = new SQL.Database(bytes);
+  try {
+    db.run("PRAGMA foreign_keys = ON;");
+    migrateImage(sqlFile(db), await registeredMigrations());
+    return db.export();
+  } finally {
+    db.close();
+  }
+}
 
 // The virtual path the database image lives at. getDbFilePath() (via the
 // pragma_database_list intercept below) returns this, so snapshot/restore and
@@ -73,22 +155,23 @@ export default class Database {
   static async load(path: string): Promise<Database> {
     if (!SQL) SQL = await initSqlJs({ locateFile: () => wasmUrl });
 
-    let db: SqlJsDb;
     const saved = !shouldReset() ? readShimFile(SHIM_DB_FILE) : null;
-    if (saved) {
-      db = new SQL.Database(saved);
-    } else {
-      db = new SQL.Database();
-      const files = Object.keys(migrationSql).sort();
-      for (const file of files) {
+    const db = saved ? new SQL.Database(saved) : new SQL.Database();
+    db.run("PRAGMA foreign_keys = ON;");
+    if (migrationsPending) {
+      // Taken off the list BEFORE it runs, as the plugin does, so a failed
+      // migration is not retried by a later load: the page stays broken until
+      // it is reloaded, just as the app stays broken until it is relaunched.
+      migrationsPending = false;
+      if (!saved || hasLedger(db)) {
         try {
-          db.run(migrationSql[file]);
+          runMigrator(sqlFile(db), await registeredMigrations());
         } catch (err) {
-          throw new Error(`Migration failed (${file}): ${(err as Error).message}`);
+          db.close();
+          throw err;
         }
       }
     }
-    db.run("PRAGMA foreign_keys = ON;");
     const instance = new Database(path, db);
     // Test-only escape hatch: lets a spec plant a row shape the UI cannot
     // produce — e.g. a pre-0.4.6 cut group with `duplicates > 0` and no slides,

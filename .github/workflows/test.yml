@@ -123,3 +123,46 @@ jobs:
 
       - name: Compatibility with the release in use
         run: pnpm test:compat
+
+  # The Rust shell, and in it `db_migrate_image` (src-tauri/src/migrate.rs):
+  # what brings a backup or a pulled snapshot up to this build's migrations on
+  # the lab's machine. The e2e and compat suites exercise only its TypeScript
+  # model (src/test/sqlx-migrator.ts), so without this job a change to the real
+  # command would first be tried in the captain's Backups dialog. Linux because
+  # it is cheap and catches the breakage that matters; the installer build
+  # compiles for Windows at release time.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install the Tauri build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev \
+            libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # tauri::generate_context!() reads `frontendDist` at compile time and
+      # fails when it does not exist. The Rust needs the directory, not a real
+      # frontend build.
+      - name: Stand in for the frontend build
+        run: mkdir -p dist && printf '<!doctype html>\n' > dist/index.html
+
+      # --locked: Cargo.lock must already agree with Cargo.toml, which is what
+      # catches a version bump made in one and not the other.
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --locked
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --lib --locked

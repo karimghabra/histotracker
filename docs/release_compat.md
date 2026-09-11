@@ -31,19 +31,22 @@ cannot drift from what shipped.
 **Modelled: what sits underneath.** A Tauri webview cannot run in CI, so the
 code runs in Node:
 
-- `tests/compat/sqlx-migrator.ts` models what tauri-plugin-sql does on the
+- `src/test/sqlx-migrator.ts` models what tauri-plugin-sql does on the
   first open of each process. It is ported line by line from the sources of
   the crates both builds lock (sqlx-core and sqlx-sqlite 0.8.6,
   tauri-plugin-sql 2.4.0). It includes the `_sqlx_migrations` ledger, SHA-384
   checksums, the refusal of unknown or modified versions, and one transaction
   per migration. `builds.ts` refuses a build that locks a different sqlx or
   plugin line, so the model cannot quietly go stale.
+  It also models `db_migrate_image` (`src-tauri/src/migrate.rs`), which runs that migrator on a backup before a revert and on a snapshot before a pull.
+  The real command's own tests run in the CI `rust` job.
+  The Playwright shim uses the same file; `tests/compat/sqlx-migrator.ts` binds it to node:sqlite.
 - `tests/compat/tauri-sql-shim.ts` is the SQLite connection. It opens a real
   file with node:sqlite, sets `foreign_keys = ON`, and sets no journal mode, as
   sqlx does by default.
 - `tests/compat/tauri-core-shim.ts` provides the Rust commands the data layer
   calls: file read and write, the `backup_*` commands (mirroring `backup.rs`),
-  and a shared fake GitHub remote. The remote lets a workstation and a viewer
+  `db_migrate_image`, and a shared fake GitHub remote. The remote lets a workstation and a viewer
   on different builds exchange the database file through each build's real
   `publishSnapshot` / `pullSnapshotIfNewer`.
 
@@ -72,8 +75,13 @@ Windows installer, and the SQLite version compiled into the shipped binary
 4. **Backups.** Each build reverts to a backup the other took, and the next
    launch, a new process with the migrator running, must open it with
    everything there.
+   Then a backup older than this branch's schema, taken by the real `OLD_BACKUP_RELEASE` (`scripts/compat-releases.mjs`), is reverted to by this branch.
+   The revert must leave a migration record that lists every migration this branch registers.
+   The next two launches must open the database with everything the backup held, and so must the release.
 5. **Sync.** A viewer on each build pulls what a workstation on the other
    published, reads it, and relaunches.
+   Then a workstation on `OLD_BACKUP_RELEASE` publishes, and a viewer on this branch pulls it.
+   The pull must leave a migration record that lists every migration this branch registers, and the viewer's next two launches must open the database with everything the workstation published.
 6. **The populated legacy fixture** (`tests/fixtures/legacy-pre-0023.b64`)
    goes release, this branch, release, with every row intact.
 
@@ -91,17 +99,11 @@ record, the Logs CSV and XLSX, and the status workbook.
 - **You add a column:** make `runTheLab()` write a non-default value into it.
   The harness fails if a new column only ever holds its default, because
   survival of a value nobody writes proves nothing.
-- **You add a numbered migration:** the ledger check fails against every
-  release that lacks it. That failure is the real thing: once this build opens
-  the database, the older build refuses it, and reverting to a backup taken
-  before the update, then relaunching, runs the migration again on top of the
-  column `getDb()` already converged ("duplicate column name"), leaving a
-  database the app will not open. Converge the column at runtime only (see
-  AGENTS.md, precedent `samples.embedding_notes`). The alternative is to get
-  the captain's sign-off and record the version in `ACCEPTED_ONE_WAY` in the
-  test, which then asserts the refusal instead of failing on it. The backup
-  checks still apply: a numbered migration whose column `getDb()` also
-  converges bricks the relaunch after a revert, one-way or not.
+- **You add a numbered migration:** the ledger check fails against every release that lacks it.
+  That failure is the real thing: once this build opens the database, the older build refuses it, and so does every sync viewer still running it.
+  Nothing on this build is exposed: a backup revert and a sync pull both run the migrations on the image before swapping it in, so neither can leave a database the next launch cannot open.
+  Converge the column at runtime only (see AGENTS.md, precedent `samples.embedding_notes`).
+  The alternative is to get the captain's sign-off and record the version in `ACCEPTED_ONE_WAY` in the test, which then asserts the refusal instead of failing on it.
 - **An older release lacks a function the lab uses:** that step is skipped and
   listed at the end of the run. This branch lacking one fails, because it
   means `lab.ts` is out of date.

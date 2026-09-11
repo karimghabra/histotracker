@@ -1,6 +1,71 @@
 # Changelog
 
-## 0.17.0 - unreleased
+## 0.18.0 - unreleased
+
+One new column, `samples.embedding_notes` (#137), added at runtime with **no numbered migration**.
+The app adds the column itself whenever it opens a database, filled with the empty string; no row is rewritten.
+A numbered migration would have made the update one-way, because the build in use (0.17.0) refuses to open a database that records a migration version it does not know.
+The backup-revert and sync-pull fixes below add no column and no migration.
+A 0.17.0 instance opens every database this version writes, a reverted backup and a pulled snapshot included.
+Proven on a populated pre-existing database by `pnpm test:legacy`, including a revert and relaunch, and against the real 0.17.0 by `pnpm test:compat`.
+
+- **Embedding Notes (#137).**
+  How a specimen should be embedded (which face goes down, which end is proximal, whether it gets bisected) is decided when the block is logged in, and read by whoever picks up the mould.
+  It had nowhere to live: it went into the cut notes, which are read one station later at the microtome, or into General Notes with everything else about the block.
+  There is now a box for it at sample creation, and the note is shown wherever the block is read: the board drawer, the expanded Logs row, and both exports.
+
+  A batch can carry **one note for all** its samples or **a note for each**, chosen with a switch above the box.
+  Each mode keeps its own text, so switching back and forth loses nothing; only the mode on screen is saved.
+
+- **Assigned stains now show up in the log before anything is cut (#136).**
+  The main screen has always known a block owes a stain: the card flags it, and the drawer lists it as "Requested".
+  The Logs read physical slides only, so a block sitting in fixative with Safranin O assigned read as having no stains at all, and neither did a block already cut for one agent with a second still owed.
+  Both now appear, marked *(assigned)* so a plan is never mistaken for glass, and the stain filter, the assay-type filter and the search all find them.
+  A removed or exhausted block lists none: it can no longer be cut, so nothing is owed.
+
+  This applies to the exported log too, which is the part worth saying out loud: the CSV and Excel exports build their rows from the same helper the on-screen table does, so the spreadsheet you take to the bench and the screen you took it from cannot disagree about what a block owes.
+
+- **New Sample previewed a different ID than the one you got.**
+  The dialog showed the stored, zero-padded code (`EE-0001`) while the board, the Logs and both exports have shown the unpadded form (`EE-1`) since #87, so the first thing a new user does named the block one way and every screen after it named the same block another.
+  The preview, and both ends of the range shown for a batch, now use the display form.
+
+- **The Excel exports were writing empty workbooks.**
+  Every `.xlsx` this app produced through a Save dialog (the Logs export and the full workbook export) opened as a blank sheet: not one header, not one row.
+  The spreadsheet writer had dropped the old argument shape we were still calling it with, and accepts it silently rather than failing, so the file was written and saved and simply had nothing in it.
+  All three workbook writers now go through one function that uses the supported form.
+
+- **Reverting to an older backup no longer leaves an app that will not start.**
+  Reverting to a backup taken before 0.13.0 worked for the rest of that session, and then the next launch showed an empty board, "No projects yet", "Not signed in", and a "Sync error" about a duplicate column.
+  Every launch after that did the same.
+  Nothing was lost; the database's own record of which migrations it had was wrong.
+  The app runs its migrations when it launches and records each one inside the database file, but a revert swapped the backup in mid-session, record and all, and the columns the backup lacked were then added without a record.
+  The next launch ran those migrations again on top of the columns and stopped.
+
+  A revert now runs the backup through this version's migrations first, on a copy, with the same migrator a launch uses.
+  What the backup lacks really runs, including 0024's fill-in of what each stain slide was asked for, and the record is the migrator's own, so it says what the file holds.
+
+  **A backup that cannot be brought up to date is refused, and nothing changes.**
+  The Backups dialog says why: it is not a database, it cannot be read at all, a newer version made it, its record of migrations does not match this version's, or a migration fails on it.
+  The "Before revert" safety backup is now taken only once the backup is accepted, so a refused revert leaves nothing behind.
+  A 0.17.0 install that has already been bricked this way is not repaired by this version; copy its "Before revert" backup over `histometer.db` by hand.
+
+- **A sync viewer no longer stops starting after it pulls from a workstation on another version.**
+  A pull swapped the workstation's snapshot in mid-session the same way, record and all.
+  A viewer that pulled from a workstation still on a version before 0.13.0 worked until its next launch, which stopped on the same duplicate column.
+  A pull now runs the snapshot through this version's migrations first, exactly as a revert does.
+
+  **A snapshot the viewer cannot bring up to date is refused, and the viewer keeps what it had.**
+  The sync error says why, and when the workstation runs a newer version of Histometer it says to update Histometer on the viewer.
+  Before, the viewer would have taken such a snapshot anyway and then refused to start at its next launch.
+  The refused snapshot is not marked as pulled, so the viewer takes it at the first sync after it can.
+  A sync error now shows the message alone, without "Error:" in front of it.
+
+- **A compatibility check against the release in use, on every change.**
+  `pnpm test:compat` takes a released build from its tag and has it and the change under test open, work on, back up, revert and sync each other's database, in both directions.
+  It checks 0.17.0 today, and any other release by name (`pnpm test:compat app-v0.18.0`).
+  CI runs it on every push.
+
+## 0.17.0 - 2026-09-04
 
 No schema change and nothing that syncs: a theme is eleven CSS variables in
 `localStorage`, so it stays on the machine and the person who chose it. A 0.16
@@ -559,68 +624,9 @@ reading the screen.
 
 ## 0.13.2 - 2026-08-13
 
-Two things the log could not tell you, and six more defects found by a stress
-harness.
-
-### Embedding notes, and a log that names assigned stains
-
-- **Embedding Notes (#137).** How a specimen should be embedded — which face
-  goes down, which end is proximal, whether it gets bisected — is decided when
-  the block is logged in, and read by whoever picks up the mould. It had nowhere
-  to live: it went into the cut notes, which are read one station later at the
-  microtome, or into General Notes with everything else about the block. There
-  is now a box for it at sample creation, and the note is shown wherever the
-  block is read — the board drawer, the expanded Logs row, and both exports.
-
-  A batch can carry **one note for all** its samples or **a note for each**,
-  chosen with a switch above the box. Each mode keeps its own text, so switching
-  back and forth loses nothing; only the mode on screen is saved.
-- **Assigned stains now show up in the log before anything is cut (#136).** The
-  main screen has always known a block owes a stain: the card flags it, and the
-  drawer lists it as "Requested". The Logs read physical slides only, so a block
-  sitting in fixative with Safranin O assigned read as having no stains at all —
-  and neither did a block already cut for one agent with a second still owed.
-  Both now appear, marked *(assigned)* so a plan is never mistaken for glass,
-  and the stain filter, the assay-type filter and the search all find them.
-  A removed or exhausted block lists none: it can no longer be cut, so nothing
-  is owed.
-
-  This applies to the exported log too, which is the part worth saying out loud:
-  the CSV and Excel exports build their rows from the same helper the on-screen
-  table does, so the spreadsheet you take to the bench and the screen you took
-  it from cannot disagree about what a block owes.
-- **New Sample previewed a different ID than the one you got.** The dialog
-  showed the stored, zero-padded code (`EE-0001`) while the board, the Logs and
-  both exports have shown the unpadded form (`EE-1`) since #87 — so the first
-  thing a new user does named the block one way and every screen after it named
-  the same block another. The preview, and both ends of the range shown for a
-  batch, now use the display form.
-- **The Excel exports were writing empty workbooks.** Every `.xlsx` this app
-  produced through a Save dialog — the Logs export and the full workbook export
-  — opened as a blank sheet: not one header, not one row. The spreadsheet
-  writer had dropped the old argument shape we were still calling it with, and
-  accepts it silently rather than failing, so the file was written and saved and
-  simply had nothing in it. All three workbook writers now go through one
-  function that uses the supported form.
-
-Schema: one new column, `samples.embedding_notes`, and **no numbered
-migration**. The app adds the column itself whenever it opens a database, filled
-with the empty string; no row is rewritten. That keeps the update two-way with
-the build in use (0.17.0): it can still open a database this build has opened,
-and reverting to any backup it took, then relaunching, is safe. A migration
-would have broken both. Proven on a populated pre-existing database in
-`npm run test:legacy`, including the revert-then-relaunch round trip, and
-against the real 0.17.0 by `pnpm test:compat`.
-- **A compatibility check against the release in use, on every change.**
-  `pnpm test:compat` takes a released build from its tag and has it and the
-  change under test open, work on, back up, revert and sync each other's
-  database, in both directions. It checks 0.17.0 today, and any other release
-  by name (`pnpm test:compat app-v0.18.0`). CI runs it on every push.
-
-### Six defects from a swarm of walkers
-
-Six more defects, found by pointing **many random walkers at one large board**
-— 150 blocks, ~400 slides — and checking all 19 invariants after every move. Full account in `docs/stress_test_v2.md`.
+No schema change. Six more defects, found by pointing **many random walkers at
+one large board** — 150 blocks, ~400 slides — and checking all 19 invariants
+after every move. Full account in `docs/stress_test_v2.md`.
 
 The walkers run in two modes, because they answer different questions. Taking
 strict turns, they explore *sequences* on a board big enough for the rules to

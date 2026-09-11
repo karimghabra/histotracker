@@ -15,9 +15,10 @@ import { fileURLToPath } from "node:url";
 // that retroactive display is asserted here, while the stored form is verified
 // unchanged by scripts/legacy-db-upgrade-test.mjs.
 //
-// Note this is the STRICTER of the two upgrade paths: the browser shim opens a
-// saved image WITHOUT re-running migrations, so `ensureRuntimeSchema()` alone has
-// to converge it — the same situation as an undo restore or a viewer sync pull.
+// Note this is the STRICTER of the two upgrade paths: the fixture carries no
+// migration record, so the browser shim opens it WITHOUT running migrations and
+// `ensureRuntimeSchema()` alone has to converge it, the same situation an undo
+// restore, or a revert or sync pull before 0.18.0, left an image in.
 // The plugin-sql migration path is covered by scripts/legacy-db-upgrade-test.mjs.
 
 const HERE = dirname(fileURLToPath(import.meta.url));

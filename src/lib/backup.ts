@@ -4,7 +4,7 @@
 // thin frontend orchestration plus the snapshot/restore glue shared with undo.
 
 import { invoke } from "@tauri-apps/api/core";
-import { restoreDbPreservingSession, snapshotDb } from "./db";
+import { bringImageUpToDate, ImageRefusedError, restoreDbPreservingSession, snapshotDb } from "./db";
 import {
   backupFileName,
   parseBackupName,
@@ -60,17 +60,44 @@ export async function createBackup(reason: BackupReason, retention: number): Pro
 }
 
 /**
- * Revert the live database to a backup. First takes a `prerestore` safety
- * backup (so a revert is itself reversible), then swaps the image in via the
- * same session-preserving restore undo uses. Because restore reopens through
- * getDb(), the runtime schema guard converges any columns a newer build added
- * since the backup was taken — so reverting to an OLDER backup is safe.
+ * Revert the live database to a backup.
+ *
+ * A backup may be older than this version of the app. The app's numbered
+ * migrations run when it launches, and each one is recorded inside the database
+ * file, so an older image swapped in mid-session carries a record without the
+ * newer ones. Swapping it in as it is used to brick the app: getDb() added the
+ * missing columns, the record still said their migrations had never run, and
+ * the next launch ran them again, failed on "duplicate column name", and could
+ * not open the database at all.
+ *
+ * So the image first goes through {@link bringImageUpToDate}, which runs this
+ * build's migrations on a copy of it with the same migrator the launch uses:
+ * what it lacks really runs, and the record it comes back with is true. Then a
+ * `prerestore` safety backup is taken (so a revert is itself reversible) and
+ * the image is swapped in via the same session-preserving restore undo uses.
+ *
+ * Reverting to an older backup is therefore safe, launches after it included.
+ * A backup this build cannot bring up to date is refused before anything
+ * changes, with the reason: one that is not a database or that the migrator
+ * cannot read, one made by a NEWER version, which only that version or a later
+ * one can restore, one whose migration record does not match this version's,
+ * and one a migration fails on. That last covers a backup taken after an older
+ * version's revert had already added columns the record does not account for:
+ * it is refused, not patched over.
  */
 export async function revertToBackup(name: string): Promise<void> {
-  await createBackup("prerestore", 500).catch(() => undefined);
   const bytes = await invoke<number[]>("backup_read", { name });
   if (!bytes || bytes.length === 0) throw new Error("Backup is empty or unreadable.");
-  await restoreDbPreservingSession(Uint8Array.from(bytes));
+  let image: Uint8Array;
+  try {
+    image = await bringImageUpToDate(Uint8Array.from(bytes));
+  } catch (err) {
+    if (!(err instanceof ImageRefusedError)) throw err;
+    const remedy = err.newer ? " Only that version or a later one can restore it." : "";
+    throw new Error(`This backup cannot be restored: ${err.reason}.${remedy} The current database has not been changed.`);
+  }
+  await createBackup("prerestore", 500).catch(() => undefined);
+  await restoreDbPreservingSession(image);
 }
 
 export async function deleteBackup(name: string): Promise<void> {

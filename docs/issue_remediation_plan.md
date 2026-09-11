@@ -594,7 +594,9 @@ station too late, and General Notes, where it is buried.
 `ensureRuntimeSchema()` alone. It has no numbered migration: a migration would
 leave the build in use unable to open the database, and would re-run on top of
 the converged column after a backup revert, so the database would not open at the
-next launch (https://github.com/karimghabra/histotracker/pull/138). A box in
+next launch (https://github.com/karimghabra/histotracker/pull/138).
+The second hazard is gone in 0.18.0, which migrates a backup or a pulled snapshot before swapping it in (`bringImageUpToDate`, `docs/shared_data_sync.md` §1a); the first still stands.
+A box in
 `NewSampleDialog` (one note for a batch, or one per sample); read-back in the
 board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX.
 Undo restores whole database images, so undoing an edit restores the note with

@@ -33,12 +33,24 @@ which "deploy everywhere together" eliminates.
 
 ### 1a. Additive migrations + runtime convergence (backward compatibility)
 
-The same "the schema is the wire format" rule governs **backups** (a backup is a
-raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image
-restore). All three swap a DB *file* under the live connection, and
-`tauri-plugin-sql` only runs migrations **once at startup** — a reopened file is
-never re-migrated. So an image that predates a column can go live under a newer
-build (e.g. reverting to an older backup after an update).
+The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image restore).
+All three swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
+
+The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
+`getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
+So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, first goes through `bringImageUpToDate()` (`src/lib/db.ts`).
+It runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
+The image goes live fully migrated, with a record sqlx itself wrote.
+Undo images need none of this: this build took them, in this session, after its own migrations had run.
+
+An image that cannot be brought up to date is refused before anything changes, the live database and its connection included.
+That is one that is not a database or that the migrator cannot read, one made by a newer build, one whose record does not match this build's migrations, and one a migration fails on.
+The last includes a backup taken after an older build's revert had already converged columns its record does not account for; it is refused, not patched over.
+A refused revert says so in the Backups dialog.
+A refused pull shows as a sync error, telling the viewer to update Histometer when the snapshot came from a newer version, and leaves `last_synced_version` where it was, so the viewer pulls that snapshot once it can.
+
+A numbered migration still makes the upgrade one-way: an older build refuses a database recording a version it does not know, and so does every sync viewer still running it.
+But neither a revert nor a pull can leave a newer build unable to launch.
 
 Three rules keep updates compatible with existing databases:
 
@@ -49,16 +61,14 @@ Three rules keep updates compatible with existing databases:
 2. **Every additive column current code reads/writes is registered in
    `ensureRuntimeSchema()`** (`src/lib/db.ts`), which `getDb()` runs on *every*
    (re)open. It `PRAGMA table_info`-checks and `ADD COLUMN`s only what's missing —
-   a no-op on an up-to-date DB, and the thing that makes opening/reverting an
-   older image safe. **When you add such a column, add a matching line there**, and
+   a no-op on an up-to-date DB, and the thing that makes opening an older image
+   swapped in at runtime safe. **When you add such a column, add a matching line there**, and
    prove it with a harness gate that writes and reads it (as `issue(137)` does for
    `samples.embedding_notes`) — the harness's `freshDb()` converges every column
    parsed out of `ensureRuntimeSchema()`, so a regex over `db.ts` adds nothing. This is
    what fixed the deparaffinize step silently dying on pre-0.4.7 databases (#58).
-3. **A column may skip its numbered migration** and live in
-   `ensureRuntimeSchema()` alone when a numbered migration would break rollback
-   to the build in use or a backup revert; precedent `samples.embedding_notes`
-   (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
+3. **A column may skip its numbered migration** and live in `ensureRuntimeSchema()` alone when a numbered migration would break rollback to the build in use, or leave the viewers still on it unable to open what the workstation publishes.
+   Precedent: `samples.embedding_notes` (#137, reasons in https://github.com/karimghabra/histotracker/pull/138).
 
 `pnpm test:compat` checks these rules against a real release rather than
 trusting them: the release's own tagged data layer and this tree open, work on,
@@ -179,12 +189,14 @@ React Query is invalidated only when new data actually arrives.
 
 `pullSnapshotIfNewer()` performs, in order:
 
-1. `getDbFilePath()` — resolve the live SQLite path via
+1. `bringImageUpToDate(downloadedBytes)` runs this build's migrations on the snapshot (§1a).
+   A snapshot it refuses stops the pull here with a sync error: the live file, the connection and `last_synced_version` are untouched.
+2. `getDbFilePath()` — resolve the live SQLite path via
    `PRAGMA database_list` (never hardcode the plugin's storage dir).
-2. `resetDb()` — close the pooled connection and drop the memoized promise so
+3. `resetDb()` — close the pooled connection and drop the memoized promise so
    the file isn't locked.
-3. `save_file(dbPath, downloadedBytes)` — overwrite the SQLite file (Rust command).
-4. `setLastSyncedVersion(version)` — the next `getDb()` reopens the new file.
+4. `save_file(dbPath, migratedBytes)` — overwrite the SQLite file (Rust command).
+5. `setLastSyncedVersion(version)` — the next `getDb()` reopens the new file.
 
 **Known limitation:** there is a small window between `resetDb()` and the
 overwrite where a background query could reopen the old file. It matches the
@@ -212,6 +224,7 @@ bites, pause React Query during the swap. The viewer write guard
   `install_id` generation, `SyncConfigPublic`.
 - `src/lib.rs` — `read_file` / `save_file` commands, migration registration,
   invoke-handler registration.
+- `src/migrate.rs`: `db_migrate_image`, which a pull runs on the downloaded snapshot (§1a, §7).
 - `migrations/0014_stain_requests.sql` — the durable request record.
 - `Cargo.toml` — `reqwest` (feature `rustls`, **not** `rustls-tls`) + `base64`.
 
@@ -222,7 +235,7 @@ bites, pause React Query during the swap. The viewer write guard
   helpers; `isNewer`.
 - `lib/export.ts` — `buildStatusWorkbookBytes()` + exported column sets.
 - `lib/db.ts` — `stain_requests` queries, `getDbFilePath()`, `resetDb()`,
-  `setViewerReadOnly()` write guard.
+  `bringImageUpToDate()`, `setViewerReadOnly()` write guard.
 - `lib/types.ts` — `StainRequest`.
 - `hooks/useSync.ts` — the periodic + manual sync loop.
 - `hooks/useData.ts` — `useStainRequests`, `useStainRequestMutations`.

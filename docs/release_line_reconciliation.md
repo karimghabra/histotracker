@@ -74,11 +74,11 @@ Hygiene that the merge made visible, fixed in the same change:
 
 ### The changelog, as merged
 
-`CHANGELOG.md` currently attributes PR 138's work (#136, #137, the Excel export fix and `pnpm test:compat`) to 0.13.2, inside the "0.13.2 - 2026-08-13" section, although it first ships in 0.18.0.
-Its top heading still reads "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
-Both are wrong.
+The merge left `CHANGELOG.md` attributing PR 138's entries (#136, #137, the New Sample ID preview, the Excel export fix and `pnpm test:compat`) to 0.13.2, inside the "0.13.2 - 2026-08-13" section, although they first ship in 0.18.0.
+It also left the 0.17.0 heading reading "0.17.0 - unreleased", although 0.17.0 was published on 2026-09-04.
 The lab owner's standing order that agents never hand-edit `CHANGELOG.md` prevented the agent doing this merge from correcting them.
-`scripts/release-check.mjs plan` now refuses to cut 0.18.0 until `CHANGELOG.md` has a 0.18.0 section, so writing that section forces the correction.
+Both were corrected in the change that fixed the backup-revert brick, before 0.18.0 was cut: PR 138's entries now sit under 0.18.0, the 0.13.2 section reads as it was released, and 0.17.0 carries its publication date.
+`scripts/release-check.mjs plan` refuses to cut a release until `CHANGELOG.md` has a section for it, but it does not check which section an entry sits in.
 
 ## How releases work now
 
@@ -86,6 +86,11 @@ The lab owner's standing order that agents never hand-edit `CHANGELOG.md` preven
 In short: the installer workflow runs only when started by hand on master; it refuses anything that procedure lists, including any release tag master does not contain; it runs the whole test workflow on the commit first; and it tags the release at that commit.
 A separate release-integrity check turns every pull request red while any release tag is missing from master or master's version is behind the newest release.
 Either condition would have flagged this divergence the day 0.14.3 was published.
+
+The review of this merge also dropped the test workflow's Rust job, which compiled the Rust shell on Windows.
+0.18.0 deliberately supersedes that part of the decision and brings the job back, on Linux, running `cargo check` and the Rust unit tests.
+The Rust shell now holds `db_migrate_image`, which brings a backup or a pulled snapshot up to the build's migrations on the lab's machine, and only the Rust tests exercise the real command rather than its TypeScript model.
+Linux is cheap and catches the breakage that matters; the installer build still compiles for Windows at release time.
 
 ## The review
 
