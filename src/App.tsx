@@ -669,6 +669,11 @@ export default function App() {
     />
   ) : null;
 
+  const headerLine =
+    status ??
+    `${samples.length} open ${samples.length === 1 ? "sample" : "samples"} across ` +
+      `${projects.length} active ${projects.length === 1 ? "project" : "projects"}`;
+
   const applyConfig = (config: SyncConfigPublic) => {
     qc.setQueryData(["sync-config"], config);
     setShowSetup(false);
@@ -710,22 +715,14 @@ export default function App() {
 
       <main className="flex min-w-0 flex-1 flex-col bg-surface">
         <header className="flex items-center justify-between gap-3 border-b border-line bg-panel px-6 py-3">
-          {/* Takes the room the controls leave. A notice (a sync error can run
-              to a paragraph) is sized to that room and cut off with an
+          {/* Takes the room the controls leave. The line below it (a sync error
+              can run to a paragraph) is sized to that room and cut off with an
               ellipsis, the whole of it on hover, so it never pushes the
               controls off the header. */}
           <div className="flex-1">
             <h1 className="whitespace-nowrap text-lg font-semibold text-ink">Open Histology Workflow</h1>
-            <p
-              className={`truncate text-xs text-ink-faint ${status ? "w-0 min-w-full" : ""}`}
-              title={status ?? undefined}
-            >
-              {status ?? (
-                <>
-                  {samples.length} open {samples.length === 1 ? "sample" : "samples"} across{" "}
-                  {projects.length} active {projects.length === 1 ? "project" : "projects"}
-                </>
-              )}
+            <p className="w-0 min-w-full truncate text-xs text-ink-faint" title={headerLine}>
+              {headerLine}
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">

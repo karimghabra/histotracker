@@ -100,6 +100,11 @@ test("a snapshot from a workstation on a version before the newest migration: pu
   // A fresh viewer pulls the snapshot as soon as it opens.
   await page.goto("/?freshdb=1");
   await showsTheLab(page, "after the pull");
+  // The header line is cut off whatever it says, so it always carries its own
+  // whole text on hover — the counts sentence included, not just a notice.
+  const headerLine = page.locator("header p");
+  await expect(headerLine).toHaveText(/^\d+ open samples? across \d+ active projects?$/);
+  await expect(headerLine).toHaveAttribute("title", (await headerLine.textContent())!);
   // The pull left a record that says what the file now holds.
   expect(await ledger(page)).toEqual(MIGRATIONS.map((m) => m.version));
 
