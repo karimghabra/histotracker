@@ -710,9 +710,16 @@ export default function App() {
 
       <main className="flex min-w-0 flex-1 flex-col bg-surface">
         <header className="flex items-center justify-between gap-3 border-b border-line bg-panel px-6 py-3">
-          <div className="shrink-0">
+          {/* Takes the room the controls leave. A notice (a sync error can run
+              to a paragraph) is sized to that room and cut off with an
+              ellipsis, the whole of it on hover, so it never pushes the
+              controls off the header. */}
+          <div className="flex-1">
             <h1 className="whitespace-nowrap text-lg font-semibold text-ink">Open Histology Workflow</h1>
-            <p className="whitespace-nowrap text-xs text-ink-faint">
+            <p
+              className={`truncate text-xs text-ink-faint ${status ? "w-0 min-w-full" : ""}`}
+              title={status ?? undefined}
+            >
               {status ?? (
                 <>
                   {samples.length} open {samples.length === 1 ? "sample" : "samples"} across{" "}

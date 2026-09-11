@@ -132,7 +132,12 @@ test("a snapshot from a newer version is refused out loud, and the viewer's copy
     `Histometer (it has database migration ${NEWEST + 1}, which this version does not have). ` +
     `Update Histometer on this computer to open it. This computer's copy has not been changed.`;
   await page.getByTitle("Sync now").click();
-  await expect(page.getByText(`Sync error: ${refusal}`, { exact: true })).toBeVisible({ timeout: 15_000 });
+  const notice = page.getByText(`Sync error: ${refusal}`, { exact: true });
+  await expect(notice).toBeVisible({ timeout: 15_000 });
+  // A notice that long is cut short in the header, whole on hover, and leaves
+  // the controls where they were: it once pushed them off the right edge.
+  await expect(notice).toHaveAttribute("title", `Sync error: ${refusal}`);
+  await expect(page.getByRole("button", { name: "Request stain" })).toBeInViewport({ ratio: 1 });
   // …and it stays on the sync pill once that notice has gone.
   await expect(page.getByText("Sync error", { exact: true })).toHaveAttribute("title", refusal);
   expect(await stored(page, LIVE)).toBe(live);
