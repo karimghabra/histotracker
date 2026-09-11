@@ -83,7 +83,7 @@ The lab owner's standing order that agents never hand-edit `CHANGELOG.md` preven
 ## How releases work now
 
 `docs/releasing.md` is the procedure.
-In short: the installer workflow runs only when started by hand on master; it refuses any ref but master, a version that is already released or not newer than the newest, version files out of step, and any release tag master does not contain; it runs the whole test workflow on the commit first; and it tags the release at that commit.
+In short: the installer workflow runs only when started by hand on master; it refuses anything that procedure lists, including any release tag master does not contain; it runs the whole test workflow on the commit first; and it tags the release at that commit.
 A separate release-integrity check turns every pull request red while any release tag is missing from master or master's version is behind the newest release.
 Either condition would have flagged this divergence the day 0.14.3 was published.
 

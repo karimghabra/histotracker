@@ -121,8 +121,9 @@ export function currentBuild(): Build {
 }
 
 /**
- * The installer workflow republishes a release on every push at the same
- * version, but the tag stays where it was first cut. So a branch that carries
+ * Up to 0.17.0 the installer workflow republished a release on every push at
+ * the same version, but the tag stayed where it was first cut (from 0.18.0 a
+ * release is never rebuilt, docs/releasing.md). So a branch that carries
  * the tag and still builds the same version past it may be what the installer
  * was last built from. Only remote branches this clone has fetched are seen
  * (none in CI's shallow checkout); name the branch to test it instead.

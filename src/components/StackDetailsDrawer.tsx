@@ -264,7 +264,7 @@ export function StackDetailsDrawer({
           {!readOnly && selectingSlides && (
             <div className="mb-2 space-y-1.5">
               {/* One selection, two things to do with it (#126).
-                  
+
                   Reassigning was per-slide only, which is fine for the one slide
                   that went on the wrong agent and miserable for the twelve that
                   did — twelve dropdowns, twelve waits, and no way to tell part
@@ -407,7 +407,7 @@ export function StackDetailsDrawer({
                   </span>
                   <span className="shrink-0 text-[10px] uppercase text-ink-faint">{slide.assay_type}</span>
                   {/* The per-slide "Move…" dropdown used to live here.
-                  
+
                       It put a select box on every row, so a rack of twenty-four carried
                       twenty-four of them — permanent clutter for an action that is
                       occasional, and no help at all when several slides need moving. The
