@@ -41,7 +41,9 @@ function resolveCommit(ref: string): string {
   try {
     return git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`);
   } catch {
-    // A fresh or shallow clone (CI) has no tags: fetch just this one.
+    // A fresh or shallow clone (CI) has no tags: fetch just this one. Shallowly
+    // only if the clone already is: --depth on a full clone makes it shallow
+    // and cuts the release line's history off at the tag.
     const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
     try {
       git("fetch", "--quiet", ...depth, "origin", `refs/tags/${ref}:refs/tags/${ref}`);
