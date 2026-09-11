@@ -1,0 +1,59 @@
+name: Release integrity
+
+# Every release is cut from master, and master says what ships.
+#
+# Red when any `app-v*` release tag is missing from master's history, when
+# master declares a version behind the newest release, or when the places the
+# version is written disagree. Each of those is a way 0.14.3 to 0.17.0 were
+# published from a branch master never received, unnoticed for a month, while
+# master still said 0.13.2 (docs/release_line_reconciliation.md).
+#
+# The installer workflow can now only publish from master, so this is the alarm
+# for a release made any other way: by hand on the Releases page, with `gh
+# release create`, or by a tag pushed from a branch. It runs on every pull
+# request and every push to master, so it turns every one of them red until the
+# stray release's commit is merged into master or the release is withdrawn. It
+# also runs when a release is published and once a day, for the quiet weeks.
+#
+# What to do when it fails: docs/releasing.md.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  release-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      # A pull request is judged as it would land, by its merge commit. Every
+      # other trigger judges master itself: a `release` event would otherwise
+      # check out the released commit, and a stray release is always in its own
+      # history.
+      - name: Checkout, with every tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'master' }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: The version is written the same everywhere
+        run: node scripts/release-check.mjs versions
+
+      - name: Every release is in master's history, and master is not behind it
+        run: node scripts/release-check.mjs provenance
+
+      - name: The release checks themselves
+        run: node --test scripts/release-check.test.mjs

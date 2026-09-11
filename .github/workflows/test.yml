@@ -11,6 +11,9 @@ name: Workflow tests
 on:
   push:
   pull_request:
+  # The installer workflow runs this whole file on the commit it is about to
+  # release, and publishes nothing unless every job here passes.
+  workflow_call:
 
 jobs:
   workflow-harness:
@@ -120,3 +123,34 @@ jobs:
 
       - name: Compatibility with the release in use
         run: pnpm test:compat
+
+  # The Rust shell. Until this job it was compiled only by `tauri build` in the
+  # installer workflow, which runs only when a release is cut, so a change that
+  # broke it would first fail on release day. Windows, because that is the only
+  # platform the app ships for.
+  rust:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      # tauri::generate_context!() reads `frontendDist` at compile time and
+      # fails when it does not exist. A type-check needs the directory, not a
+      # real frontend build.
+      - name: Stand in for the frontend build
+        shell: bash
+        run: mkdir -p dist && printf '<!doctype html>\n' > dist/index.html
+
+      # --locked: Cargo.lock must already agree with Cargo.toml, which is what
+      # catches a version bump made in one and not the other.
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --locked

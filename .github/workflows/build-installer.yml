@@ -2,38 +2,75 @@ name: Build Windows Installer
 
 # Builds the Histometer Windows installer (.exe + .msi) in the cloud on a
 # GitHub-hosted Windows runner that already has Rust, the MSVC toolchain and
-# Node.js installed. Nobody needs any compilers on their own machine.
-#
-# Every build publishes a GitHub Release, so the installer is always available
-# as a one-click download from the repo's Releases page:
+# Node.js installed, and publishes it as a GitHub Release tagged
+# `app-v<version>`:
 #
 #     https://github.com/karimghabra/histotracker/releases
 #
-# The tool creates the release (and its tag) through the GitHub API using the
-# built-in GITHUB_TOKEN, so no manual tagging or `git push --tags` is needed.
-# The same installers are also attached to each run as workflow artifacts.
+# A release is cut from MASTER and from nowhere else. Until 0.18.0 this workflow
+# ran on every push to a `claude/**` branch, and 0.14.3 through 0.17.0 were
+# published from branches master never received: for a month the trunk and the
+# build the lab ran were two different codebases, and nothing said so
+# (docs/release_line_reconciliation.md). So now:
+#
+#   - It runs only when started by hand ("Run workflow") on master. No push, no
+#     branch and no tag can publish a release.
+#   - `plan` refuses any other ref, version files out of step, a version that is
+#     already released or is not newer than the newest release, and any release
+#     tag that master does not contain (scripts/release-check.mjs).
+#   - `tests` runs the whole test workflow on that exact commit, including the
+#     compatibility check against the release in use. 0.15.0 was published from
+#     a push whose test run had failed; that cannot happen from here.
+#   - `build` tags the release at the commit that was planned and tested, and
+#     `verify` checks that the tag really does name it.
+#
+# A release is never rebuilt or overwritten: to ship again, bump the version.
+# How to cut one: docs/releasing.md.
 
 on:
   workflow_dispatch: {}
-  push:
-    branches:
-      # Build on every push to an installer working branch, so a fresh
-      # installer artifact is available even before this is merged to the
-      # default branch (where the manual "Run workflow" button lives).
-      - "claude/**"
-    tags:
-      - "v*"
 
-# Never let two builds of the same ref run at once.
+# One release at a time, and never cancel one halfway through publishing it.
 concurrency:
-  group: installer-${{ github.ref }}
-  cancel-in-progress: true
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - name: Checkout source, with every tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: May this commit be released?
+        id: plan
+        run: node scripts/release-check.mjs plan
+
+  tests:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    uses: ./.github/workflows/test.yml
+
   build:
+    needs: [plan, tests]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest
     permissions:
-      # Needed so the release step can create/update a GitHub Release.
+      # Needed so the release step can create the GitHub Release and its tag.
       contents: write
 
     steps:
@@ -133,8 +170,9 @@ jobs:
       # tauri-action runs `pnpm tauri build`, which compiles the Rust shell
       # and bundles the NSIS `.exe` and `.msi` installers, then publishes them
       # to a GitHub Release. `__VERSION__` is replaced with the app version from
-      # tauri.conf.json (0.1.0 -> tag `app-v0.1.0`); re-running updates the same
-      # release in place.
+      # tauri.conf.json (0.18.0 -> tag `app-v0.18.0`), the same number `plan`
+      # checked. The tag is created at this run's commit, the one `plan` and
+      # `tests` passed; `plan` has already refused a version that has a tag.
       - name: Build the app and publish a Release
         id: tauri
         uses: tauri-apps/tauri-action@v0
@@ -143,6 +181,7 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: "Histometer v__VERSION__"
+          releaseCommitish: ${{ github.sha }}
           releaseBody: |
             Windows installer for Histometer.
 
@@ -152,8 +191,7 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-      # Always expose the installers as workflow artifacts, so a manual
-      # ("Run workflow") build without a tag still produces a download.
+      # The same installers, attached to the run as well as to the release.
       - name: Upload installers as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -163,3 +201,22 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
+
+  # The tag must name the commit this run planned, tested and built. tauri-action
+  # uploads into an existing release rather than failing, so a tag created by
+  # anyone else between `plan` and `build` would otherwise pass unnoticed.
+  verify:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: The release tag names the commit that was tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          tagged=$(gh api "repos/${{ github.repository }}/commits/$TAG" --jq .sha)
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error title=Release::$TAG points at $tagged, but this run tested and built $GITHUB_SHA"
+            exit 1
+          fi
+          echo "$TAG is at $GITHUB_SHA"

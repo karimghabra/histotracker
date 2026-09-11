@@ -7,7 +7,7 @@ database the other one wrote.
 ```bash
 pnpm test:compat                      # the release in use, and only that
 pnpm test:compat app-v0.18.0          # any release, by tag (several may be named)
-pnpm test:compat origin/claude/xyz    # or a release line's tip before it is tagged
+pnpm test:compat origin/some-branch   # or any ref, such as a branch tip
 ```
 
 CI runs it on every push and pull request (the `release-compat` job in
@@ -16,12 +16,13 @@ CI runs it on every push and pull request (the `release-compat` job in
 ## What is real and what is modelled
 
 **Real: each build's own code.** The release is extracted from its git tag
-(`app-v<version>`, which the installer workflow cuts the first time it publishes
-that version) into `.compat/`, and its version is checked against the tag. A
-later push at the same version republishes the installer without moving the
-tag, so the harness warns when a fetched branch carries the tag and still
-builds that version past it; name that branch to test it. For 0.17.0 the tag
-is the tip of its release line, `claude/issues-129-133`. Both builds
+(`app-v<version>`, which the installer workflow creates when it publishes that
+version) into `.compat/`, and its version is checked against the tag. Up to
+0.17.0 a later push at the same version could republish the installer without
+moving the tag, so the harness warns when a fetched branch carries the tag and
+still builds that version past it; name that branch to test it. For 0.17.0 the
+tag is the tip of its release line, `claude/issues-129-133`. From 0.18.0 every
+release is cut from master and never rebuilt (`docs/releasing.md`). Both builds
 run their own `src/lib/db.ts`, backup and sync code, and exports. They also use
 their own migration list, read from their own `src-tauri/src/lib.rs`, and their
 own migration files. Nothing about a release is retyped into the harness, so it

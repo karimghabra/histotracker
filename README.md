@@ -33,13 +33,13 @@ Windows installer you double-click.
 `Histometer_<version>_x64-setup.exe`.** Run it and launch Histometer from the
 Start menu.
 
-Every successful build automatically publishes/updates that release, so the
-latest installer is always one click away — no manual tagging required. (The
-same `.exe` and `.msi` are also attached to each Actions run as a
-`histometer-windows-installer` artifact if you prefer.)
-
-To produce a fresh installer on demand, open the **Actions** tab, select the
-**Build Windows Installer** workflow, and click **Run workflow**.
+Releases are cut from `master` only: open the **Actions** tab, select the
+**Build Windows Installer** workflow, and click **Run workflow** on `master`. It
+tests that exact commit, builds the installer, and publishes it as
+`app-v<version>`. A release is published once and never overwritten; the next
+one needs a new version. The procedure, and what each check refuses, is in
+[`docs/releasing.md`](docs/releasing.md). (The same `.exe` and `.msi` are also
+attached to the Actions run as a `histometer-windows-installer` artifact.)
 
 The installer runs **per-user, without administrator rights**, and pulls in the
 Microsoft WebView2 runtime automatically if the machine doesn't already have it
