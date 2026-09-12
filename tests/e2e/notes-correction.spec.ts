@@ -214,9 +214,9 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
 }) => {
   await boot(page);
 
-  // A block created with no notes at all. The Logs still offers all four boxes:
-  // a correction surface that hides a blank note cannot fill one in, which is
-  // the other half of getting a note wrong.
+  // A block created with no notes at all. The Logs says nothing about them but
+  // keeps all four pencils: a correction surface that hides a blank note cannot
+  // fill one in, which is the other half of getting a note wrong.
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("plain block");
   await page.getByRole("button", { name: /Create Sample/ }).click();

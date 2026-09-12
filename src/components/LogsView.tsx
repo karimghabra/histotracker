@@ -307,15 +307,18 @@ function SampleNote({
   code: string;
   value: string;
   placeholder: string;
-  onSave: (notes: string) => void;
+  onSave: (notes: string) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState(false);
-  // The text just typed, held on screen until the record catches up with it. A
-  // save is a write plus a whole-database snapshot for the undo stack, and the
-  // refetch behind that is not instant on a real lab database — without this
-  // the note flips back to the words it replaced the instant focus leaves, or
-  // vanishes if it is the first thing written here, which reads as "it did not
-  // take" and invites a retype.
+  // The text just typed, held on screen only while a write is on its way to the
+  // record. A save is a write plus a whole-database snapshot for the undo stack,
+  // and the refetch behind that is not instant on a real lab database — without
+  // the hold the note flips back to the words it replaced the instant focus
+  // leaves, or vanishes if it is the first thing written here, which reads as
+  // "it did not take" and invites a retype. It is let go the moment the record
+  // answers: when the new words arrive, and equally when the save wrote nothing
+  // or failed, because a note the database does not hold must not sit here
+  // looking saved.
   const [pending, setPending] = useState<{ text: string; was: string } | null>(null);
   const readOnly = useReadOnly();
   useEffect(() => {
@@ -347,7 +350,16 @@ function SampleNote({
           autoFocus
           onSave={(text) => {
             setPending({ text, was: value ?? "" });
-            onSave(text);
+            const letGo = () => setPending((p) => (p && p.text === text ? null : p));
+            void onSave(text).then(
+              (wrote) => {
+                if (!wrote) letGo();
+              },
+              (err: unknown) => {
+                letGo();
+                throw err;
+              },
+            );
           }}
           onDone={() => setEditing(false)}
         />
@@ -1432,13 +1444,14 @@ function FragmentRow({
                 intake and then be permanently wrong. They are grouped rather
                 than scattered so a reader can see, in one place, every word
                 written about this block. Same save-on-blur editor as the
-                description and the per-slide notes below, but read as prose
-                until they are clicked, so a long note is read back whole.
+                description and the per-slide notes below, but read as plain
+                text — a long note is read back whole, and the pencil beside each
+                heading is the way into it.
 
-                An empty box is kept here so a note that was never written can
-                still be filled in — the reason the read-only display this
-                replaced (#137) was not enough. Wherever one cannot be filled in
-                the empty ones are left out and the row reads as terse as it did
+                A note nobody wrote leaves that pencil behind, so it can still be
+                written later — the reason the read-only display this replaced
+                (#137) was not enough. Where nothing can be written there is no
+                pencil and no text either, and the row reads as terse as it did
                 before: on a viewer, and on a workstation nobody has signed in to
                 yet, which is how the app comes up (#128 — `useReadOnly` is true
                 for both). */}
@@ -1452,7 +1465,7 @@ function FragmentRow({
                   code={displayCode(sample.sample_code)}
                   value={sample[field] ?? ""}
                   placeholder={placeholder}
-                  onSave={(text) => void editSampleNote(sample.id, field, text)}
+                  onSave={(text) => editSampleNote(sample.id, field, text)}
                 />
               );
             })}

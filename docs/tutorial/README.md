@@ -126,10 +126,11 @@ cut, no *(assigned)* stains. Export the current view as CSV or Excel.
 Expand a sample for its timeline, notes and slides — each slide has its own
 condensed timeline and notes. The sample's four notes (Embedding, Sectioning /
 Cut, Slide and General) read as plain text, however long they run, and are
-**correctable right there**: click one to open a box, correct it, click away to
-save it, `Ctrl+Z` to take it back. A note nobody wrote at intake shows **Add a
-note** in its place, so you can fill it in later. A read-only viewer reads them
-and cannot open them, and is shown only the notes the block actually carries.
+**correctable right there**: click the pencil beside a note's heading to open a
+box, correct it, click away to save it, `Ctrl+Z` to take it back. A note nobody
+wrote at intake shows nothing under its heading but that pencil, so you can
+write it later. A read-only viewer reads the notes a block carries and has no
+pencil to open them with.
 
 ## 9. Depth tagging (optional)
 

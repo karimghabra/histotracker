@@ -12,6 +12,11 @@ const data = vi.hoisted(() => ({
   catalog: [] as Array<{ id: number; assay_type: string; name: string; is_active: number }>,
   // Every action the view calls, in order, as [name, ...args].
   calls: [] as Array<[string, ...unknown[]]>,
+  // What a save answers: whether it changed the record, or the failure it hit.
+  // editSampleNote reports this so the view knows whether the words it is
+  // holding on screen are on their way into the database.
+  wrote: true,
+  failure: null as Error | null,
 }));
 
 vi.mock("../hooks/useData", () => ({
@@ -30,12 +35,31 @@ vi.mock("../hooks/useActions", () => ({
           (_t, name: string) =>
           (...args: unknown[]) => {
             data.calls.push([name, ...args]);
+            return data.failure ? Promise.reject(data.failure) : Promise.resolve(data.wrote);
           },
       },
     ),
 }));
 
 const { LogsView } = await import("./LogsView");
+
+/**
+ * A failed save rejects a promise nobody awaits — that is how the app reports
+ * one, through the unhandledrejection backstop App installs (#72). Stand in for
+ * that backstop, for the one test that makes a save fail, so the rejection is
+ * expected here rather than reported as a crash. Scoped to that test so a
+ * genuine stray rejection in any other still surfaces.
+ */
+async function expectingAFailedSave(body: () => Promise<void>) {
+  const swallow = () => undefined;
+  process.on("unhandledRejection", swallow);
+  try {
+    await body();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    process.off("unhandledRejection", swallow);
+  }
+}
 
 const assigned = (...agents: Array<[string, string]>) =>
   JSON.stringify(agents.map(([assay_type, assay_name]) => ({ assay_type, assay_name })));
@@ -80,6 +104,8 @@ function stainsCell(code: string): HTMLElement {
 }
 
 beforeEach(() => {
+  data.wrote = true;
+  data.failure = null;
   localStorage.clear();
   nextId = 1;
   data.samples = [];
@@ -265,8 +291,8 @@ describe("LogsView — correcting a sample's notes", () => {
     expect(data.calls).toEqual([["editSampleNote", 1, "cut_notes", "8 um"]]);
   });
 
-  // A blank note is the other half of getting one wrong: the box has to be
-  // there to fill in, unlike the read-only display it replaced, which vanished.
+  // A blank note is the other half of getting one wrong: the pencil has to be
+  // there to open one, unlike the read-only display it replaced, which vanished.
   it("offers the editor for a note that was never written", async () => {
     data.samples = [sample({ sample_code: "EE-0002" })];
     render(<LogsView />);
@@ -292,6 +318,43 @@ describe("LogsView — correcting a sample's notes", () => {
     await userEvent.click(screen.getByLabelText("Edit General Notes for EE-1"));
     await userEvent.tab();
     expect(data.calls).toEqual([]);
+  });
+
+  // The hold on the typed words is only good while a write is on its way. A
+  // save that changes nothing — a stray newline the record trims away — must
+  // not leave the screen quoting text the database does not hold.
+  it("lets the typed note go when the save wrote nothing", async () => {
+    data.samples = [withNotes()];
+    data.wrote = false;
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), " ");
+    await userEvent.tab();
+
+    // Exactly the stored words, not the stray space: the record trimmed it away
+    // and never changed, so nothing is held over it.
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
+  });
+
+  // And a save that FAILED must revert too, rather than showing a correction
+  // that was never recorded. The message is App's unhandledrejection backstop.
+  it("lets the typed note go when the save fails", async () => {
+    await expectingAFailedSave(async () => {
+      data.samples = [withNotes()];
+      data.failure = new Error("disk went away");
+      const { rerender } = render(<LogsView />);
+      await userEvent.click(screen.getByText("EE-1"));
+
+      await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+      await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+      await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+      await userEvent.tab();
+
+      rerender(<LogsView />);
+      expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
+    });
   });
 
   // A viewer cannot correct anything, so an empty box there is an invitation it
