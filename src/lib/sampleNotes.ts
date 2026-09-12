@@ -10,32 +10,13 @@ import type { Sample } from "./types";
  * four, and a fifth kind must not be able to appear in one surface only.
  * `samples` holds other text columns (description, stains) that are NOT notes;
  * this list is what separates the prose from the bookkeeping.
+ *
+ * The wording follows the intake form, which is where the user typed the note
+ * in the first place — a correction surface that renamed them would read as a
+ * different field. `satisfies` keeps every field a real column on `Sample`, so
+ * the typecheck fails if one is renamed out from under the list.
  */
-export const SAMPLE_NOTE_FIELDS = [
-  "embedding_notes",
-  "cut_notes",
-  "slide_notes",
-  "overall_notes",
-] as const;
-
-export type SampleNoteField = (typeof SAMPLE_NOTE_FIELDS)[number];
-
-// Every field must be a real text column on Sample; this fails the typecheck if
-// one is renamed out from under the list.
-type AssertSampleColumns = SampleNoteField extends keyof Sample ? true : never;
-const _fieldsAreSampleColumns: AssertSampleColumns = true;
-void _fieldsAreSampleColumns;
-
-/**
- * How each note is named to the user. The wording follows the intake form,
- * which is where the user typed the note in the first place — a correction
- * surface that renamed them would read as a different field.
- */
-export const SAMPLE_NOTES: Array<{
-  field: SampleNoteField;
-  label: string;
-  placeholder: string;
-}> = [
+export const SAMPLE_NOTES = [
   {
     field: "embedding_notes",
     label: "Embedding notes",
@@ -56,7 +37,15 @@ export const SAMPLE_NOTES: Array<{
     label: "Sample notes",
     placeholder: "Notes about this sample…",
   },
-];
+] as const satisfies ReadonlyArray<{
+  field: keyof Sample;
+  label: string;
+  placeholder: string;
+}>;
+
+export type SampleNoteField = (typeof SAMPLE_NOTES)[number]["field"];
+
+export const SAMPLE_NOTE_FIELDS: readonly SampleNoteField[] = SAMPLE_NOTES.map((n) => n.field);
 
 export function sampleNoteLabel(field: SampleNoteField): string {
   return SAMPLE_NOTES.find((n) => n.field === field)?.label ?? field;
