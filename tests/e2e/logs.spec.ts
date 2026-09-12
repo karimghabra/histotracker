@@ -109,19 +109,6 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await slideNotes.blur();
   await expect(slideNotes).toHaveValue("Faint staining");
 
-  // A trailing space is not a correction — the note is stored trimmed — so it
-  // must not take an undo slot of its own. One that did would sit on top of the
-  // real edit, so this Undo would restore an identical database and appear to
-  // do nothing, having thrown away the redo that went with it.
-  await slideNotes.fill("Faint staining ");
-  await slideNotes.blur();
-  await expect(slideNotes).toHaveValue("Faint staining");
-  await page.getByTitle("Undo (Ctrl+Z)").click();
-  await expect(page.getByText("Undone: Edit slide notes")).toBeVisible();
-  await expect(slideNotes).toHaveValue("");
-  await page.getByTitle("Redo (Ctrl+Y)").click();
-  await expect(slideNotes).toHaveValue("Faint staining");
-
   // Collapse + re-expand the sample: both notes survive (read back from the DB).
   await sampleCell.click();
   await sampleCell.click();

@@ -427,12 +427,8 @@ export function LogsView() {
         // extra (#83).
         const removedCount = slidesForSample.filter(isRemoved).length;
         const extras = slidesForSample.length - removedCount - progress.total;
-        // Every kind of note the block carries, not just the general one: the
-        // expanded row now corrects all four, so a marker derived from one of
-        // them reads "no notes" about a note this very view just saved.
         const hasNotes =
-          SAMPLE_NOTES.some(({ field }) => Boolean(sample[field]?.trim())) ||
-          slidesForSample.some((s) => Boolean(s.notes?.trim()));
+          Boolean(sample.overall_notes?.trim()) || slidesForSample.some((s) => Boolean(s.notes?.trim()));
         return {
           sample,
           slides: slidesForSample,
@@ -488,7 +484,7 @@ export function LogsView() {
           sample.sample_description,
           sample.project_code,
           sample.project_name,
-          ...SAMPLE_NOTES.map(({ field }) => sample[field]),
+          sample.overall_notes,
           ...agents,
           ...sampleSlides.map((s) => s.slide_code),
           ...sampleSlides.map((s) => s.notes),

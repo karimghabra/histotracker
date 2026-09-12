@@ -1492,10 +1492,7 @@ export async function setSampleNote(
 
 export async function setSlideNotes(slideId: number, notes: string): Promise<void> {
   const db = await getDb();
-  // Trimmed like every other note writer above: a note cleared to spaces has to
-  // read as empty everywhere, because every screen that shows one tests the
-  // string for content.
-  await db.execute(`UPDATE slides SET notes = ? WHERE id = ?`, [notes.trim(), slideId]);
+  await db.execute(`UPDATE slides SET notes = ? WHERE id = ?`, [notes, slideId]);
 }
 
 /** Tag a set of slides as a depth grouping (#69): a shared label ("surface",
