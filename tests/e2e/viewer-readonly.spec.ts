@@ -256,6 +256,30 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
 
+  // Two of the block's four notes written from the workstation's own Logs, two
+  // left unwritten — what the viewer does with each is the point below.
+  await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await ws.getByLabel("Sectioning / Cut Notes for EE-1").fill("10 um, discard the first ribbon");
+  await ws.getByLabel("Sectioning / Cut Notes for EE-1").blur();
+  await ws.getByLabel("General Notes for EE-1").fill("decal ran long on this one");
+  await ws.getByLabel("General Notes for EE-1").blur();
+  // Both writes are in the database before the sync that carries them over; a
+  // save-on-blur write is still in flight when the blur returns.
+  await expect
+    .poll(() =>
+      ws.evaluate(
+        () =>
+          (
+            window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }
+          ).__SHIM_SELECT__(
+            `SELECT cut_notes AS cut, overall_notes AS overall
+               FROM samples WHERE sample_code = 'EE-0001'`,
+          )[0],
+      ),
+    )
+    .toEqual({ cut: "10 um, discard the first ribbon", overall: "decal ran long on this one" });
+
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
   await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
@@ -272,10 +296,20 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   // search box is also a textbox and is legitimately editable.
   const notes = vw.getByPlaceholder("Notes about this sample…");
   await expect(notes).toHaveAttribute("readonly", "");
-  // All four notes are correctable on the workstation, so all four have to be
-  // read-only here — one of them left writable is the #72 bug again.
-  for (const label of ["Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes"]) {
-    await expect(vw.getByLabel(`${label} for EE-1`)).toHaveAttribute("readonly", "");
+  // Every note this block actually carries is correctable on the workstation, so
+  // each one has to be read-only here — one left writable is the #72 bug again.
+  for (const [label, written] of [
+    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["General Notes", "decal ran long on this one"],
+  ]) {
+    const box = vw.getByLabel(`${label} for EE-1`);
+    await expect(box).toHaveValue(written);
+    await expect(box).toHaveAttribute("readonly", "");
+  }
+  // A note nobody wrote gets no box on a viewer: an empty one is there to be
+  // filled in, and this machine cannot fill it in.
+  for (const label of ["Embedding Notes", "Slide Notes"]) {
+    await expect(vw.getByLabel(`${label} for EE-1`)).toHaveCount(0);
   }
 
   await wsCtx.close();

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Sample, Slide } from "../lib/types";
+import { ReadOnlyProvider } from "../lib/readOnly";
 
 // LogsView reads its data through react-query hooks and its mutations through
 // useActions; both are replaced so the real component renders against fixtures.
@@ -258,6 +259,28 @@ describe("LogsView — correcting a sample's notes", () => {
     const unmarked = screen.getByText("EE-2").closest("tr")!;
     expect(within(marked).getByTitle("Has notes")).toBeTruthy();
     expect(within(unmarked).queryByTitle("Has notes")).toBeNull();
+  });
+
+  // A viewer cannot correct anything, so an empty box there is an invitation it
+  // cannot accept — it reads the notes the block actually carries and no more.
+  it("offers a viewer only the notes that were written", async () => {
+    data.samples = [sample({ sample_code: "EE-0001", cut_notes: "10 um" })];
+    render(
+      <ReadOnlyProvider value={{ readOnly: true, reason: "viewer" }}>
+        <LogsView />
+      </ReadOnlyProvider>,
+    );
+    await userEvent.click(screen.getByText("EE-1"));
+
+    const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    expect(cut).toHaveValue("10 um");
+    expect(cut).toHaveAttribute("readonly");
+    for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
+      expect(
+        screen.queryByLabelText(`${label} for EE-1`),
+        `${label} is not offered for a note nobody wrote`,
+      ).toBeNull();
+    }
   });
 
   // The refetch that follows a save is what puts the corrected note on screen;

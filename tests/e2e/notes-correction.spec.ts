@@ -233,20 +233,17 @@ test("a several-line note is read back whole in the Logs, not behind a scrollbar
   const notes = noteEditors(page, "EE-1");
   await expect(notes.embedding).toHaveValue(LONG);
 
-  // Nothing of the note is scrolled out of sight: the box is as tall as its
-  // own content. (1px of slack for sub-pixel line heights.)
+  // Nothing of the note is scrolled out of sight: the box is tall enough for
+  // every line of it. (1px of slack for sub-pixel line heights.)
   await expect
     .poll(async () =>
       notes.embedding.evaluate((el: HTMLTextAreaElement) => el.scrollHeight - el.clientHeight),
     )
     .toBeLessThanOrEqual(1);
 
-  // And it grew to get there — an empty note keeps a readable minimum box,
-  // which is what a six-line note would have been stuck at.
-  const emptyBox = await notes.cut.evaluate((el: HTMLTextAreaElement) => el.clientHeight);
-  const fullBox = await notes.embedding.evaluate((el: HTMLTextAreaElement) => el.clientHeight);
-  expect(emptyBox).toBeGreaterThan(0);
-  expect(fullBox).toBeGreaterThan(emptyBox * 2);
+  // The box is still the user's to size — a note longer than this one is pulled
+  // open rather than scrolled.
+  await expect(notes.embedding).toHaveCSS("resize", "vertical");
 });
 
 test("a correction is undoable, and the undo names the note it restores", async ({ page }) => {

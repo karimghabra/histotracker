@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
@@ -232,11 +232,6 @@ function unmetRequest(slide: Slide): string | null {
 }
 
 // Free-text notes with a save-on-blur textarea (only writes when changed).
-//
-// The box grows to the note inside it. `rows` is the MINIMUM height, never a
-// ceiling: the log is where a note is read back, and a several-line note typed
-// at intake used to be read whole here — a fixed two-row box would put the rest
-// of it behind a scrollbar, which is a worse log in exchange for an editable one.
 function NotesEditor({
   value,
   placeholder,
@@ -252,7 +247,6 @@ function NotesEditor({
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
-  const box = useRef<HTMLTextAreaElement | null>(null);
   // A viewer READS notes; it must not appear to edit them. Gating here covers
   // every use of this editor — the description, sample notes and slide notes —
   // rather than three separate call-site checks, one of which would be missed
@@ -263,18 +257,8 @@ function NotesEditor({
   useEffect(() => {
     if (!focused) setText(value ?? "");
   }, [value, focused]);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    el.style.height = "auto";
-    if (el.scrollHeight === 0) return;
-    // border-box, so the borders scrollHeight leaves out have to be added back
-    // or the last line sits one hairline behind a scrollbar.
-    el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`;
-  }, [text]);
   return (
     <textarea
-      ref={box}
       aria-label={ariaLabel}
       value={text}
       rows={rows}
@@ -288,7 +272,7 @@ function NotesEditor({
         if (readOnly) return;
         if (text !== (value ?? "")) onSave(text);
       }}
-      className="w-full resize-none rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
+      className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
   );
 }
@@ -1365,23 +1349,30 @@ function FragmentRow({
                 description and the per-slide notes below; a viewer still only
                 reads them (NotesEditor gates that centrally, #72).
 
-                The empty ones keep their box, unlike the read-only display this
-                replaced (#137) and the board drawer, which still hides what was
-                never written: a correction surface that vanishes for a blank
-                note is a correction surface that cannot fill one in. */}
-            {SAMPLE_NOTES.map(({ field, label, placeholder }) => (
-              <div key={field}>
-                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                  {label}
-                </h4>
-                <NotesEditor
-                  value={sample[field] ?? ""}
-                  placeholder={placeholder}
-                  ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
-                  onSave={(text) => void editSampleNote(sample.id, field, text)}
-                />
-              </div>
-            ))}
+                An empty box is kept here so a note that was never written can
+                still be filled in — the reason the read-only display this
+                replaced (#137) was not enough. On a viewer, which cannot fill
+                one in, the empty ones are left out and the row reads as terse as
+                it did before. Six rows because a note is typed at a bench and
+                runs to several lines; the box is still draggable past that. */}
+            {SAMPLE_NOTES.map(({ field, label, placeholder }) => {
+              const written = (sample[field] ?? "").trim();
+              if (readOnly && !written) return null;
+              return (
+                <div key={field}>
+                  <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                    {label}
+                  </h4>
+                  <NotesEditor
+                    value={sample[field] ?? ""}
+                    placeholder={placeholder}
+                    rows={6}
+                    ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
+                    onSave={(text) => void editSampleNote(sample.id, field, text)}
+                  />
+                </div>
+              );
+            })}
 
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
