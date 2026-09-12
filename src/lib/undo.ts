@@ -15,19 +15,6 @@ export interface Snapshot {
 interface UndoState {
   undoStack: Snapshot[];
   redoStack: Snapshot[];
-  /**
-   * Note corrections whose snapshot-and-write is still running.
-   *
-   * A note is saved on blur, and clicking Undo is itself what blurs the box —
-   * so the click lands while the correction is still being written. Undo pops
-   * whatever is on top, which at that moment is the PREVIOUS action: a
-   * different edit gets reverted, and the correction the user was cancelling
-   * then lands on top of the restored image. Undo and redo are offered only
-   * when this is zero.
-   */
-  pendingNoteSaves: number;
-  beginNoteSave: () => void;
-  endNoteSave: () => void;
   /** Record the pre-mutation snapshot for a freshly-performed action; clears redo. */
   record: (snap: Snapshot) => void;
   /** Pop the newest undo entry and push the given (current) snapshot onto redo. */
@@ -42,9 +29,6 @@ const MAX = 100;
 export const useUndoStore = create<UndoState>((set, get) => ({
   undoStack: [],
   redoStack: [],
-  pendingNoteSaves: 0,
-  beginNoteSave: () => set((s) => ({ pendingNoteSaves: s.pendingNoteSaves + 1 })),
-  endNoteSave: () => set((s) => ({ pendingNoteSaves: Math.max(0, s.pendingNoteSaves - 1) })),
   record: (snap) =>
     set((s) => ({ undoStack: [...s.undoStack, snap].slice(-MAX), redoStack: [] })),
   commitUndo: (redoSnap) => {

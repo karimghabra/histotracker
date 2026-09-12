@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { ALL_PROJECTS, Sidebar, type AppView } from "./components/Sidebar";
@@ -88,7 +88,6 @@ export default function App() {
   const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
-  const savingNote = useUndoStore((s) => s.pendingNoteSaves > 0);
 
   // ---- Shared-data sync -----------------------------------------------------
   const { data: syncConfig } = useQuery({ queryKey: ["sync-config"], queryFn: getSyncConfig });
@@ -171,6 +170,29 @@ export default function App() {
     setStatus(message);
     window.setTimeout(() => setStatus((s) => (s === message ? null : s)), 4000);
   }
+
+  // Undo and redo wait their turn behind any write still being saved — the
+  // snapshot is the whole database file, seconds of it on the lab machine — so
+  // the control says it is working rather than sitting there looking dead.
+  const [undoBusy, setUndoBusy] = useState<"undo" | "redo" | null>(null);
+  const runUndo = useCallback(async () => {
+    setUndoBusy("undo");
+    try {
+      const label = await undo();
+      flash(label ? `Undone: ${label}` : "Nothing to undo");
+    } finally {
+      setUndoBusy(null);
+    }
+  }, [undo]);
+  const runRedo = useCallback(async () => {
+    setUndoBusy("redo");
+    try {
+      const label = await redo();
+      flash(label ? `Redone: ${label}` : "Nothing to redo");
+    } finally {
+      setUndoBusy(null);
+    }
+  }, [redo]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -321,31 +343,17 @@ export default function App() {
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
-      // The same refusal the toolbar shows while a note correction is still
-      // being written — undoing now would pop the action before it. Said out
-      // loud here, because a shortcut has no greyed-out button to look at.
-      const savingNote = useUndoStore.getState().pendingNoteSaves > 0;
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();
-        if (savingNote) {
-          flash("Saving a note — undo again in a moment");
-          return;
-        }
-        const label = await undo();
-        flash(label ? `Undone: ${label}` : "Nothing to undo");
+        await runUndo();
       } else if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
-        if (savingNote) {
-          flash("Saving a note — redo again in a moment");
-          return;
-        }
-        const label = await redo();
-        flash(label ? `Redone: ${label}` : "Nothing to redo");
+        await runRedo();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [runUndo, runRedo]);
 
   // Close the export menu on outside click.
   useEffect(() => {
@@ -809,19 +817,27 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Undo (Ctrl+Z)"
-                  disabled={undoDepth === 0 || savingNote}
-                  onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
+                  disabled={undoDepth === 0 || undoBusy !== null}
+                  onClick={() => void runUndo()}
                 >
-                  <Undo2 size={15} />
+                  {undoBusy === "undo" ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Undo2 size={15} />
+                  )}
                 </Button>
                 <Button
                   variant="subtle"
                   className="px-2"
                   title="Redo (Ctrl+Y)"
-                  disabled={redoDepth === 0 || savingNote}
-                  onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
+                  disabled={redoDepth === 0 || undoBusy !== null}
+                  onClick={() => void runRedo()}
                 >
-                  <Redo2 size={15} />
+                  {undoBusy === "redo" ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Redo2 size={15} />
+                  )}
                 </Button>
               </div>
             )}

@@ -76,9 +76,22 @@ import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly
  *
  * Queuing here rather than per action covers every mutation in the app with one
  * rule, including the description and per-slide note editors that sit in the
- * same row as the notes.
+ * same row as the notes, and undo and redo — which restore an image and so must
+ * not run between a queued write's snapshot and the entry it is about to
+ * record. Undo would otherwise pop the action BEFORE the write the user is
+ * taking back, and the write would then land on the restored image.
  */
 let commitQueue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = commitQueue.then(fn);
+  // A failed step must not wedge every later one behind its rejection.
+  commitQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 /**
  * Central mutation layer. Every action performs its DB write, invalidates the
@@ -90,8 +103,6 @@ let commitQueue: Promise<unknown> = Promise.resolve();
 export function useActions() {
   const qc = useQueryClient();
   const record = useUndoStore((s) => s.record);
-  const beginNoteSave = useUndoStore((s) => s.beginNoteSave);
-  const endNoteSave = useUndoStore((s) => s.endNoteSave);
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
 
@@ -139,19 +150,13 @@ export function useActions() {
       // words: a viewer is told to use the workstation, an unsigned user is told
       // to sign in — which is the whole fix, and one click away.
       if (readOnly) throw new Error(readOnlyMessage(reason));
-      const run = commitQueue.then(async () => {
+      return enqueue(async () => {
         const before = await snapshotDb();
         const result = await fn();
         invalidate();
         record({ label, snapshot: before });
         return result;
       });
-      // A failed mutation must not wedge every later one behind its rejection.
-      commitQueue = run.then(
-        () => undefined,
-        () => undefined,
-      );
-      return run;
     },
     [invalidate, reason, record, readOnly],
   );
@@ -308,22 +313,14 @@ export function useActions() {
       const before = await getSample(sampleId);
       if (!before) return;
       if ((before[field] ?? "") === text.trim()) return;
-      // The flag covers the snapshot-and-write, which is what undo must not be
-      // pressed during; reading a note back is not a save and must not grey out
-      // the toolbar.
-      beginNoteSave();
-      try {
-        // displayCode, because this label is shown to the user in the undo flash
-        // and every other surface calls the block EE-1, not EE-0001 (#87).
-        await commit(
-          `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
-          () => setSampleNote(sampleId, field, text),
-        );
-      } finally {
-        endNoteSave();
-      }
+      // displayCode, because this label is shown to the user in the undo flash
+      // and every other surface calls the block EE-1, not EE-0001 (#87).
+      await commit(
+        `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
+        () => setSampleNote(sampleId, field, text),
+      );
     },
-    [commit, beginNoteSave, endNoteSave],
+    [commit],
   );
 
   /**
@@ -333,6 +330,10 @@ export function useActions() {
    */
   const editSampleDescription = useCallback(
     async (sampleId: number, description: string) => {
+      // Post-queue, exactly as for a note: a take-back typed while the first
+      // correction is still queued must not read as a no-op against the text
+      // that correction is about to replace.
+      await commitQueue;
       const before = await getSample(sampleId);
       if (!before || (before.sample_description ?? "") === description.trim()) return;
       await commit(`Edit ${displayCode(before.sample_code)} description`, () =>
@@ -880,31 +881,39 @@ export function useActions() {
     [commit],
   );
 
-  const undo = useCallback(async (): Promise<string | null> => {
-    const { undoStack } = useUndoStore.getState();
-    if (undoStack.length === 0) return null;
-    const label = undoStack[undoStack.length - 1].label;
-    const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
-    if (!entry) return null;
-    await restoreDbPreservingSession(entry.snapshot as DbImage);
-    invalidate();
-    await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
-    return entry.label;
-  }, [invalidate]);
+  const undo = useCallback(
+    (): Promise<string | null> =>
+      enqueue(async () => {
+        const { undoStack } = useUndoStore.getState();
+        if (undoStack.length === 0) return null;
+        const label = undoStack[undoStack.length - 1].label;
+        const current = await snapshotDb();
+        const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
+        if (!entry) return null;
+        await restoreDbPreservingSession(entry.snapshot as DbImage);
+        invalidate();
+        await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
+        return entry.label;
+      }),
+    [invalidate],
+  );
 
-  const redo = useCallback(async (): Promise<string | null> => {
-    const { redoStack } = useUndoStore.getState();
-    if (redoStack.length === 0) return null;
-    const label = redoStack[redoStack.length - 1].label;
-    const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
-    if (!entry) return null;
-    await restoreDbPreservingSession(entry.snapshot as DbImage);
-    invalidate();
-    await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
-    return entry.label;
-  }, [invalidate]);
+  const redo = useCallback(
+    (): Promise<string | null> =>
+      enqueue(async () => {
+        const { redoStack } = useUndoStore.getState();
+        if (redoStack.length === 0) return null;
+        const label = redoStack[redoStack.length - 1].label;
+        const current = await snapshotDb();
+        const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
+        if (!entry) return null;
+        await restoreDbPreservingSession(entry.snapshot as DbImage);
+        invalidate();
+        await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
+        return entry.label;
+      }),
+    [invalidate],
+  );
 
   return {
     moveSamples,
