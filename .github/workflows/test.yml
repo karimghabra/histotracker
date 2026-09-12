@@ -5,7 +5,7 @@ name: Workflow tests
 # SQLite and asserts the lab-pipeline invariants plus a gate per GitHub issue,
 # so a workflow regression fails here instead of shipping in an installer.
 #
-# No dependency install is needed — the harness uses only Node built-ins
+# No dependency install is needed - the harness uses only Node built-ins
 # (node:sqlite requires Node 22+).
 
 on:
@@ -16,6 +16,37 @@ on:
   workflow_call:
 
 jobs:
+  # A green check should say what it proved. tests/suites.json lists every
+  # suite in this repository and whether one of the pull-request workflows
+  # runs it; this fails when the tree holds a suite the list does not account
+  # for, or the list claims a command no workflow runs, and it puts the suites
+  # CI does not run on the pull request itself, so nobody has to remember to
+  # say so. tests/stress2 went unrun for months and only one pull request ever
+  # mentioned it; that is the hole this closes.
+  suites:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No dependency install here either: the checker uses only Node built-ins.
+      - name: The checker's own tests
+        run: node --test scripts/test-coverage.test.mjs
+
+      - name: Check the suite list, and say what CI does not run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: node scripts/test-coverage.mjs --markdown "$GITHUB_STEP_SUMMARY" ${PR:+--pr "$PR"}
+
   workflow-harness:
     runs-on: ubuntu-latest
     steps:
