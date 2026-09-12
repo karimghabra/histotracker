@@ -65,6 +65,22 @@ import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 /**
+ * Mutations run one at a time, app-wide.
+ *
+ * A commit is snapshot → write → record, and the snapshot is the whole SQLite
+ * file. Two overlapping commits both photograph the database BEFORE either
+ * write lands, so both record the same pre-edit image: undoing the second one
+ * silently throws away the first as well. Correcting several notes in one pass
+ * — tab, retype, tab — is exactly that shape, and the read is slow enough on a
+ * real lab database to leave the window wide open.
+ *
+ * Queuing here rather than per action covers every mutation in the app with one
+ * rule, including the description and per-slide note editors that sit in the
+ * same row as the notes.
+ */
+let commitQueue: Promise<unknown> = Promise.resolve();
+
+/**
  * Central mutation layer. Every action performs its DB write, invalidates the
  * relevant queries, and records a WHOLE-DATABASE snapshot for undo. Because the
  * DB is the single source of truth, undo/redo just swap the entire SQLite file
@@ -123,11 +139,19 @@ export function useActions() {
       // words: a viewer is told to use the workstation, an unsigned user is told
       // to sign in — which is the whole fix, and one click away.
       if (readOnly) throw new Error(readOnlyMessage(reason));
-      const before = await snapshotDb();
-      const result = await fn();
-      invalidate();
-      record({ label, snapshot: before });
-      return result;
+      const run = commitQueue.then(async () => {
+        const before = await snapshotDb();
+        const result = await fn();
+        invalidate();
+        record({ label, snapshot: before });
+        return result;
+      });
+      // A failed mutation must not wedge every later one behind its rejection.
+      commitQueue = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
     },
     [invalidate, reason, record, readOnly],
   );

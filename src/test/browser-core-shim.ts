@@ -32,6 +32,25 @@ function backupList(): Array<{ name: string; path: string; size: number }> {
   return out;
 }
 
+/**
+ * Reading the database file is instant here. On a real lab database the bytes
+ * are taken at once and then marshalled across the Tauri boundary for SECONDS,
+ * so a second save can read the same pre-edit file before the first has written
+ * — which is how two edits used to end up sharing one undo snapshot. The wait
+ * therefore goes AFTER the read, where the marshalling is. `?slowio=<ms>` lends
+ * that window to the spec that proves they no longer share one; unset, nothing
+ * waits and every other spec runs at full speed.
+ */
+function slowIoMs(): number {
+  const ms = Number(new URLSearchParams(window.location.search).get("slowio"));
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+function slowIo(): Promise<void> {
+  const ms = slowIoMs();
+  return ms === 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const SYNC_CONFIG = {
   role: "workstation",
   repo_owner: "",
@@ -132,6 +151,7 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
     // Real file IO against the virtual filesystem — powers undo/redo snapshots.
     case "read_file": {
       const bytes = readShimFile(String(_args?.path ?? ""));
+      await slowIo();
       return Array.from(bytes ?? new Uint8Array()) as unknown as T;
     }
     case "save_file": {
