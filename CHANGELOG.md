@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.1 - unreleased
+## 0.18.1 - 2026-09-12
 
 No schema change. The four note columns already existed and `updateSampleDetails` already wrote them, so the new caller writes through the same columns.
 A 0.18.0 instance opens a 0.18.1 database unchanged, and the reverse holds too.
@@ -18,7 +18,7 @@ A 0.18.0 instance opens a 0.18.1 database unchanged, and the reverse holds too.
   The Logs export is unchanged and does not carry two of the four notes.
   Its Slide Notes column is the physical slide's own note, not the sample's, and there is no cut-notes column in it at all, so correcting the sample-level Slide Notes or Sectioning / Cut Notes on screen will not show up the next time you export the same view.
 
-## 0.18.0 - unreleased
+## 0.18.0 - 2026-09-12
 
 One new column, `samples.embedding_notes` (#137), added at runtime with **no numbered migration**.
 The app adds the column itself whenever it opens a database, filled with the empty string; no row is rewritten.
