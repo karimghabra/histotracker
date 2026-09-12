@@ -179,10 +179,10 @@ describe("LogsView — the Assay Type filter", () => {
  */
 describe("LogsView — correcting a sample's notes", () => {
   const FOUR: Array<[string, string, string]> = [
-    ["Embedding notes", "embedding_notes", "cut face down"],
-    ["Cut notes", "cut_notes", "10 um"],
-    ["Slide notes", "slide_notes", "two sections per slide"],
-    ["Sample notes", "overall_notes", "decal ran long"],
+    ["Embedding Notes", "embedding_notes", "cut face down"],
+    ["Sectioning / Cut Notes", "cut_notes", "10 um"],
+    ["Slide Notes", "slide_notes", "two sections per slide"],
+    ["General Notes", "overall_notes", "decal ran long"],
   ];
 
   const withNotes = () =>
@@ -212,7 +212,7 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    const box = screen.getByLabelText("Cut notes for EE-1");
+    const box = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
     await userEvent.clear(box);
     await userEvent.type(box, "8 um");
     await userEvent.tab(); // save on blur, the same as the description
@@ -239,7 +239,7 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    await userEvent.click(screen.getByLabelText("Sample notes for EE-1"));
+    await userEvent.click(screen.getByLabelText("General Notes for EE-1"));
     await userEvent.tab();
     expect(data.calls).toEqual([]);
   });
@@ -266,10 +266,10 @@ describe("LogsView — correcting a sample's notes", () => {
     data.samples = [withNotes()];
     const { rerender } = render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
-    expect(screen.getByLabelText("Embedding notes for EE-1")).toHaveValue("cut face down");
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveValue("cut face down");
 
     data.samples = [{ ...data.samples[0], embedding_notes: "cut face UP" }];
     rerender(<LogsView />);
-    expect(screen.getByLabelText("Embedding notes for EE-1")).toHaveValue("cut face UP");
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveValue("cut face UP");
   });
 });

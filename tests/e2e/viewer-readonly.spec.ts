@@ -274,7 +274,7 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await expect(notes).toHaveAttribute("readonly", "");
   // All four notes are correctable on the workstation, so all four have to be
   // read-only here — one of them left writable is the #72 bug again.
-  for (const label of ["Embedding notes", "Cut notes", "Slide notes", "Sample notes"]) {
+  for (const label of ["Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes"]) {
     await expect(vw.getByLabel(`${label} for EE-1`)).toHaveAttribute("readonly", "");
   }
 

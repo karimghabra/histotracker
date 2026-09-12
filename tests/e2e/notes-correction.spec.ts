@@ -34,10 +34,10 @@ const CORRECTED = {
 /** The four note editors in a block's expanded Logs row, by their own labels. */
 function noteEditors(page: Page, code: string) {
   return {
-    embedding: page.getByLabel(`Embedding notes for ${code}`),
-    cut: page.getByLabel(`Cut notes for ${code}`),
-    slide: page.getByLabel(`Slide notes for ${code}`),
-    sample: page.getByLabel(`Sample notes for ${code}`),
+    embedding: page.getByLabel(`Embedding Notes for ${code}`),
+    cut: page.getByLabel(`Sectioning / Cut Notes for ${code}`),
+    slide: page.getByLabel(`Slide Notes for ${code}`),
+    sample: page.getByLabel(`General Notes for ${code}`),
   };
 }
 

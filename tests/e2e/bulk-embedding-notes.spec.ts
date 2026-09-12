@@ -110,7 +110,7 @@ async function expectNoteEverywhere(
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: code, exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  await expect(page.getByLabel(`Embedding notes for ${code}`)).toHaveValue(note);
+  await expect(page.getByLabel(`Embedding Notes for ${code}`)).toHaveValue(note);
   await page.getByRole("cell", { name: code, exact: true }).click(); // collapse
 
   expect(exported.csv.get(code), `${code} in the CSV export`).toBe(note);

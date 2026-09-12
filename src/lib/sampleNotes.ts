@@ -19,22 +19,22 @@ import type { Sample } from "./types";
 export const SAMPLE_NOTES = [
   {
     field: "embedding_notes",
-    label: "Embedding notes",
+    label: "Embedding Notes",
     placeholder: "Orientation and handling for whoever embeds this block…",
   },
   {
     field: "cut_notes",
-    label: "Cut notes",
+    label: "Sectioning / Cut Notes",
     placeholder: "Instructions for the microtome…",
   },
   {
     field: "slide_notes",
-    label: "Slide notes",
+    label: "Slide Notes",
     placeholder: "How this sample's slides should be prepared…",
   },
   {
     field: "overall_notes",
-    label: "Sample notes",
+    label: "General Notes",
     placeholder: "Notes about this sample…",
   },
 ] as const satisfies ReadonlyArray<{

@@ -288,7 +288,7 @@ function NotesEditor({
         if (readOnly) return;
         if (text !== (value ?? "")) onSave(text);
       }}
-      className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
+      className="w-full resize-none rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
   );
 }
