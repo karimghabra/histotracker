@@ -271,22 +271,19 @@ export function useActions() {
    *
    * Unchanged text is dropped rather than committed, so reading a note — which
    * means focusing and blurring a textarea — never buries the user's real undo
-   * history under no-op entries. Answers whether the record actually changed,
-   * because the screen holds what was typed only while a real write is on its
-   * way: it must never keep showing words the database does not hold.
+   * history under no-op entries.
    */
   const editSampleNote = useCallback(
-    async (sampleId: number, field: SampleNoteField, text: string): Promise<boolean> => {
+    async (sampleId: number, field: SampleNoteField, text: string) => {
       const before = await getSample(sampleId);
-      if (!before) return false;
-      if ((before[field] ?? "") === text.trim()) return false;
+      if (!before) return;
+      if ((before[field] ?? "") === text.trim()) return;
       // displayCode, because this label is shown to the user in the undo flash
       // and every other surface calls the block EE-1, not EE-0001 (#87).
       await commit(
         `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
         () => setSampleNote(sampleId, field, text),
       );
-      return true;
     },
     [commit],
   );

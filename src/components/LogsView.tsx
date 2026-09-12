@@ -307,24 +307,20 @@ function SampleNote({
   code: string;
   value: string;
   placeholder: string;
-  onSave: (notes: string) => Promise<boolean>;
+  onSave: (notes: string) => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
-  // The text just typed, held on screen only while a write is on its way to the
-  // record. A save is a write plus a whole-database snapshot for the undo stack,
-  // and the refetch behind that is not instant on a real lab database — without
-  // the hold the note flips back to the words it replaced the instant focus
-  // leaves, or vanishes if it is the first thing written here, which reads as
-  // "it did not take" and invites a retype. It is let go the moment the record
-  // answers: when the new words arrive, and equally when the save wrote nothing
-  // or failed, because a note the database does not hold must not sit here
-  // looking saved.
-  const [pending, setPending] = useState<{ text: string; was: string } | null>(null);
+  // The text just typed, held on screen for exactly as long as the write of it
+  // is in flight. A save is a write plus a whole-database snapshot for the undo
+  // stack — without the hold the note flips back to the words it replaced the
+  // instant focus leaves, or vanishes if it is the first thing written here,
+  // which reads as "it did not take" and invites a retype. The write finishing
+  // is what ends the hold, whatever it did: wrote, wrote nothing, or failed. So
+  // the screen goes back to the record as soon as the record can answer, and an
+  // undo landing in the meantime is what the row then shows.
+  const [pending, setPending] = useState<string | null>(null);
   const readOnly = useReadOnly();
-  useEffect(() => {
-    if (pending && pending.was !== value) setPending(null);
-  }, [pending, value]);
-  const shown = pending && pending.was === value ? pending.text : (value ?? "");
+  const shown = pending ?? value ?? "";
   return (
     <div>
       <div className="mb-1 mt-3 flex items-center gap-1.5">
@@ -335,7 +331,9 @@ function SampleNote({
             aria-label={`Edit ${label} for ${code}`}
             title="Correct this note"
             onClick={() => setEditing(true)}
-            className="text-ink-faint hover:text-brand"
+            // Negative margin against the padding: a hand at a bench needs more
+            // than an 11px square to hit, and this is the only way in.
+            className="-m-1 p-1 text-ink-faint hover:text-brand"
           >
             <Pencil size={11} />
           </button>
@@ -349,17 +347,10 @@ function SampleNote({
           ariaLabel={`${label} for ${code}`}
           autoFocus
           onSave={(text) => {
-            setPending({ text, was: value ?? "" });
-            const letGo = () => setPending((p) => (p && p.text === text ? null : p));
-            void onSave(text).then(
-              (wrote) => {
-                if (!wrote) letGo();
-              },
-              (err: unknown) => {
-                letGo();
-                throw err;
-              },
-            );
+            setPending(text);
+            // Not caught: a failed save still reaches App's unhandledrejection
+            // backstop to be said out loud (#72).
+            void onSave(text).finally(() => setPending((p) => (p === text ? null : p)));
           }}
           onDone={() => setEditing(false)}
         />

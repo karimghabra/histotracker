@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Sample, Slide } from "../lib/types";
 import { ReadOnlyProvider } from "../lib/readOnly";
@@ -12,10 +12,10 @@ const data = vi.hoisted(() => ({
   catalog: [] as Array<{ id: number; assay_type: string; name: string; is_active: number }>,
   // Every action the view calls, in order, as [name, ...args].
   calls: [] as Array<[string, ...unknown[]]>,
-  // What a save answers: whether it changed the record, or the failure it hit.
-  // editSampleNote reports this so the view knows whether the words it is
-  // holding on screen are on their way into the database.
-  wrote: true,
+  // How a save behaves: it succeeds when the test lets it, or it fails. The
+  // view holds the typed words on screen for exactly as long as the write is in
+  // flight, so a test has to be able to hold one open.
+  finishSave: null as null | (() => void),
   failure: null as Error | null,
 }));
 
@@ -35,7 +35,10 @@ vi.mock("../hooks/useActions", () => ({
           (_t, name: string) =>
           (...args: unknown[]) => {
             data.calls.push([name, ...args]);
-            return data.failure ? Promise.reject(data.failure) : Promise.resolve(data.wrote);
+            if (data.failure) return Promise.reject(data.failure);
+            return new Promise<boolean>((resolve) => {
+              data.finishSave = () => resolve(true);
+            });
           },
       },
     ),
@@ -104,7 +107,7 @@ function stainsCell(code: string): HTMLElement {
 }
 
 beforeEach(() => {
-  data.wrote = true;
+  data.finishSave = null;
   data.failure = null;
   localStorage.clear();
   nextId = 1;
@@ -250,33 +253,6 @@ describe("LogsView — correcting a sample's notes", () => {
     }
   });
 
-  // Between the blur and the refetch the record has not caught up yet. What the
-  // user typed has to stay on screen through that gap, or a correction reads as
-  // having been thrown away.
-  it("keeps the typed note on screen until the record catches up", async () => {
-    data.samples = [withNotes()];
-    const { rerender } = render(<LogsView />);
-    await userEvent.click(screen.getByText("EE-1"));
-
-    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
-    await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
-    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
-    await userEvent.tab();
-
-    // The save is still in flight: the data still reads back the old note.
-    rerender(<LogsView />);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
-
-    // It lands, and the note follows the record again — an undo moves it rather
-    // than leaving it stuck on the typed text.
-    data.samples = [{ ...data.samples[0], cut_notes: "8 um" }];
-    rerender(<LogsView />);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
-    data.samples = [{ ...data.samples[0], cut_notes: "10 um" }];
-    rerender(<LogsView />);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
-  });
-
   it("writes the corrected text to that note alone", async () => {
     data.samples = [withNotes()];
     render(<LogsView />);
@@ -320,26 +296,36 @@ describe("LogsView — correcting a sample's notes", () => {
     expect(data.calls).toEqual([]);
   });
 
-  // The hold on the typed words is only good while a write is on its way. A
-  // save that changes nothing — a stray newline the record trims away — must
-  // not leave the screen quoting text the database does not hold.
-  it("lets the typed note go when the save wrote nothing", async () => {
+  // While the write is on its way the record has not caught up yet. What the
+  // user typed has to stay on screen through that gap, or a correction reads as
+  // having been thrown away — and it has to stop the moment the write is done,
+  // because after that the record is the only thing that can be trusted.
+  it("keeps the typed note on screen while the save is in flight", async () => {
     data.samples = [withNotes()];
-    data.wrote = false;
-    render(<LogsView />);
+    const { rerender } = render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
     await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
-    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), " ");
+    await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
     await userEvent.tab();
 
-    // Exactly the stored words, not the stray space: the record trimmed it away
-    // and never changed, so nothing is held over it.
+    // The write has not finished: the data still reads back the old note.
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
+
+    // It finishes, and the row goes back to reading the record — which is also
+    // what an undo landing in this window leaves behind, and what a save that
+    // wrote nothing (a stray space the record trims away) leaves behind.
+    await act(async () => {
+      data.finishSave?.();
+    });
+    rerender(<LogsView />);
     expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
   });
 
-  // And a save that FAILED must revert too, rather than showing a correction
-  // that was never recorded. The message is App's unhandledrejection backstop.
+  // A save that FAILED must let go too, rather than showing a correction that
+  // was never recorded. The message is App's unhandledrejection backstop.
   it("lets the typed note go when the save fails", async () => {
     await expectingAFailedSave(async () => {
       data.samples = [withNotes()];
@@ -353,7 +339,7 @@ describe("LogsView — correcting a sample's notes", () => {
       await userEvent.tab();
 
       rerender(<LogsView />);
-      expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
+      expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
     });
   });
 
