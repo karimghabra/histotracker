@@ -257,7 +257,7 @@ export function useActions() {
     async (sampleId: number, column: string, value: string | null) => {
       const before = await getSample(sampleId);
       if (!before) return;
-      await commit(`Edit time · ${before.sample_code}`, () =>
+      await commit(`Edit time · ${displayCode(before.sample_code)}`, () =>
         setStageTimestamp(sampleId, column, value),
       );
     },
@@ -297,7 +297,7 @@ export function useActions() {
     async (sampleId: number, description: string) => {
       const before = await getSample(sampleId);
       if (!before || (before.sample_description ?? "") === description.trim()) return;
-      await commit(`Edit ${before.sample_code} description`, () =>
+      await commit(`Edit ${displayCode(before.sample_code)} description`, () =>
         setSampleDescription(sampleId, description),
       );
     },

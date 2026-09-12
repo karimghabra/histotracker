@@ -275,4 +275,13 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await page.getByTitle("Redo (Ctrl+Y)").click();
   await expect(page.getByText("Redone: Edit EE-1 embedding notes")).toBeVisible();
   await expect(noteEditors(page, "EE-1").embedding).toHaveValue(CORRECTED.embedding);
+
+  // The description sits in the same expanded row and lands in the same stack,
+  // so it has to name the block the same way — a stack reading "Edit EE-0001
+  // description" above "Edit EE-1 embedding notes" is two names for one block.
+  const description = page.getByLabel("Description for EE-1");
+  await description.fill("TE8-12 fixing sample, re-embedded");
+  await description.blur();
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByText("Undone: Edit EE-1 description")).toBeVisible();
 });
