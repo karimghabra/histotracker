@@ -17,13 +17,6 @@ Proven on a populated pre-existing database by `pnpm test:legacy`, including a r
   A batch can carry **one note for all** its samples or **a note for each**, chosen with a switch above the box.
   Each mode keeps its own text, so switching back and forth loses nothing; only the mode on screen is saved.
 
-- **Any note about a block can be corrected from the Logs.**
-  A note is typed once, when the block is logged in, and read back days later in the Logs — which is where a wrong one is noticed and, until now, the one place nothing could be done about it.
-  Expanding a sample in the Logs now shows all four of its notes — Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes — each in a box that saves when you click away, and each taken back with `Ctrl+Z`.
-  A note that was never written gets an empty box, so it can be filled in later.
-  Nothing else about the block is rewritten: a correction touches that one note, not the fixative, the stains or the other notes.
-  A read-only viewer still only reads them, and sees a box only for the notes the block actually carries.
-
 - **Assigned stains now show up in the log before anything is cut (#136).**
   The main screen has always known a block owes a stain: the card flags it, and the drawer lists it as "Requested".
   The Logs read physical slides only, so a block sitting in fixative with Safranin O assigned read as having no stains at all, and neither did a block already cut for one agent with a second still owed.
