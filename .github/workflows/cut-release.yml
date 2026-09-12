@@ -81,6 +81,13 @@ jobs:
   tests:
     needs: plan
     if: needs.plan.outputs.publish == 'true'
+    # test.yml's `suites` job asks for pull-requests: write so it can post what
+    # a pull request's CI did not run. A called workflow may only narrow the
+    # caller's token, so the permission is granted here too; there is no pull
+    # request on a release run, so nothing is written.
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/test.yml
 
   build:

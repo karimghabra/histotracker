@@ -15,11 +15,18 @@ pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
 pnpm test:compat           # the released build in use vs this tree, both directions
 pnpm test:release          # release checks' own tests, then this tree's version sources agree
+pnpm test:suites           # every suite is accounted for in tests/suites.json (see below)
 cd src-tauri && cargo check && cargo test --lib
 ```
 
 `pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All of the
 above should pass before pushing.
+
+`tests/suites.json` is the answer to what a green check proved.
+It lists every suite this repository has, with either the command a pull request's CI runs it with or the reason CI does not run it.
+`scripts/test-coverage.mjs` (CI job `suites`) fails when the tree holds a suite the file does not account for - a `package.json` script, a directory under `tests/`, or a vitest/Playwright config - or when the file claims a command no workflow runs, and it posts the unrun suites on every pull request.
+So **a new suite, script, test directory or test config must be added to `tests/suites.json` in the same change**, or CI goes red.
+This is the same mechanism as projtracker's `tests/suites.json`, read the same way.
 
 Playwright suites drive the real app in Chromium against the sql.js Tauri
 shim. A schema or workflow change should run the first two; the third walks the

@@ -1,0 +1,91 @@
+{
+  "$comment": "Every test suite this repository has, and whether a pull request's CI runs it. scripts/test-coverage.mjs fails CI when a package.json script, a directory under tests/ or a test config is missing from this file, and posts the suites marked notOnPr on every pull request, so a green check never claims a suite it did not run.",
+  "workflows": [".github/workflows/test.yml", ".github/workflows/release-integrity.yml"],
+  "suites": {
+    "pnpm exec tsc --noEmit": {
+      "what": "The frontend typechecks. tsconfig.json includes src only, so nothing under tests/ or scripts/ is covered (AGENTS.md, 'the other hand-maintained ports').",
+      "notAScript": "CI typechecks without building. The `build` script is `tsc && vite build`, and the vite build runs only inside the installer.",
+      "pr": "pnpm exec tsc --noEmit"
+    },
+    "test": {
+      "what": "The data-layer workflow harness: the real migrations loaded into in-memory SQLite, the lab-pipeline invariants, and a gate per GitHub issue.",
+      "pr": "node scripts/workflow-test.mjs"
+    },
+    "test:legacy": {
+      "what": "A real populated pre-0023 database, taken up both upgrade paths.",
+      "pr": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs"
+    },
+    "test:ui": {
+      "what": "Component and render tests under jsdom. vitest.config.ts includes src/**/*.test.{ts,tsx} only.",
+      "configs": ["vitest.config.ts"],
+      "pr": "pnpm exec vitest run"
+    },
+    "test:e2e": {
+      "what": "The real app in Chromium against the sql.js Tauri shim: read-only gating, drawer state, filters, the request dialog, everything above the data layer.",
+      "dirs": ["tests/e2e"],
+      "configs": ["playwright.config.ts"],
+      "pr": "pnpm exec playwright test"
+    },
+    "test:compat": {
+      "what": "The release in use and this tree, each opening, working on, reverting and syncing the other's database (docs/release_compat.md).",
+      "dirs": ["tests/compat"],
+      "configs": ["vitest.compat.config.ts"],
+      "pr": "pnpm test:compat"
+    },
+    "test:release": {
+      "what": "The release checks' own tests, and that this tree's five version sources agree. The same workflow also runs `release-check.mjs provenance`, which is a check on the repository rather than a suite.",
+      "pr": "node --test scripts/release-check.test.mjs"
+    },
+    "test:suites": {
+      "what": "This file checked against the tree and the workflows, and the checker's own tests.",
+      "pr": "node --test scripts/test-coverage.test.mjs"
+    },
+    "cargo test --lib --locked": {
+      "what": "The Rust shell, and in it db_migrate_image (src-tauri/src/migrate.rs), which the TypeScript model in src/test/sqlx-migrator.ts only stands in for. The same job runs `cargo check --locked` first, which is what catches a version bumped in Cargo.toml and not in Cargo.lock.",
+      "notAScript": "The Rust shell is built by cargo, not by pnpm; the job runs it in src-tauri.",
+      "pr": "cargo test --lib --locked"
+    },
+    "test:staining": {
+      "what": "The staining-stack model agreed for 0.3.3: cross-sample racks, substage advance as a unit, scatter on leaving staining.",
+      "notOnPr": "It is self-contained by design (scripts/staining-stack-harness.mjs): it builds its own tables and its own reference implementation, so it asserts nothing about this tree's migrations or src/lib/db.ts and cannot go red on a change to them."
+    },
+    "test:stress": {
+      "what": "The v1 stress walk: hand-written paths that fill the database up, with retries off and console errors fatal.",
+      "dirs": ["tests/stress"],
+      "configs": ["playwright.stress.config.ts"],
+      "notOnPr": "It is slow and fills the database up rather than proving one behaviour, so playwright.stress.config.ts keeps it out of the path that gates every push. Superseded in method by test:stress2 and test:stress3."
+    },
+    "test:stress2": {
+      "what": "Scale and invariants: a seeded random walk of thousands of data-layer actions, fuzzed interleavings, sentinel values, and an invariant set derived from defects that were real.",
+      "dirs": ["tests/stress2"],
+      "configs": ["playwright.stress2.config.ts"],
+      "notOnPr": "It has never been wired into any CI job. It is minutes long, and AGENTS.md asks for it to be run locally on a schema or workflow change. Recorded here rather than left silent: this is the suite whose absence from CI went unnoticed until a pull request author happened to write it down by hand."
+    },
+    "test:stress3": {
+      "what": "The explorer: the walk of v2 driven through the real UI, with each surface compared against a count recomputed from the store, plus Undo and Redo (docs/stress_test_v3.md).",
+      "dirs": ["tests/stress3"],
+      "configs": ["playwright.stress3.config.ts"],
+      "notOnPr": "It has never been wired into any CI job. It drives the browser for minutes, and AGENTS.md asks for it to be run locally on a schema or workflow change."
+    },
+    "playwright test --config playwright.showcase.config.ts": {
+      "what": "The tutorial and screenshot walkthrough: it photographs the app's screens for a person to look at.",
+      "notAScript": "It has no package.json script; the config's own header says to run it with `npx playwright test --config playwright.showcase.config.ts`.",
+      "dirs": ["tests/tutorial"],
+      "configs": ["playwright.showcase.config.ts"],
+      "notOnPr": "It is kept out of the main suite on purpose so it never gates a release, and it takes screenshots rather than asserting behaviour."
+    }
+  },
+  "otherScripts": {
+    "dev": "The Vite dev server against the Tauri shell.",
+    "dev:browser": "The Vite dev server with the sql.js Tauri shim, which every Playwright suite serves.",
+    "build": "tsc && vite build. CI typechecks with `tsc --noEmit`; the vite build itself runs only inside the installer build, as tauri.conf.json's beforeBuildCommand.",
+    "preview": "Serves a built frontend locally.",
+    "tauri": "The Tauri CLI.",
+    "test:e2e:headed": "The end-to-end suite with a visible browser, for local work.",
+    "test:e2e:ui": "The end-to-end suite in Playwright's UI mode, for local work."
+  },
+  "otherPaths": {
+    "tests/fixtures": "Recorded databases the suites read; tests/fixtures/legacy-pre-0023.b64 is test:legacy's input.",
+    "tests/helpers": "Page helpers shared by the Playwright suites."
+  }
+}
