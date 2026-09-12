@@ -127,10 +127,9 @@ Expand a sample for its timeline, notes and slides — each slide has its own
 condensed timeline and notes. The sample's four notes (Embedding, Sectioning /
 Cut, Slide and General) read as plain text, however long they run, and are
 **correctable right there**: click one to open a box, correct it, click away to
-save it, `Ctrl+Z` to take it back. A note nobody wrote at intake shows a dash
-(or the intake hint) and opens the same way, so you can fill it in later. A
-read-only viewer reads them and cannot open them, and is shown only the notes
-the block actually carries.
+save it, `Ctrl+Z` to take it back. A note nobody wrote at intake shows **Add a
+note** in its place, so you can fill it in later. A read-only viewer reads them
+and cannot open them, and is shown only the notes the block actually carries.
 
 ## 9. Depth tagging (optional)
 

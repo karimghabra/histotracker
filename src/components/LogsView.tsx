@@ -324,6 +324,22 @@ function SampleNote({
       />
     );
   }
+  // Nothing was written, so there is no note to read: what stands here is the
+  // invitation to write one, and it says so. The intake hint stays where it is
+  // honest — inside the box, once it is open — rather than reading, under the
+  // heading, as an instruction someone recorded about this block.
+  if (!text.trim()) {
+    return (
+      <button
+        type="button"
+        aria-label={`Add ${ariaLabel}`}
+        onClick={() => setEditing(true)}
+        className="w-full rounded-md border border-dashed border-line bg-white px-2 py-1 text-left text-[11px] text-ink-faint hover:border-brand/50 hover:text-ink"
+      >
+        Add a note
+      </button>
+    );
+  }
   // `note` rather than `button`: a button's aria-label REPLACES what it contains,
   // so the note itself would never be spoken on the surface that exists to read
   // it back. This names the field and leaves the words as the content they are —
@@ -359,7 +375,7 @@ function SampleNote({
         !readOnly && "cursor-text bg-white hover:border-brand/50",
       )}
     >
-      {text.trim() ? text : <span className="text-ink-faint">{placeholder || "—"}</span>}
+      {text}
     </p>
   );
 }

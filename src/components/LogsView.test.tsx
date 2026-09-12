@@ -243,7 +243,10 @@ describe("LogsView — correcting a sample's notes", () => {
     await userEvent.click(screen.getByText("EE-2"));
 
     for (const [label] of FOUR) {
-      await userEvent.click(screen.getByLabelText(`${label} for EE-2`));
+      // No note was written, so nothing is quoted back as one — what is offered
+      // is the invitation to write it.
+      expect(screen.queryByLabelText(`${label} for EE-2`)).toBeNull();
+      await userEvent.click(screen.getByLabelText(`Add ${label} for EE-2`));
       expect(screen.getByLabelText(`${label} for EE-2`)).toHaveValue("");
       await userEvent.tab();
     }
