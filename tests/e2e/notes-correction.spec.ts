@@ -255,6 +255,14 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await expect(page.getByText("EE-1")).toBeVisible();
 
   await expandInLogs(page, "EE-1");
+
+  // The description sits in the same expanded row and lands in the same undo
+  // stack, so it has to name the block the same way — a stack reading "Edit
+  // EE-0001 description" under "Edit EE-1 embedding notes" is two names for one
+  // block. Corrected first, and saved the way it really is: by moving on to the
+  // note below it.
+  await page.getByLabel("Description for EE-1").fill("TE8-12 fixing sample, re-embedded");
+
   const embedding = noteEditors(page, "EE-1").embedding;
   await embedding.fill(CORRECTED.embedding);
   await embedding.blur();
@@ -276,13 +284,11 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await expect(page.getByText("Redone: Edit EE-1 embedding notes")).toBeVisible();
   await expect(noteEditors(page, "EE-1").embedding).toHaveValue(CORRECTED.embedding);
 
-  // The description sits in the same expanded row and lands in the same stack,
-  // so it has to name the block the same way — a stack reading "Edit EE-0001
-  // description" above "Edit EE-1 embedding notes" is two names for one block.
-  const description = page.getByLabel("Description for EE-1");
-  await description.fill("TE8-12 fixing sample, re-embedded");
-  await description.blur();
-  await expect(description).toHaveValue("TE8-12 fixing sample, re-embedded");
+  // Down to the description underneath it, which names the same block the same
+  // way and restores the text it replaced.
+  await page.getByTitle("Undo (Ctrl+Z)").click();
+  await expect(page.getByText("Undone: Edit EE-1 embedding notes")).toBeVisible();
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByText("Undone: Edit EE-1 description")).toBeVisible();
+  await expect(page.getByLabel("Description for EE-1")).toHaveValue("TE8-12 fixing sample");
 });

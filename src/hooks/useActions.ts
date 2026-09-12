@@ -74,6 +74,8 @@ import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly
 export function useActions() {
   const qc = useQueryClient();
   const record = useUndoStore((s) => s.record);
+  const beginNoteSave = useUndoStore((s) => s.beginNoteSave);
+  const endNoteSave = useUndoStore((s) => s.endNoteSave);
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
 
@@ -275,17 +277,22 @@ export function useActions() {
    */
   const editSampleNote = useCallback(
     async (sampleId: number, field: SampleNoteField, text: string) => {
-      const before = await getSample(sampleId);
-      if (!before) return;
-      if ((before[field] ?? "") === text.trim()) return;
-      // displayCode, because this label is shown to the user in the undo flash
-      // and every other surface calls the block EE-1, not EE-0001 (#87).
-      await commit(
-        `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
-        () => setSampleNote(sampleId, field, text),
-      );
+      beginNoteSave();
+      try {
+        const before = await getSample(sampleId);
+        if (!before) return;
+        if ((before[field] ?? "") === text.trim()) return;
+        // displayCode, because this label is shown to the user in the undo flash
+        // and every other surface calls the block EE-1, not EE-0001 (#87).
+        await commit(
+          `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
+          () => setSampleNote(sampleId, field, text),
+        );
+      } finally {
+        endNoteSave();
+      }
     },
-    [commit],
+    [commit, beginNoteSave, endNoteSave],
   );
 
   /**

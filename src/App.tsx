@@ -88,6 +88,7 @@ export default function App() {
   const { moveSamples, moveSections, moveSlideStacks, startProcessingBatch, planProcessingBatch, confirmProcessingBatchStart, editBatchMembers, moveProcessingBatch, editBatchStart, togglePriority, undo, redo } = useActions();
   const undoDepth = useUndoStore((s) => s.undoStack.length);
   const redoDepth = useUndoStore((s) => s.redoStack.length);
+  const savingNote = useUndoStore((s) => s.pendingNoteSaves > 0);
 
   // ---- Shared-data sync -----------------------------------------------------
   const { data: syncConfig } = useQuery({ queryKey: ["sync-config"], queryFn: getSyncConfig });
@@ -318,6 +319,9 @@ export default function App() {
     const onKey = async (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // The same refusal the toolbar shows while a note correction is still
+      // being written — undoing now would pop the action before it.
+      if (useUndoStore.getState().pendingNoteSaves > 0) return;
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
       if (key === "z" && !e.shiftKey) {
@@ -796,7 +800,7 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Undo (Ctrl+Z)"
-                  disabled={undoDepth === 0}
+                  disabled={undoDepth === 0 || savingNote}
                   onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
                 >
                   <Undo2 size={15} />
@@ -805,7 +809,7 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Redo (Ctrl+Y)"
-                  disabled={redoDepth === 0}
+                  disabled={redoDepth === 0 || savingNote}
                   onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
                 >
                   <Redo2 size={15} />
