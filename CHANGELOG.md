@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.18.1 - unreleased
+
+No schema change. The four note columns already existed and `updateSampleDetails` already wrote them, so the new caller writes through the same columns.
+A 0.18.0 instance opens a 0.18.1 database unchanged, and the reverse holds too.
+
+- **Any of a sample's four notes can now be corrected from the Logs (#155).**
+  Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes could only be written once, at intake or in the sample drawer, so a note typed wrong yesterday stayed wrong today.
+  The Logs is where a wrong note actually gets noticed, since that is where the record is read back, so the correction had to be reachable from there and not only from the form where the note was first written.
+  The expanded Logs row now shows all four notes as plain wrapped text with a pencil beside each heading, and the pencil opens a save-on-blur editor.
+  A note nobody has written yet still shows its pencil so it can be written later, and a read-only viewer sees no pencil on any note.
+
+  Reopening a note within about a second of saving it can undo your own correction.
+  The row can briefly show the old text while the write is still landing, and opening the editor inside that window and clicking away writes the old text back over what you just typed, with no error and an undo entry like any other edit.
+  The normal path is unaffected: type, click away, leave it alone, and the correction stands.
+
+  The Logs export is unchanged and does not carry two of the four notes.
+  Its Slide Notes column is the physical slide's own note, not the sample's, and there is no cut-notes column in it at all, so correcting the sample-level Slide Notes or Sectioning / Cut Notes on screen will not show up the next time you export the same view.
+
 ## 0.18.0 - unreleased
 
 One new column, `samples.embedding_notes` (#137), added at runtime with **no numbered migration**.
