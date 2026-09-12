@@ -313,7 +313,12 @@ export function useActions() {
   );
 
   const editSlideNotes = useCallback(
-    (slideId: number, notes: string) => commit("Edit slide notes", () => setSlideNotes(slideId, notes)),
+    async (slideId: number, notes: string) => {
+      const before = await getSlide(slideId);
+      if (!before) return;
+      if ((before.notes ?? "") === notes.trim()) return;
+      await commit("Edit slide notes", () => setSlideNotes(slideId, notes));
+    },
     [commit],
   );
 
