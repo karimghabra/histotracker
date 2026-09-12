@@ -1347,10 +1347,12 @@ function FragmentRow({
 
                 An empty box is kept here so a note that was never written can
                 still be filled in — the reason the read-only display this
-                replaced (#137) was not enough. On a viewer, which cannot fill
-                one in, the empty ones are left out and the row reads as terse as
-                it did before. Six rows because a note is typed at a bench and
-                runs to several lines; the box is still draggable past that. */}
+                replaced (#137) was not enough. Wherever one cannot be filled in
+                the empty ones are left out and the row reads as terse as it did
+                before: on a viewer, and on a workstation nobody has signed in to
+                yet, which is how the app comes up (#128 — `useReadOnly` is true
+                for both). Six rows because a note is typed at a bench and runs
+                to several lines; the box is still draggable past that. */}
             {SAMPLE_NOTES.map(({ field, label, placeholder }) => {
               const written = (sample[field] ?? "").trim();
               if (readOnly && !written) return null;
