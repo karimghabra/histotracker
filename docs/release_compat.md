@@ -101,7 +101,8 @@ record, the Logs CSV and XLSX, and the status workbook.
   survival of a value nobody writes proves nothing.
 - **You add a numbered migration:** the ledger check fails against every release that lacks it.
   That failure is the real thing: once this build opens the database, the older build refuses it, and so does every sync viewer still running it.
-  Nothing on this build is exposed: a backup revert and a sync pull both run the migrations on the image before swapping it in, so neither can leave a database the next launch cannot open.
+  A backup revert and a sync pull both run the migrations on the image before swapping it in, so neither leaves a database the next launch cannot open.
+  One hazard survives in a new form, and `docs/shared_data_sync.md` §1a states it: a migration that adds a column `ensureRuntimeSchema()` already converges makes every image the previous build wrote refusable, so reverting to its backups and pulling from a workstation still on it both stop working.
   Converge the column at runtime only (see AGENTS.md, precedent `samples.embedding_notes`).
   The alternative is to get the captain's sign-off and record the version in `ACCEPTED_ONE_WAY` in the test, which then asserts the refusal instead of failing on it.
 - **An older release lacks a function the lab uses:** that step is skipped and

@@ -31,6 +31,24 @@ npx playwright test --config playwright.stress2.config.ts  # scale + invariants
 npx playwright test --config playwright.stress3.config.ts  # the explorer
 ```
 
+**What the whole set costs**, measured 2026-09-11 on the lab's WSL2 host with
+nothing else running. Budget from the loaded figure, not the idle one: the same
+suites took ~34 min while other work shared the machine (e2e 10.4 min, stress2
+16.5 min).
+
+| suite | idle | scope |
+| --- | --- | --- |
+| `build` + `test` + `test:ui` + `test:legacy` + `test:release` | 17s | the five node steps |
+| `test:compat` | 16s | 26 tests |
+| `npx playwright test` | 482s | 148 tests |
+| stress2 | 702s | 14 tests |
+| stress3 | 363s | 13 tests |
+| **total** | **1580s (26m20s)** | |
+
+**Never run the packaged desktop app or its suite on the lab machine.** It opens
+real windows on the desktop someone is working on. Browser suites are headless;
+keep them that way (`DISPLAY` unset) so nothing can reach the desktop.
+
 If Chromium fails to launch with `libnspr4.so: cannot open shared object file`
 and there is no sudo, fetch the libraries without root: `apt-get download
 libnspr4 libnss3 libasound2t64`, `dpkg-deb -x` each, and put the extracted
@@ -100,8 +118,8 @@ breaks at runtime. Update all of these in the same change:
 - `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
-  An image from elsewhere, a backup or a pulled sync snapshot, goes through `bringImageUpToDate()` (`src/lib/db.ts`) before it is swapped in.
-  That runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations so the migration record in the file stays true, or refuses it with nothing changed.
+  An image from elsewhere, a backup or a pulled sync snapshot, goes live only through `swapInImageFromElsewhere()` (`src/lib/db.ts`).
+  That first runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations so the migration record in the file stays true, or refuses it with nothing changed.
   The test harnesses model that command in `src/test/sqlx-migrator.ts`, refusal wording included; the CI `rust` job runs the real command's tests.
 
 ## Docs worth reading

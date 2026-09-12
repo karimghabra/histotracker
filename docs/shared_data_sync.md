@@ -38,8 +38,8 @@ All three swap a DB *file* under the live connection, and `tauri-plugin-sql` onl
 
 The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
 `getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
-So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, first goes through `bringImageUpToDate()` (`src/lib/db.ts`).
-It runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
+So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, goes live through one swap-in, `swapInImageFromElsewhere()` (`src/lib/db.ts`), so the two cannot drift apart.
+It first runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
 The image goes live fully migrated, with a record sqlx itself wrote.
 Undo images need none of this: this build took them, in this session, after its own migrations had run.
 
@@ -51,6 +51,11 @@ A refused pull shows as a sync error, telling the viewer to update Histometer wh
 
 A numbered migration still makes the upgrade one-way: an older build refuses a database recording a version it does not know, and so does every sync viewer still running it.
 But neither a revert nor a pull can leave a newer build unable to launch.
+
+One hazard survives in a new form, and it is a further reason to reach for rule 3 below.
+A numbered migration that adds a column `ensureRuntimeSchema()` already converges makes every image the previous build wrote refusable: the column is in the image, while its ledger does not record the migration, so `db_migrate_image` gets `ExecuteMigration` and refuses it ("duplicate column name").
+The captain then cannot revert to any backup the previous build took, and a viewer on the new build pulling from a workstation still on the old one is refused on every sync cycle and never advances `last_synced_version`, so it stops syncing until the workstation updates.
+A column that is converged at runtime stays converged at runtime; giving it a numbered migration later is not a safe tidy-up.
 
 Three rules keep updates compatible with existing databases:
 
@@ -189,14 +194,14 @@ React Query is invalidated only when new data actually arrives.
 
 `pullSnapshotIfNewer()` performs, in order:
 
-1. `bringImageUpToDate(downloadedBytes)` runs this build's migrations on the snapshot (§1a).
-   A snapshot it refuses stops the pull here with a sync error: the live file, the connection and `last_synced_version` are untouched.
-2. `getDbFilePath()` — resolve the live SQLite path via
-   `PRAGMA database_list` (never hardcode the plugin's storage dir).
-3. `resetDb()` — close the pooled connection and drop the memoized promise so
-   the file isn't locked.
-4. `save_file(dbPath, migratedBytes)` — overwrite the SQLite file (Rust command).
-5. `setLastSyncedVersion(version)` — the next `getDb()` reopens the new file.
+1. `githubDownloadReleaseAsset()` downloads the snapshot.
+2. `swapInImageFromElsewhere(downloadedBytes)`, the same swap-in a backup revert uses:
+   1. `db_migrate_image` runs this build's migrations on a copy of the snapshot (§1a).
+      A snapshot it refuses stops the pull here with a sync error: the live file, the connection and `last_synced_version` are untouched.
+   2. `restoreDb(migratedBytes)`: `getDbFilePath()` resolves the live SQLite path via `PRAGMA database_list` (never hardcode the plugin's storage dir).
+      `resetDb()` closes the pooled connection and drops the memoized promise so the file isn't locked.
+      `save_file` overwrites the SQLite file (Rust command), and `getDb()` reopens it.
+3. `setLastSyncedVersion(version)` records the snapshot as pulled.
 
 **Known limitation:** there is a small window between `resetDb()` and the
 overwrite where a background query could reopen the old file. It matches the
@@ -235,7 +240,7 @@ bites, pause React Query during the swap. The viewer write guard
   helpers; `isNewer`.
 - `lib/export.ts` — `buildStatusWorkbookBytes()` + exported column sets.
 - `lib/db.ts` — `stain_requests` queries, `getDbFilePath()`, `resetDb()`,
-  `bringImageUpToDate()`, `setViewerReadOnly()` write guard.
+  `swapInImageFromElsewhere()`, `setViewerReadOnly()` write guard.
 - `lib/types.ts` — `StainRequest`.
 - `hooks/useSync.ts` — the periodic + manual sync loop.
 - `hooks/useData.ts` — `useStainRequests`, `useStainRequestMutations`.

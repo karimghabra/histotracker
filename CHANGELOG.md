@@ -60,6 +60,11 @@ Proven on a populated pre-existing database by `pnpm test:legacy`, including a r
   The refused snapshot is not marked as pulled, so the viewer takes it at the first sync after it can.
   A sync error now shows the message alone, without "Error:" in front of it.
 
+- **A long notice no longer pushes the header's own controls off the screen.**
+  The line under "Open Histology Workflow" shows the app's notices, and a sync error can run to a paragraph.
+  It neither wrapped nor shrank, so while such a notice showed, Export, Requests, New Sample and the rest were pushed off the right edge.
+  That line is now cut off with an ellipsis at whatever room the controls leave, whether it shows a notice or the usual sample and project counts, and hovering it shows the whole of what it says.
+
 - **A compatibility check against the release in use, on every change.**
   `pnpm test:compat` takes a released build from its tag and has it and the change under test open, work on, back up, revert and sync each other's database, in both directions.
   It checks 0.17.0 today, and any other release by name (`pnpm test:compat app-v0.18.0`).

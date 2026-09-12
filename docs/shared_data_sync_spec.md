@@ -85,9 +85,10 @@ Build order (phased), reusing existing patterns:
    workstation shows a "Requests" inbox (`RequestsInbox.tsx`) + sync status.
 
 ### Viewer DB swap sequence
-`resetDb()` (close connection) → `save_file(dbPath, downloadedBytes)` →
-re-`getDb()` → invalidate all queries. Viewer role must also disable writes at
-the UI layer (and ideally guard the data layer).
+A pull now brings the snapshot up to this build's migrations before it swaps it
+in, through the same swap-in a backup revert uses; the current sequence lives in
+[`shared_data_sync.md`](./shared_data_sync.md) §7. Viewer role must also disable
+writes at the UI layer (and ideally guard the data layer).
 
 ### Prerequisites (before running e2e)
 - Create a **separate private** data repo (e.g. `karimghabra/histometer-data`).

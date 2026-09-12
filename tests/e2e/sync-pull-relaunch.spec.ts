@@ -100,6 +100,11 @@ test("a snapshot from a workstation on a version before the newest migration: pu
   // A fresh viewer pulls the snapshot as soon as it opens.
   await page.goto("/?freshdb=1");
   await showsTheLab(page, "after the pull");
+  // The header line is cut off whatever it says, so it always carries its own
+  // whole text on hover. That holds for the counts sentence, not just a notice.
+  const headerLine = page.locator("header p");
+  await expect(headerLine).toHaveText(/^\d+ open samples? across \d+ active projects?$/);
+  await expect(headerLine).toHaveAttribute("title", (await headerLine.textContent())!);
   // The pull left a record that says what the file now holds.
   expect(await ledger(page)).toEqual(MIGRATIONS.map((m) => m.version));
 
@@ -132,7 +137,12 @@ test("a snapshot from a newer version is refused out loud, and the viewer's copy
     `Histometer (it has database migration ${NEWEST + 1}, which this version does not have). ` +
     `Update Histometer on this computer to open it. This computer's copy has not been changed.`;
   await page.getByTitle("Sync now").click();
-  await expect(page.getByText(`Sync error: ${refusal}`, { exact: true })).toBeVisible({ timeout: 15_000 });
+  const notice = page.getByText(`Sync error: ${refusal}`, { exact: true });
+  await expect(notice).toBeVisible({ timeout: 15_000 });
+  // A notice that long is cut short in the header, whole on hover, and leaves
+  // the controls where they were: it once pushed them off the right edge.
+  await expect(notice).toHaveAttribute("title", `Sync error: ${refusal}`);
+  await expect(page.getByRole("button", { name: "Request stain" })).toBeInViewport({ ratio: 1 });
   // …and it stays on the sync pill once that notice has gone.
   await expect(page.getByText("Sync error", { exact: true })).toHaveAttribute("title", refusal);
   expect(await stored(page, LIVE)).toBe(live);

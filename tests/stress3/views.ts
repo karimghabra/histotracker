@@ -116,6 +116,18 @@ export async function closeDrawer(page: Page): Promise<void> {
 }
 
 /**
+ * Look at every project. The comparison is with the whole store, and since #131
+ * the board shows only the project picked in the sidebar; with none remembered
+ * the app opens on the first one (#84), so the board held a fifth of the blocks.
+ */
+async function showAllProjects(page: Page): Promise<void> {
+  const all = page.locator("aside").getByRole("button", { name: "All projects", exact: true });
+  if ((await all.count()) === 0) return; // no projects, nothing to filter
+  if ((await all.getAttribute("aria-current")) !== "true") await all.click();
+  await expect(all).toHaveAttribute("aria-current", "true");
+}
+
+/**
  * Compare every surface with the store.
  *
  * Returns findings rather than throwing, so one lying view does not hide the
@@ -138,6 +150,7 @@ export async function checkViewsAgainstData(
 
   if (opts.refresh !== false) await refreshView(page);
   await closeDrawer(page);
+  await showAllProjects(page);
   await goBoard(page);
   // A board render can lag a mutation by a tick; give React a beat before
   // accusing it of lying. This is a settle, not a retry-until-pass: the counts

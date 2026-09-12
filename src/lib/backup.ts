@@ -4,7 +4,7 @@
 // thin frontend orchestration plus the snapshot/restore glue shared with undo.
 
 import { invoke } from "@tauri-apps/api/core";
-import { bringImageUpToDate, ImageRefusedError, restoreDbPreservingSession, snapshotDb } from "./db";
+import { ImageRefusedError, snapshotDb, swapInImageFromElsewhere } from "./db";
 import {
   backupFileName,
   parseBackupName,
@@ -70,11 +70,12 @@ export async function createBackup(reason: BackupReason, retention: number): Pro
  * the next launch ran them again, failed on "duplicate column name", and could
  * not open the database at all.
  *
- * So the image first goes through {@link bringImageUpToDate}, which runs this
- * build's migrations on a copy of it with the same migrator the launch uses:
- * what it lacks really runs, and the record it comes back with is true. Then a
- * `prerestore` safety backup is taken (so a revert is itself reversible) and
- * the image is swapped in via the same session-preserving restore undo uses.
+ * So the image goes live through {@link swapInImageFromElsewhere}, the same
+ * swap-in a sync pull uses. It first runs this build's migrations on a copy of
+ * the image with the same migrator the launch uses: what it lacks really runs,
+ * and the record it comes back with is true. Then a `prerestore` safety backup
+ * is taken (so a revert is itself reversible) and the image is swapped in via
+ * the same session-preserving restore undo uses.
  *
  * Reverting to an older backup is therefore safe, launches after it included.
  * A backup this build cannot bring up to date is refused before anything
@@ -88,16 +89,16 @@ export async function createBackup(reason: BackupReason, retention: number): Pro
 export async function revertToBackup(name: string): Promise<void> {
   const bytes = await invoke<number[]>("backup_read", { name });
   if (!bytes || bytes.length === 0) throw new Error("Backup is empty or unreadable.");
-  let image: Uint8Array;
   try {
-    image = await bringImageUpToDate(Uint8Array.from(bytes));
+    await swapInImageFromElsewhere(Uint8Array.from(bytes), {
+      keepSession: true,
+      beforeSwap: () => createBackup("prerestore", 500).catch(() => undefined),
+    });
   } catch (err) {
     if (!(err instanceof ImageRefusedError)) throw err;
     const remedy = err.newer ? " Only that version or a later one can restore it." : "";
     throw new Error(`This backup cannot be restored: ${err.reason}.${remedy} The current database has not been changed.`);
   }
-  await createBackup("prerestore", 500).catch(() => undefined);
-  await restoreDbPreservingSession(image);
 }
 
 export async function deleteBackup(name: string): Promise<void> {

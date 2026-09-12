@@ -177,8 +177,8 @@ async function ensureRuntimeSchema(db: Database): Promise<void> {
   // Register EVERY additively-added column that current runtime queries read or
   // write. Anything missing here becomes a silent failure the moment an older
   // image is opened unmigrated. A backup revert and a sync pull run the
-  // numbered migrations first (bringImageUpToDate), so there it only matters
-  // for a column that has none.
+  // numbered migrations first (swapInImageFromElsewhere), so there it only
+  // matters for a column that has none.
   // A new migration that adds such a column MUST add a matching line below —
   // this is the mechanism behind "updates stay compatible with existing DBs".
   await ensureColumn(db, "slides", "stage_deparaffinized_at", "TEXT");
@@ -545,11 +545,11 @@ export async function snapshotDb(): Promise<DbImage> {
  *
  * The reopen does not run the numbered migrations, and the record of which ones
  * a file has had lives inside it, so an image goes live with whatever record it
- * brings. Any image not written by this build in this session (a backup, a
- * snapshot pulled from the workstation) must first go through
- * {@link bringImageUpToDate}, or the next launch re-runs the migrations it lacks
- * on top of the columns getDb() converged and cannot open the database. Undo
- * images, taken by this build in this session, need not.
+ * brings. That is right for undo images, which this build took in this session.
+ * Any other image (a backup, a snapshot pulled from the workstation) goes live
+ * through {@link swapInImageFromElsewhere} instead, or the next launch re-runs
+ * the migrations it lacks on top of the columns getDb() converged and cannot
+ * open the database.
  */
 export async function restoreDb(image: DbImage): Promise<void> {
   const path = await getDbFilePath(); // resolve while the connection is still open
@@ -559,8 +559,8 @@ export async function restoreDb(image: DbImage): Promise<void> {
 }
 
 /**
- * Why {@link bringImageUpToDate} will not let an image go live. `reason` is
- * worded to follow the caller's own lead-in (e.g. "This backup cannot be
+ * Why {@link swapInImageFromElsewhere} will not let an image go live. `reason`
+ * is worded to follow the caller's own lead-in (e.g. "This backup cannot be
  * restored: "); `newer` marks an image made by a newer version of Histometer,
  * which updating this computer would open.
  */
@@ -575,13 +575,35 @@ export class ImageRefusedError extends Error {
 }
 
 /**
+ * Swap in a database image that came from elsewhere: a backup being reverted
+ * to, or a snapshot a viewer pulls from the workstation. It is the one way such
+ * an image goes live, so the revert and the pull cannot drift apart.
+ *
+ * First, with nothing changed yet, {@link bringImageUpToDate} runs this build's
+ * migrations on a copy of the image; one it cannot bring up to date throws
+ * {@link ImageRefusedError}. Then `beforeSwap` runs, still before anything
+ * changes (a revert takes its safety backup there, so a refused revert leaves
+ * none behind). Then the migrated image goes live through {@link restoreDb},
+ * keeping the signed-in session and settings when `keepSession` is set.
+ */
+export async function swapInImageFromElsewhere(
+  image: DbImage,
+  options: { keepSession: boolean; beforeSwap?: () => Promise<unknown> },
+): Promise<void> {
+  const migrated = await bringImageUpToDate(image);
+  await options.beforeSwap?.();
+  if (options.keepSession) await restoreDbPreservingSession(migrated);
+  else await restoreDb(migrated);
+}
+
+/**
  * Bring an image from elsewhere up to this build before it is swapped in: the
  * Rust `db_migrate_image` command (src-tauri/src/migrate.rs) runs this build's
  * migrations on a copy, through the same migrator a launch uses, and returns
  * the copy with a record that says what it holds. An image it cannot bring up
  * to date throws {@link ImageRefusedError}, and nothing has changed.
  */
-export async function bringImageUpToDate(image: DbImage): Promise<DbImage> {
+async function bringImageUpToDate(image: DbImage): Promise<DbImage> {
   try {
     return Uint8Array.from(await invoke<number[]>("db_migrate_image", { bytes: Array.from(image) }));
   } catch (err) {

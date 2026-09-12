@@ -40,12 +40,17 @@ pub struct BackupInfo {
     size: u64,
 }
 
+/// The app's own data directory, created if missing. Every directory the app
+/// writes database images to hangs off this one, so they stay inside the app's
+/// own tree rather than in a directory it shares with the rest of the machine.
+pub(crate) fn app_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
 fn backups_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(BACKUP_DIR);
+    let dir = app_dir(app)?.join(BACKUP_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }

@@ -53,8 +53,8 @@ export interface RegisteredMigration {
 
 /**
  * The migration list a build REGISTERS, read out of its `src-tauri/src/lib.rs`.
- * The list there is explicit, not discovered, and it — not the directory — is
- * what the migrator runs. Down migrations are dropped, as the plugin does.
+ * The list there is explicit, not discovered, and it is what the migrator
+ * runs, not the directory. Down migrations are dropped, as the plugin does.
  */
 export function parseMigrationList(
   libRs: string,
@@ -166,7 +166,7 @@ export function runMigrator(db: SqlFile, migrations: RegisteredMigration[]): num
 }
 
 /**
- * Write the ledger a file would carry after `migrations` ran on it — for a
+ * Write the ledger a file would carry after `migrations` ran on it, for a
  * fixture that was built by executing the SQL directly, with no migrator.
  */
 export function seedLedger(db: SqlFile, migrations: RegisteredMigration[]): void {
