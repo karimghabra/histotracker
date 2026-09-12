@@ -116,8 +116,8 @@ breaks at runtime. Update all of these in the same change:
 
 ## Releases
 
-Releases are cut from **master only**, by starting **Build Windows Installer**
-by hand on master (`gh workflow run build-installer.yml --ref master`). Its
+Releases are cut from **master only**, by starting **Cut a release** by hand on
+master (`gh workflow run cut-release.yml --ref master`). Its
 `plan` job (`node scripts/release-check.mjs plan`) refuses any other ref, a
 version already released or not newer than the newest, version files out of
 step, a `CHANGELOG.md` with no `## <version>` section, and any `app-v*` tag
@@ -126,6 +126,11 @@ commit and publishes `app-v<version>` tagged there. Procedure:
 `docs/releasing.md`. Why: `docs/release_line_reconciliation.md` (0.14.3 to
 0.17.0 shipped from branches master never received).
 
+- **The release workflow lives at `.github/workflows/cut-release.yml`, and that path never moves back.**
+  GitHub runs a push-triggered workflow from the copy of the file in the pushed commit, so master's master-only guard binds only commits that descend from it.
+  The pre-0.18.0 copy at `.github/workflows/build-installer.yml` still sits on unmerged branches, and a push of one at an already-released version replaces that release's installers while leaving its tag in place, which no check can see.
+  That path is now a workflow master does not have, disabled in the repository's Actions settings.
+  Never reintroduce it, and never give this workflow a `push` or tag trigger; a tag ruleset substitutes for neither rule (`docs/releasing.md`).
 - **Master's version names the next release.** It is written in five places
   kept in step: `package.json`, `src-tauri/tauri.conf.json`,
   `src-tauri/Cargo.toml`, and the `Cargo.lock` / `package-lock.json` entries

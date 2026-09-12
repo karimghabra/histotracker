@@ -1,4 +1,4 @@
-name: Build Windows Installer
+name: Cut a release
 
 # Builds the Histometer Windows installer (.exe + .msi) in the cloud on a
 # GitHub-hosted Windows runner that already has Rust, the MSVC toolchain and
@@ -24,6 +24,23 @@ name: Build Windows Installer
 #     a push whose test run had failed; that cannot happen from here.
 #   - `build` tags the release at the commit that was planned and tested, and
 #     `verify` checks that the tag really does name it.
+#
+# WHY THIS FILE IS NOT `build-installer.yml` ANY MORE. GitHub runs a
+# push-triggered workflow from the copy of the workflow file that lives in the
+# pushed commit, so the guard above binds only commits that descend from it. The
+# pre-0.18.0 copy (push to `claude/**`, `v*` tags, `workflow_dispatch`,
+# `contents: write`, no plan step and no test gate) still sits at
+# `.github/workflows/build-installer.yml` on unmerged branches, and a push of one
+# of them at a version that is already released REPLACES that release's
+# installers while leaving its tag where it is, and no check can see it: the
+# installers on the app-v0.16.1 release page were uploaded at 01:49:10-12Z on
+# 2026-08-28 by a second push to `claude/issues-129-133`, twelve minutes after
+# the release was published at 01:37:50Z, and the tag still names the first
+# commit (docs/releasing.md).
+# Renaming this file separates the live release workflow from the one those
+# copies address: the old path is now a workflow master does not have, disabled
+# in the repository's Actions settings, and this one has no trigger a branch can
+# reach. Do not reintroduce the old path.
 #
 # A release is never rebuilt or overwritten: to ship again, bump the version.
 # How to cut one: docs/releasing.md.

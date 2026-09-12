@@ -21,8 +21,10 @@ Everything below exists so that it cannot happen again without the repository sa
    Merging publishes nothing.
    Master may carry an unreleased version for as long as it needs to while further fixes land.
 3. **Start the release.**
-   On GitHub, open Actions, pick **Build Windows Installer**, and click **Run workflow** on `master`.
-   From a terminal: `gh workflow run build-installer.yml --ref master`.
+   On GitHub, open Actions, pick **Cut a release**, and click **Run workflow** on `master`.
+   From a terminal: `gh workflow run cut-release.yml --ref master`.
+   The workflow is `.github/workflows/cut-release.yml`, and it has no trigger a push can reach.
+   The entry named **Build Windows Installer** is the pre-0.18.0 workflow, kept only because unmerged branches still carry its file; it is disabled and must stay that way (see below).
 4. **Watch it.**
    The run has four jobs, and each one can stop the release:
    - `plan` runs `node scripts/release-check.mjs plan`. It refuses a run on any ref but master, version files that disagree, a version that is already released or is not newer than the newest release, a `CHANGELOG.md` with no `## <version>` section, and any release tag that master does not contain.
@@ -49,12 +51,31 @@ While any of these holds, every pull request is red.
 That is deliberate: a release the trunk does not account for is the one thing worth stopping for.
 The pull request that merges the stray release back is judged by its own merge commit, so it goes green on its own.
 
+## Why the release workflow was renamed, and what a tag ruleset cannot do
+
+GitHub runs a push-triggered workflow from the copy of the workflow file that lives in the pushed commit.
+So the master-only guard binds only commits that descend from it, and the pre-0.18.0 copy - push to `claude/**`, `v*` tags, `workflow_dispatch`, `contents: write`, no `plan` and no test gate - keeps working wherever it still sits.
+That copy does not need a tag to do damage.
+`app-v0.16.1` was tagged at 7363ed7 and published at 01:37:50Z on 2026-08-28, by a push to `claude/issues-129-133`.
+The next push to that branch, 3ee5d75, still said 0.16.1, so its run uploaded into the release that already existed: the `.exe` and `.msi` on that release page carry timestamps of 01:49:10Z to 01:49:12Z and were built from 3ee5d75, which the tag does not name.
+The tag never moved, so `Release integrity` saw nothing, and every check stayed green while the shipped installers were replaced by a build from a branch nobody had reviewed.
+
+Two things follow.
+
+- **The live workflow is `.github/workflows/cut-release.yml`.**
+  The rename separates it from the path those stale copies address, which is now a workflow master does not have and is **disabled** in Actions (Actions, the workflow, "Disable workflow").
+  Leave it disabled; re-enabling it re-arms every branch that still carries the old file.
+  The lasting fix is to delete or rebase those branches, after checking that master or an `app-v*` tag already contains each tip.
+- **A tag ruleset is not the fix.**
+  A ruleset on `app-v*` permitting only GitHub Actions to create tags would not have stopped any of this: the old workflow *is* GitHub Actions, and replacing a release's assets needs no tag at all - `tauri-action` uploads into the existing release for that version.
+  A ruleset that forbids deleting or moving `app-v*` tags is still worth having, but as a guard against a hand-made tag, not as a substitute for the rename and the disable.
+
 ## Repository settings worth adding
 
 The workflows make a stray release loud; GitHub settings can make one impossible.
 These are settings on the repository, not files in it, so they are recorded here rather than applied:
 
-- a tag ruleset on `app-v*` that lets only GitHub Actions create tags, and nobody delete or move them;
+- a tag ruleset on `app-v*` that lets nobody delete or move a tag, and only GitHub Actions create one (a guard against a hand-made tag, and no more than that - see the section above);
 - branch protection on `master` that requires the `Workflow tests` and `Release integrity` checks.
 
 ## Compatibility with the release in use
