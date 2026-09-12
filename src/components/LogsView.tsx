@@ -241,7 +241,7 @@ function NotesEditor({
 }: {
   value: string;
   placeholder: string;
-  onSave: (notes: string) => void;
+  onSave: (notes: string) => void | Promise<unknown>;
   rows?: number;
   ariaLabel?: string;
 }) {
@@ -253,10 +253,22 @@ function NotesEditor({
   // (#72). Left editable, typing was accepted and silently discarded on blur.
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
-  // Adopt external changes only while not editing, so a refetch can't clobber typing.
+  // The text handed to a save that has not come back yet. A save photographs the
+  // whole database and they run one at a time, so without this the corrected
+  // note reads as its OLD self the instant the box is blurred — for as long as
+  // every correction queued ahead of it takes — which tells the user their
+  // correction did not take and invites them to type it again.
+  const [saving, setSaving] = useState<string | null>(null);
+  // Adopt external changes only while not editing, so a refetch can't clobber
+  // typing — and not until this box's own correction has come back to it.
   useEffect(() => {
-    if (!focused) setText(value ?? "");
-  }, [value, focused]);
+    if (focused) return;
+    if (saving !== null) {
+      if ((value ?? "") !== saving.trim()) return;
+      setSaving(null);
+    }
+    setText(value ?? "");
+  }, [value, focused, saving]);
   return (
     <textarea
       aria-label={ariaLabel}
@@ -270,7 +282,14 @@ function NotesEditor({
       onBlur={() => {
         setFocused(false);
         if (readOnly) return;
-        if (text !== (value ?? "")) onSave(text);
+        if (text === (value ?? "")) return;
+        setSaving(text);
+        void Promise.resolve(onSave(text)).catch((err: unknown) => {
+          // The save failed: stop showing text the database does not have, and
+          // let it reach App's unhandledrejection backstop to be said out loud.
+          setSaving((s) => (s === text ? null : s));
+          throw err;
+        });
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
@@ -1334,7 +1353,7 @@ function FragmentRow({
                   placeholder="Describe this sample…"
                   rows={1}
                   ariaLabel={`Description for ${displayCode(sample.sample_code)}`}
-                  onSave={(text) => void editSampleDescription(sample.id, text)}
+                  onSave={(text) => editSampleDescription(sample.id, text)}
                 />
               </>
             )}
@@ -1368,7 +1387,7 @@ function FragmentRow({
                     placeholder={placeholder}
                     rows={6}
                     ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
-                    onSave={(text) => void editSampleNote(sample.id, field, text)}
+                    onSave={(text) => editSampleNote(sample.id, field, text)}
                   />
                 </div>
               );
@@ -1500,7 +1519,7 @@ function FragmentRow({
                           <NotesEditor
                             value={slide.notes ?? ""}
                             placeholder="Notes about this slide…"
-                            onSave={(notes) => void editSlideNotes(slide.id, notes)}
+                            onSave={(notes) => editSlideNotes(slide.id, notes)}
                           />
                           {/* #121 removed the "refile onto another block" control that used to
                               live here. Mislabelled glass is rare enough that the lab would

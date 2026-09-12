@@ -301,6 +301,35 @@ describe("LogsView — correcting a sample's notes", () => {
     }
   });
 
+  // A save photographs the whole database and they run one at a time, so the
+  // refetch behind it can be seconds away on the lab's machine. Until then the
+  // box has to keep showing what the user typed: reverting to the old note says
+  // the correction failed, and the natural answer to that is to type it again.
+  it("keeps the corrected note on screen until the save comes back", async () => {
+    data.samples = [withNotes()];
+    const { rerender } = render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    const cut = () => screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    await userEvent.clear(cut());
+    await userEvent.type(cut(), "8 um");
+    await userEvent.tab();
+
+    // The write has not landed: the data still reads back the old note.
+    rerender(<LogsView />);
+    expect(cut()).toHaveValue("8 um");
+
+    // It lands, and then the box is reading the database again — an undo or a
+    // pulled sync moves it, rather than leaving it stuck on the typed text.
+    data.samples = [{ ...data.samples[0], cut_notes: "8 um" }];
+    rerender(<LogsView />);
+    expect(cut()).toHaveValue("8 um");
+
+    data.samples = [{ ...data.samples[0], cut_notes: "10 um" }];
+    rerender(<LogsView />);
+    expect(cut()).toHaveValue("10 um");
+  });
+
   // The refetch that follows a save is what puts the corrected note on screen;
   // the editor must adopt it rather than keep showing the old text.
   it("shows the corrected note after the data is read back", async () => {

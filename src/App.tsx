@@ -319,17 +319,26 @@ export default function App() {
     const onKey = async (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
-      // The same refusal the toolbar shows while a note correction is still
-      // being written — undoing now would pop the action before it.
-      if (useUndoStore.getState().pendingNoteSaves > 0) return;
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
+      // The same refusal the toolbar shows while a note correction is still
+      // being written — undoing now would pop the action before it. Said out
+      // loud here, because a shortcut has no greyed-out button to look at.
+      const savingNote = useUndoStore.getState().pendingNoteSaves > 0;
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();
+        if (savingNote) {
+          flash("Saving a note — undo again in a moment");
+          return;
+        }
         const label = await undo();
         flash(label ? `Undone: ${label}` : "Nothing to undo");
       } else if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
+        if (savingNote) {
+          flash("Saving a note — redo again in a moment");
+          return;
+        }
         const label = await redo();
         flash(label ? `Redone: ${label}` : "Nothing to redo");
       }

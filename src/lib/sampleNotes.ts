@@ -47,6 +47,10 @@ export type SampleNoteField = (typeof SAMPLE_NOTES)[number]["field"];
 
 export const SAMPLE_NOTE_FIELDS: readonly SampleNoteField[] = SAMPLE_NOTES.map((n) => n.field);
 
+const LABELS: Record<SampleNoteField, string> = Object.fromEntries(
+  SAMPLE_NOTES.map((n) => [n.field, n.label]),
+) as Record<SampleNoteField, string>;
+
 export function sampleNoteLabel(field: SampleNoteField): string {
-  return SAMPLE_NOTES.find((n) => n.field === field)?.label ?? field;
+  return LABELS[field];
 }
