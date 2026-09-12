@@ -616,7 +616,9 @@ build in use can still open the upgraded file. PATH C fails with the old 0025
 migration in place. That harness now applies *every* migration the fixture
 predates rather than naming 0023 alone, which is how it quietly stopped
 covering "the update". `NewSampleDialog.test.tsx` and
-`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes.
+`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes;
+`tests/e2e/notes-correction.spec.ts` covers correcting the note afterwards, from
+the Logs.
 
 ### #136 — assigned stains did not reach the log
 
