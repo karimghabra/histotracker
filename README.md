@@ -82,7 +82,7 @@ build described in [Install (no compilers needed)](#install-no-compilers-needed)
 instead — it produces the same installers via GitHub Actions.
 
 The CI build is configured in
-[`.github/workflows/build-installer.yml`](.github/workflows/build-installer.yml).
+[`.github/workflows/cut-release.yml`](.github/workflows/cut-release.yml).
 
 ## Project layout
 
