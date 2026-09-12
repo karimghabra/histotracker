@@ -52,9 +52,25 @@ keep them that way (`DISPLAY` unset) so nothing can reach the desktop.
 If Chromium fails to launch with `libnspr4.so: cannot open shared object file`
 and there is no sudo, fetch the libraries without root: `apt-get download
 libnspr4 libnss3 libasound2t64`, `dpkg-deb -x` each, and put the extracted
-`usr/lib/x86_64-linux-gnu` on `LD_LIBRARY_PATH`. **Do not edit files while
-either suite runs** — the dev server hot-reloads mid-test and the failures look
-like real defects.
+`usr/lib/x86_64-linux-gnu` on `LD_LIBRARY_PATH`. If the environment ships a
+Chromium whose build number does not match the pinned `@playwright/test` and
+cannot download one, point every config at it with `CHROMIUM_PATH=/path/to/chromium`
+(unset, nothing changes). **Do not edit files while either suite runs** — the dev
+server hot-reloads mid-test and the failures look like real defects.
+
+Conventions in the specs, worth following rather than re-deriving:
+
+- `page.goto("/?freshdb=1")` starts from a clean DB, honoured once per load, so a
+  restore or an undo reopen does not wipe itself (`src/test/browser-sql-shim.ts`).
+- **Address inputs by label or role, never by position.** `getByRole("textbox").nth(1)`
+  silently retargets when a panel gains a field, and a wrong guess edits the wrong
+  column while a loose text assertion still passes; `Field` (`src/components/ui.tsx`)
+  renders a wrapping `<label>`, so `getByLabel("Name", { exact: true })` is stable.
+- Several names render in both the sidebar and a dialog, so scope the assertion to the
+  dialog (by role, or by its own `"<code> · <name>"` row format) or strict mode trips
+  once the sidebar list loads.
+- Reuse a spec's own `seedSample`/`dragOnto` helpers: `dragOnto` clears dnd-kit's 5px
+  activation threshold, which a hand-rolled drag does not.
 
 ## The test harness — keep it green, keep it in sync
 
