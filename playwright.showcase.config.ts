@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { launchOptions } from "./playwright.config";
 
 // Standalone config for the screenshot/tutorial walkthrough. Kept OUT of the
 // main e2e suite (which uses testDir ./tests/e2e) so it never gates a release —
@@ -21,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, launchOptions },
     },
   ],
   webServer: {

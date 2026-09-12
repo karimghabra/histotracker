@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { launchOptions } from "./playwright.config";
 
 /**
  * Stress harness v3 — the explorer.
@@ -46,7 +47,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "off",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], launchOptions } }],
   webServer: {
     command: "npx vite --config vite.config.playwright.ts",
     url: `http://localhost:${PORT}`,
