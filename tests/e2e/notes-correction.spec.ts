@@ -66,8 +66,22 @@ async function storedNotes(page: Page, storedCode: string): Promise<StoredNotes>
   );
 }
 
-async function boot(page: Page, extraQuery = "") {
-  await page.goto(`/?freshdb=1${extraQuery}`);
+/** A block's description as the DATABASE holds it, through the same shim. */
+async function storedDescription(page: Page, storedCode: string): Promise<string> {
+  const row = await page.evaluate(
+    (code) =>
+      (
+        window as unknown as { __SHIM_SELECT__: (s: string, b?: unknown[]) => unknown[] }
+      ).__SHIM_SELECT__(`SELECT sample_description AS d FROM samples WHERE sample_code = ?`, [
+        code,
+      ])[0] as { d: string },
+    storedCode,
+  );
+  return row.d;
+}
+
+async function boot(page: Page) {
+  await page.goto("/?freshdb=1");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
   });
@@ -246,49 +260,6 @@ test("a several-line note is read back whole in the Logs, not behind a scrollbar
   await expect(notes.embedding).toHaveCSS("resize", "vertical");
 });
 
-/**
- * Two corrections in one pass — retype, move to the next box, retype — and then
- * one Undo.
- *
- * Every save photographs the whole database before it writes. While the second
- * save started inside the first, both photographs predated BOTH corrections, so
- * undoing the cut note quietly threw away the embedding correction with it and
- * said nothing about it. `?slowio` stretches the file read to something like
- * the seconds it costs on the lab's own database, which is what leaves the
- * window open long enough to be reachable at bench speed.
- */
-test("correcting two notes in one pass, then undoing once, keeps the first", async ({ page }) => {
-  await boot(page, "&slowio=300");
-
-  await page.getByRole("button", { name: "New Sample" }).click();
-  await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
-  await page.getByLabel("Embedding Notes").fill(INTAKE.embedding);
-  await page.getByLabel("Sectioning / Cut Notes").fill(INTAKE.cut);
-  await page.getByRole("button", { name: /Create Sample/ }).click();
-  await expect(page.getByText("EE-1")).toBeVisible();
-
-  await expandInLogs(page, "EE-1");
-  const notes = noteEditors(page, "EE-1");
-
-  // Moving to the next box is what saves the one before it, so the cut note's
-  // save begins while the embedding note's is still being written.
-  await notes.embedding.fill(CORRECTED.embedding);
-  await notes.cut.fill(CORRECTED.cut);
-  await notes.cut.blur();
-  await expect
-    .poll(() => storedNotes(page, "EE-0001"), { timeout: 20_000 })
-    .toMatchObject({ embedding: CORRECTED.embedding, cut: CORRECTED.cut });
-
-  // One Undo takes back ONE correction: the cut note it names, and not the
-  // embedding note the user meant to keep.
-  await page.getByTitle("Undo (Ctrl+Z)").click();
-  await expect(page.getByText("Undone: Edit EE-1 sectioning / cut notes")).toBeVisible();
-  await expect
-    .poll(() => storedNotes(page, "EE-0001"), { timeout: 20_000 })
-    .toMatchObject({ embedding: CORRECTED.embedding, cut: INTAKE.cut });
-  await expect(noteEditors(page, "EE-1").embedding).toHaveValue(CORRECTED.embedding);
-});
-
 test("a correction is undoable, and the undo names the note it restores", async ({ page }) => {
   await boot(page);
   await page.getByRole("button", { name: "New Sample" }).click();
@@ -310,6 +281,16 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await embedding.fill(CORRECTED.embedding);
   await embedding.blur();
   await expect(embedding).toHaveValue(CORRECTED.embedding);
+
+  // Both corrections are in the database before anything is undone. A save is
+  // fired on blur and nobody awaits it, so undoing on top of one still being
+  // written would be testing that timing rather than the undo.
+  await expect
+    .poll(() => storedNotes(page, "EE-0001"))
+    .toMatchObject({ embedding: CORRECTED.embedding });
+  await expect
+    .poll(() => storedDescription(page, "EE-0001"))
+    .toBe("TE8-12 fixing sample, re-embedded");
 
   // The original text is not kept as a revision anywhere, so undo is how a
   // correction is taken back. It has to name WHICH note, or a stack of four

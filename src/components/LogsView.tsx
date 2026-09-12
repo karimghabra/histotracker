@@ -241,7 +241,7 @@ function NotesEditor({
 }: {
   value: string;
   placeholder: string;
-  onSave: (notes: string) => void | Promise<unknown>;
+  onSave: (notes: string) => void;
   rows?: number;
   ariaLabel?: string;
 }) {
@@ -253,24 +253,10 @@ function NotesEditor({
   // (#72). Left editable, typing was accepted and silently discarded on blur.
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
-  // The text handed to a save that has not come back yet. A save photographs the
-  // whole database and they run one at a time, so without this the corrected
-  // note reads as its OLD self the instant the box is blurred — for as long as
-  // every correction queued ahead of it takes — which tells the user their
-  // correction did not take and invites them to type it again.
-  const [saving, setSaving] = useState<string | null>(null);
-  // Adopt external changes only while not editing, so a refetch can't clobber
-  // typing — and not until this box's own correction has come back to it.
+  // Adopt external changes only while not editing, so a refetch can't clobber typing.
   useEffect(() => {
-    if (focused) return;
-    if (saving !== null) {
-      // Either spelling: some writers store the text verbatim, others trim it,
-      // and one editor serves all of them.
-      if ((value ?? "") !== saving && (value ?? "") !== saving.trim()) return;
-      setSaving(null);
-    }
-    setText(value ?? "");
-  }, [value, focused, saving]);
+    if (!focused) setText(value ?? "");
+  }, [value, focused]);
   return (
     <textarea
       aria-label={ariaLabel}
@@ -284,18 +270,7 @@ function NotesEditor({
       onBlur={() => {
         setFocused(false);
         if (readOnly) return;
-        // Against the text this box last handed to a save, not the text the
-        // database still reads back: while a correction is queued, `value` is
-        // what it is about to replace, and taking the correction back by
-        // retyping the original would look like a no-op and be dropped.
-        if (text === (saving ?? value ?? "")) return;
-        setSaving(text);
-        void Promise.resolve(onSave(text)).catch((err: unknown) => {
-          // The save failed: stop showing text the database does not have, and
-          // let it reach App's unhandledrejection backstop to be said out loud.
-          setSaving((s) => (s === text ? null : s));
-          throw err;
-        });
+        if (text !== (value ?? "")) onSave(text);
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
@@ -1359,7 +1334,7 @@ function FragmentRow({
                   placeholder="Describe this sample…"
                   rows={1}
                   ariaLabel={`Description for ${displayCode(sample.sample_code)}`}
-                  onSave={(text) => editSampleDescription(sample.id, text)}
+                  onSave={(text) => void editSampleDescription(sample.id, text)}
                 />
               </>
             )}
@@ -1393,7 +1368,7 @@ function FragmentRow({
                     placeholder={placeholder}
                     rows={6}
                     ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
-                    onSave={(text) => editSampleNote(sample.id, field, text)}
+                    onSave={(text) => void editSampleNote(sample.id, field, text)}
                   />
                 </div>
               );
@@ -1525,7 +1500,7 @@ function FragmentRow({
                           <NotesEditor
                             value={slide.notes ?? ""}
                             placeholder="Notes about this slide…"
-                            onSave={(notes) => editSlideNotes(slide.id, notes)}
+                            onSave={(notes) => void editSlideNotes(slide.id, notes)}
                           />
                           {/* #121 removed the "refile onto another block" control that used to
                               live here. Mislabelled glass is rare enough that the lab would

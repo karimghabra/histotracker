@@ -65,35 +65,6 @@ import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 /**
- * Mutations run one at a time, app-wide.
- *
- * A commit is snapshot → write → record, and the snapshot is the whole SQLite
- * file. Two overlapping commits both photograph the database BEFORE either
- * write lands, so both record the same pre-edit image: undoing the second one
- * silently throws away the first as well. Correcting several notes in one pass
- * — tab, retype, tab — is exactly that shape, and the read is slow enough on a
- * real lab database to leave the window wide open.
- *
- * Queuing here rather than per action covers every mutation in the app with one
- * rule, including the description and per-slide note editors that sit in the
- * same row as the notes, and undo and redo — which restore an image and so must
- * not run between a queued write's snapshot and the entry it is about to
- * record. Undo would otherwise pop the action BEFORE the write the user is
- * taking back, and the write would then land on the restored image.
- */
-let commitQueue: Promise<unknown> = Promise.resolve();
-
-function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const run = commitQueue.then(fn);
-  // A failed step must not wedge every later one behind its rejection.
-  commitQueue = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
-}
-
-/**
  * Central mutation layer. Every action performs its DB write, invalidates the
  * relevant queries, and records a WHOLE-DATABASE snapshot for undo. Because the
  * DB is the single source of truth, undo/redo just swap the entire SQLite file
@@ -150,13 +121,11 @@ export function useActions() {
       // words: a viewer is told to use the workstation, an unsigned user is told
       // to sign in — which is the whole fix, and one click away.
       if (readOnly) throw new Error(readOnlyMessage(reason));
-      return enqueue(async () => {
-        const before = await snapshotDb();
-        const result = await fn();
-        invalidate();
-        record({ label, snapshot: before });
-        return result;
-      });
+      const before = await snapshotDb();
+      const result = await fn();
+      invalidate();
+      record({ label, snapshot: before });
+      return result;
     },
     [invalidate, reason, record, readOnly],
   );
@@ -306,10 +275,6 @@ export function useActions() {
    */
   const editSampleNote = useCallback(
     async (sampleId: number, field: SampleNoteField, text: string) => {
-      // Read the note as it will be when this correction runs, not as it is
-      // while the corrections queued ahead of it are still being written —
-      // otherwise a take-back reads as a no-op against text already replaced.
-      await commitQueue;
       const before = await getSample(sampleId);
       if (!before) return;
       if ((before[field] ?? "") === text.trim()) return;
@@ -330,10 +295,6 @@ export function useActions() {
    */
   const editSampleDescription = useCallback(
     async (sampleId: number, description: string) => {
-      // Post-queue, exactly as for a note: a take-back typed while the first
-      // correction is still queued must not read as a no-op against the text
-      // that correction is about to replace.
-      await commitQueue;
       const before = await getSample(sampleId);
       if (!before || (before.sample_description ?? "") === description.trim()) return;
       await commit(`Edit ${displayCode(before.sample_code)} description`, () =>
@@ -881,39 +842,31 @@ export function useActions() {
     [commit],
   );
 
-  const undo = useCallback(
-    (): Promise<string | null> =>
-      enqueue(async () => {
-        const { undoStack } = useUndoStore.getState();
-        if (undoStack.length === 0) return null;
-        const label = undoStack[undoStack.length - 1].label;
-        const current = await snapshotDb();
-        const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
-        if (!entry) return null;
-        await restoreDbPreservingSession(entry.snapshot as DbImage);
-        invalidate();
-        await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
-        return entry.label;
-      }),
-    [invalidate],
-  );
+  const undo = useCallback(async (): Promise<string | null> => {
+    const { undoStack } = useUndoStore.getState();
+    if (undoStack.length === 0) return null;
+    const label = undoStack[undoStack.length - 1].label;
+    const current = await snapshotDb();
+    const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
+    if (!entry) return null;
+    await restoreDbPreservingSession(entry.snapshot as DbImage);
+    invalidate();
+    await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
+    return entry.label;
+  }, [invalidate]);
 
-  const redo = useCallback(
-    (): Promise<string | null> =>
-      enqueue(async () => {
-        const { redoStack } = useUndoStore.getState();
-        if (redoStack.length === 0) return null;
-        const label = redoStack[redoStack.length - 1].label;
-        const current = await snapshotDb();
-        const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
-        if (!entry) return null;
-        await restoreDbPreservingSession(entry.snapshot as DbImage);
-        invalidate();
-        await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
-        return entry.label;
-      }),
-    [invalidate],
-  );
+  const redo = useCallback(async (): Promise<string | null> => {
+    const { redoStack } = useUndoStore.getState();
+    if (redoStack.length === 0) return null;
+    const label = redoStack[redoStack.length - 1].label;
+    const current = await snapshotDb();
+    const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
+    if (!entry) return null;
+    await restoreDbPreservingSession(entry.snapshot as DbImage);
+    invalidate();
+    await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
+    return entry.label;
+  }, [invalidate]);
 
   return {
     moveSamples,

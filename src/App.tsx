@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOff, Download, FileSpreadsheet, FileText, Inbox, Loader2, LogOut, Plus, RefreshCcwDot, RefreshCw, Redo2, Send, Settings, Undo2, Users } from "lucide-react";
 import { ALL_PROJECTS, Sidebar, type AppView } from "./components/Sidebar";
@@ -171,29 +171,6 @@ export default function App() {
     window.setTimeout(() => setStatus((s) => (s === message ? null : s)), 4000);
   }
 
-  // Undo and redo wait their turn behind any write still being saved — the
-  // snapshot is the whole database file, seconds of it on the lab machine — so
-  // the control says it is working rather than sitting there looking dead.
-  const [undoBusy, setUndoBusy] = useState<"undo" | "redo" | null>(null);
-  const runUndo = useCallback(async () => {
-    setUndoBusy("undo");
-    try {
-      const label = await undo();
-      flash(label ? `Undone: ${label}` : "Nothing to undo");
-    } finally {
-      setUndoBusy(null);
-    }
-  }, [undo]);
-  const runRedo = useCallback(async () => {
-    setUndoBusy("redo");
-    try {
-      const label = await redo();
-      flash(label ? `Redone: ${label}` : "Nothing to redo");
-    } finally {
-      setUndoBusy(null);
-    }
-  }, [redo]);
-
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("histometer-theme", theme);
@@ -345,15 +322,17 @@ export default function App() {
       const key = e.key.toLowerCase();
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();
-        await runUndo();
+        const label = await undo();
+        flash(label ? `Undone: ${label}` : "Nothing to undo");
       } else if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
-        await runRedo();
+        const label = await redo();
+        flash(label ? `Redone: ${label}` : "Nothing to redo");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [runUndo, runRedo]);
+  }, [undo, redo]);
 
   // Close the export menu on outside click.
   useEffect(() => {
@@ -817,27 +796,19 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Undo (Ctrl+Z)"
-                  disabled={undoDepth === 0 || undoBusy !== null}
-                  onClick={() => void runUndo()}
+                  disabled={undoDepth === 0}
+                  onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
                 >
-                  {undoBusy === "undo" ? (
-                    <Loader2 size={15} className="animate-spin" />
-                  ) : (
-                    <Undo2 size={15} />
-                  )}
+                  <Undo2 size={15} />
                 </Button>
                 <Button
                   variant="subtle"
                   className="px-2"
                   title="Redo (Ctrl+Y)"
-                  disabled={redoDepth === 0 || undoBusy !== null}
-                  onClick={() => void runRedo()}
+                  disabled={redoDepth === 0}
+                  onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
                 >
-                  {undoBusy === "redo" ? (
-                    <Loader2 size={15} className="animate-spin" />
-                  ) : (
-                    <Redo2 size={15} />
-                  )}
+                  <Redo2 size={15} />
                 </Button>
               </div>
             )}
