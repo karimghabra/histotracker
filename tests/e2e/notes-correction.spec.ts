@@ -278,6 +278,32 @@ test("a long note is read back whole in the Logs, not behind a scrollbar", async
   expect(long!.height).toBeGreaterThan(short!.height * 6);
 });
 
+/**
+ * A note opens when it is asked to and not before.
+ *
+ * Tabbing down the expanded row towards the slides passes all four notes; if
+ * arriving were enough to open one, a reader on their way past would watch the
+ * record turn into four textareas, each replacing the words being read.
+ */
+test("a note opens on Enter, not merely by being tabbed to", async ({ page }) => {
+  await boot(page);
+  await page.getByRole("button", { name: "New Sample" }).click();
+  await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
+  await page.getByLabel("Embedding Notes").fill(INTAKE.embedding);
+  await page.getByRole("button", { name: /Create Sample/ }).click();
+  await expect(page.getByText("EE-1")).toBeVisible();
+
+  await expandInLogs(page, "EE-1");
+  const embedding = noteEditors(page, "EE-1").embedding;
+
+  await embedding.focus();
+  await expect(embedding, "arriving at a note leaves it as the words").toHaveRole("note");
+  await expect(embedding).toHaveText(INTAKE.embedding);
+
+  await page.keyboard.press("Enter");
+  await expect(embedding, "asking for it opens the box").toHaveValue(INTAKE.embedding);
+});
+
 test("a correction is undoable, and the undo names the note it restores", async ({ page }) => {
   await boot(page);
   await page.getByRole("button", { name: "New Sample" }).click();

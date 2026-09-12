@@ -293,8 +293,8 @@ function NotesEditor({
  * the note stays ordinary text, at whatever height it needs, until it is
  * clicked or tabbed into. Read-only (a viewer, or a workstation nobody has
  * signed in to) never gets that far: there is nothing there for it to correct,
- * and the disabled control says so rather than accepting typing and dropping it
- * on blur (#72).
+ * so the note is only ever the prose, rather than a control that accepts typing
+ * and drops it on blur (#72).
  */
 function SampleNote({
   value,
@@ -324,24 +324,43 @@ function SampleNote({
       />
     );
   }
+  // `note` rather than `button`: a button's aria-label REPLACES what it contains,
+  // so the note itself would never be spoken on the surface that exists to read
+  // it back. This names the field and leaves the words as the content they are —
+  // selectable and copyable into a bench book, as the display it replaced was.
   return (
-    <button
-      type="button"
+    <p
+      role="note"
       aria-label={ariaLabel}
-      disabled={readOnly}
       title={
         readOnly
           ? readOnlyNotice(reason, "Read-only viewer — edited on the workstation")
           : "Click to correct this note"
       }
-      // Both, because WebKit does not focus a button on click the way Chromium
-      // does, and a keyboard user arrives by Tab without a click at all.
-      onClick={() => setEditing(true)}
-      onFocus={() => setEditing(true)}
-      className="w-full whitespace-pre-wrap rounded-md border border-line bg-white px-2 py-1 text-left text-[11px] text-ink hover:border-brand/50 disabled:hover:border-line"
+      // Read-only is not merely a disabled control: there is nothing to reach
+      // here at all (#72), so it stays out of the way of a keyboard entirely.
+      // Where a correction IS possible, opening it is deliberate — a click, or
+      // Enter on a note the user has tabbed to. Never on focus alone: tabbing
+      // down the row towards the slides would otherwise replace all four notes
+      // with textareas on the way past.
+      tabIndex={readOnly ? undefined : 0}
+      onClick={readOnly ? undefined : () => setEditing(true)}
+      onKeyDown={
+        readOnly
+          ? undefined
+          : (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              setEditing(true);
+            }
+      }
+      className={cn(
+        "w-full whitespace-pre-wrap rounded-md border border-line px-2 py-1 text-[11px] text-ink",
+        !readOnly && "cursor-text bg-white hover:border-brand/50",
+      )}
     >
       {text.trim() ? text : <span className="text-ink-faint">{placeholder || "—"}</span>}
-    </button>
+    </p>
   );
 }
 

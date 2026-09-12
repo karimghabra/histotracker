@@ -303,7 +303,12 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   ]) {
     const box = vw.getByLabel(`${label} for EE-1`);
     await expect(box).toHaveText(written);
-    await expect(box).toBeDisabled();
+    // Clicking opens nothing: the note is the words, not a control. It stays
+    // readable — and selectable, to copy into a bench book — and never becomes
+    // a box that would take typing and drop it on blur.
+    await box.click();
+    await expect(box).toHaveRole("note");
+    await expect(box).toHaveText(written);
   }
   // A note nobody wrote gets no box on a viewer: an empty one is there to be
   // filled in, and this machine cannot fill it in.

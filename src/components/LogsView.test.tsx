@@ -274,7 +274,12 @@ describe("LogsView — correcting a sample's notes", () => {
 
     const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
     expect(cut).toHaveTextContent("10 um");
-    expect(cut).toBeDisabled();
+    // Clicking and typing reaches nothing: there is no box here to take it.
+    await userEvent.click(cut);
+    await userEvent.type(cut, "nope");
+    await userEvent.tab();
+    expect(data.calls).toEqual([]);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
     for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
       expect(
         screen.queryByLabelText(`${label} for EE-1`),
