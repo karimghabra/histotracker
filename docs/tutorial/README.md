@@ -124,7 +124,11 @@ cut, no *(assigned)* stains. Export the current view as CSV or Excel.
 ![Logs](img/14-logs.png)
 
 Expand a sample for its timeline, notes and slides — each slide has its own
-condensed timeline and notes.
+condensed timeline and notes. The sample's four notes (Embedding, Sectioning /
+Cut, Slide and General) are **editable right there**: correct one, click away to
+save it, `Ctrl+Z` to take it back. A note nobody wrote at intake gets an empty
+box you can fill in later. A read-only viewer reads them, and is shown only the
+notes the block actually carries.
 
 ## 9. Depth tagging (optional)
 

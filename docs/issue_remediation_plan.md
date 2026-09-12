@@ -598,7 +598,11 @@ next launch (https://github.com/karimghabra/histotracker/pull/138).
 The second hazard is gone in 0.18.0, which migrates a backup or a pulled snapshot before swapping it in (`swapInImageFromElsewhere`, `docs/shared_data_sync.md` §1a); the first still stands.
 A box in
 `NewSampleDialog` (one note for a batch, or one per sample); read-back in the
-board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX.
+board drawer, `SAMPLE_COLUMNS` and the Logs CSV/XLSX. In the expanded Logs row
+it is no longer read-back but an editor: all four of a sample's notes are
+correctable there, through `SAMPLE_NOTES` (`src/lib/sampleNotes.ts`) and the
+single-column `setSampleNote`, which is the same shape #79 settled on for the
+description.
 Undo restores whole database images, so undoing an edit restores the note with
 everything else. (On master before the 0.18.0 reconciliation it was also listed
 in `RESTORE_COLUMNS`, which the release line had already deleted as unused;
