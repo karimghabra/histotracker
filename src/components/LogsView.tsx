@@ -488,7 +488,7 @@ export function LogsView() {
           sample.sample_description,
           sample.project_code,
           sample.project_name,
-          sample.overall_notes,
+          ...SAMPLE_NOTES.map(({ field }) => sample[field]),
           ...agents,
           ...sampleSlides.map((s) => s.slide_code),
           ...sampleSlides.map((s) => s.notes),

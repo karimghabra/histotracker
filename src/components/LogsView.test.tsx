@@ -261,6 +261,24 @@ describe("LogsView — correcting a sample's notes", () => {
     expect(within(unmarked).queryByTitle("Has notes")).toBeNull();
   });
 
+  // The search box promises "code, description, stain, slide, notes" and the
+  // collapsed row marks a block that carries any of the four — so the filter has
+  // to find the note this very view just wrote, whichever of the four it was.
+  it("finds a block by a note other than the general one", async () => {
+    data.samples = [
+      sample({ sample_code: "EE-0001", cut_notes: "wedge the block, it is tilting" }),
+      sample({ sample_code: "EE-0002" }),
+    ];
+    render(<LogsView />);
+    await userEvent.type(
+      screen.getByPlaceholderText("Search code, description, stain, slide, notes…"),
+      "wedge",
+    );
+
+    expect(screen.getByText("EE-1")).toBeTruthy();
+    expect(screen.queryByText("EE-2")).toBeNull();
+  });
+
   // A viewer cannot correct anything, so an empty box there is an invitation it
   // cannot accept — it reads the notes the block actually carries and no more.
   it("offers a viewer only the notes that were written", async () => {

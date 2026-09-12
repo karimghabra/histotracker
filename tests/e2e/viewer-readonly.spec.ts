@@ -292,12 +292,9 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await expect(vw.getByRole("button", { name: /Archive EE-1/ })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Request stain for/ })).toHaveCount(0);
   // Notes are readable but not editable — they used to accept typing and throw
-  // it away on blur (#72). Target the notes textarea by placeholder; the Logs
-  // search box is also a textbox and is legitimately editable.
-  const notes = vw.getByPlaceholder("Notes about this sample…");
-  await expect(notes).toHaveAttribute("readonly", "");
-  // Every note this block actually carries is correctable on the workstation, so
-  // each one has to be read-only here — one left writable is the #72 bug again.
+  // it away on blur (#72). Every note this block actually carries is correctable
+  // on the workstation, so each one has to be read-only here — one left writable
+  // is the #72 bug again.
   for (const [label, written] of [
     ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
     ["General Notes", "decal ran long on this one"],

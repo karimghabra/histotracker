@@ -20,22 +20,22 @@ export const SAMPLE_NOTES = [
   {
     field: "embedding_notes",
     label: "Embedding Notes",
-    placeholder: "Orientation and handling for whoever embeds this block…",
+    placeholder: "e.g. cut face down, proximal end to the left",
   },
   {
     field: "cut_notes",
     label: "Sectioning / Cut Notes",
-    placeholder: "Instructions for the microtome…",
+    placeholder: "",
   },
   {
     field: "slide_notes",
     label: "Slide Notes",
-    placeholder: "How this sample's slides should be prepared…",
+    placeholder: "",
   },
   {
     field: "overall_notes",
     label: "General Notes",
-    placeholder: "Notes about this sample…",
+    placeholder: "",
   },
 ] as const satisfies ReadonlyArray<{
   field: keyof Sample;
