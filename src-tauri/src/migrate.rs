@@ -517,8 +517,15 @@ mod tests {
                 .await
                 .expect("an older image is brought up to date");
             assert_eq!(entries(&dir.0), Vec::<String>::new());
-            // And when the image is refused, which unwinds through the same Drop.
-            migrate_image(b"not a database", crate::migrations(), &dir.0)
+            // And when an image is refused only after it has been staged and
+            // opened: this one fails at migration 23, so the copy exists and the
+            // refusal unwinds through its `Drop`.
+            let converged = edited(
+                &image_at(22).await,
+                "ALTER TABLE samples ADD COLUMN slides_issued INTEGER NOT NULL DEFAULT 0;",
+            )
+            .await;
+            migrate_image(&converged, crate::migrations(), &dir.0)
                 .await
                 .unwrap_err();
             assert_eq!(entries(&dir.0), Vec::<String>::new());
