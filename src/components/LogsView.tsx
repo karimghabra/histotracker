@@ -333,7 +333,7 @@ function SampleNote({
             onClick={() => setEditing(true)}
             // Negative margin against the padding: a hand at a bench needs more
             // than an 11px square to hit, and this is the only way in.
-            className="-m-1 p-1 text-ink-faint hover:text-brand"
+            className="-m-1.5 p-1.5 text-ink-faint hover:text-brand"
           >
             <Pencil size={11} />
           </button>
