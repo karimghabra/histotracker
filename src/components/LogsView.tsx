@@ -264,7 +264,9 @@ function NotesEditor({
   useEffect(() => {
     if (focused) return;
     if (saving !== null) {
-      if ((value ?? "") !== saving.trim()) return;
+      // Either spelling: some writers store the text verbatim, others trim it,
+      // and one editor serves all of them.
+      if ((value ?? "") !== saving && (value ?? "") !== saving.trim()) return;
       setSaving(null);
     }
     setText(value ?? "");
@@ -282,7 +284,11 @@ function NotesEditor({
       onBlur={() => {
         setFocused(false);
         if (readOnly) return;
-        if (text === (value ?? "")) return;
+        // Against the text this box last handed to a save, not the text the
+        // database still reads back: while a correction is queued, `value` is
+        // what it is about to replace, and taking the correction back by
+        // retyping the original would look like a no-op and be dropped.
+        if (text === (saving ?? value ?? "")) return;
         setSaving(text);
         void Promise.resolve(onSave(text)).catch((err: unknown) => {
           // The save failed: stop showing text the database does not have, and

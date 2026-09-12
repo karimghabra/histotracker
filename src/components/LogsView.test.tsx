@@ -221,6 +221,55 @@ describe("LogsView — correcting a sample's notes", () => {
     expect(data.calls).toEqual([["editSampleNote", 1, "cut_notes", "8 um"]]);
   });
 
+  // Undo is greyed out while a correction is being written, so retyping the
+  // original is the take-back the interface leaves open. The box has to hand it
+  // to a save rather than read it as "the same as what is on file" — the file
+  // still holds the text the queued save is about to replace.
+  it("saves a take-back typed while the correction is still being written", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    const cut = () => screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    await userEvent.clear(cut());
+    await userEvent.type(cut(), "8 um");
+    await userEvent.tab();
+
+    await userEvent.clear(cut());
+    await userEvent.type(cut(), "10 um");
+    await userEvent.tab();
+
+    expect(data.calls).toEqual([
+      ["editSampleNote", 1, "cut_notes", "8 um"],
+      ["editSampleNote", 1, "cut_notes", "10 um"],
+    ]);
+  });
+
+  // The same editor serves writers that trim and writers that store verbatim.
+  // Waiting for a trimmed version that is never coming leaves the box showing
+  // text the database no longer holds, and writing it back on the next blur.
+  it("releases a note box when the text comes back exactly as typed", async () => {
+    data.samples = [withNotes()];
+    const first = slide("EE-0001", "stain", "H&E");
+    data.slides = [first];
+    const { rerender } = render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+    await userEvent.click(screen.getByRole("button", { name: /EE-1-A/ }));
+
+    const box = () => screen.getByPlaceholderText("Notes about this slide…");
+    await userEvent.type(box(), "cracked ");
+    await userEvent.tab();
+
+    data.slides = [{ ...first, notes: "cracked " }];
+    rerender(<LogsView />);
+    expect(box()).toHaveValue("cracked ");
+
+    // Released: the box follows the record again, so an undo is not ignored.
+    data.slides = [{ ...first, notes: "" }];
+    rerender(<LogsView />);
+    expect(box()).toHaveValue("");
+  });
+
   // A blank note is the other half of getting one wrong: the box has to be
   // there to fill in, unlike the read-only display it replaced, which vanished.
   it("offers the editor for a note that was never written", async () => {

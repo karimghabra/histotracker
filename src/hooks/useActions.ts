@@ -301,11 +301,18 @@ export function useActions() {
    */
   const editSampleNote = useCallback(
     async (sampleId: number, field: SampleNoteField, text: string) => {
+      // Read the note as it will be when this correction runs, not as it is
+      // while the corrections queued ahead of it are still being written —
+      // otherwise a take-back reads as a no-op against text already replaced.
+      await commitQueue;
+      const before = await getSample(sampleId);
+      if (!before) return;
+      if ((before[field] ?? "") === text.trim()) return;
+      // The flag covers the snapshot-and-write, which is what undo must not be
+      // pressed during; reading a note back is not a save and must not grey out
+      // the toolbar.
       beginNoteSave();
       try {
-        const before = await getSample(sampleId);
-        if (!before) return;
-        if ((before[field] ?? "") === text.trim()) return;
         // displayCode, because this label is shown to the user in the undo flash
         // and every other surface calls the block EE-1, not EE-0001 (#87).
         await commit(
