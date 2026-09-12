@@ -222,18 +222,22 @@ function makeApi(db) {
          processing_type, fixative_agent, needs_decalcification, cut_notes, slide_notes,
          embedding_notes, stains, preselected_stains, overall_notes, current_stage,
          stage_received_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, '', 'received', ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)`,
       [
         projectId, number, code, description, "2026-01-01",
         opts.processingType ?? "Short",
         opts.fixative ?? "PFA",
         opts.needsDecalc ? 1 : 0,
-        // #137 — asked for at intake, so the port writes it the same way db.ts
-        // does. Coerced, matching addSample(): a caller that predates the field
-        // stores an empty note rather than throwing.
+        // All four notes a user writes are trimmed on the way in, the same as
+        // db.ts does it. Coerced, matching addSample(): a caller that predates
+        // a field stores an empty note rather than throwing.
+        String(opts.cutNotes ?? "").trim(),
+        String(opts.slideNotes ?? "").trim(),
+        // #137 — asked for at intake too.
         String(opts.embeddingNotes ?? "").trim(),
         opts.stains ?? "",
         preselected,
+        String(opts.overallNotes ?? "").trim(),
         now(),
       ],
     );
@@ -1428,6 +1432,19 @@ function makeApi(db) {
     return newSlideId;
   }
 
+  // Port of SAMPLE_NOTE_FIELDS / setSampleNote() — src/lib/sampleNotes.ts +
+  // src/lib/db.ts. The four notes a user writes in their own words, and the one
+  // call every correction surface goes through. The column is looked up from
+  // the literal list rather than interpolated from the argument, exactly as in
+  // db.ts, so a caller cannot reach a column that is not a note.
+  const SAMPLE_NOTE_FIELDS_PORT = ["embedding_notes", "cut_notes", "slide_notes", "overall_notes"];
+  function setSampleNote(sampleId, field, text) {
+    const column = SAMPLE_NOTE_FIELDS_PORT.find((f) => f === field);
+    if (!column) throw new Error(`Not a sample note field: ${String(field)}`);
+    // Trimmed, like the intake path — a note cleared to spaces reads as empty.
+    run(`UPDATE samples SET ${column} = ? WHERE id = ?`, [String(text ?? "").trim(), sampleId]);
+  }
+
   return {
     db, run, all, get,
     seedProject, renameProject, addSample, completePreprocessing, startProcessingBatch, moveBatch,
@@ -1445,6 +1462,7 @@ function makeApi(db) {
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
     requestStainForSample, snapshotDb, restoreDb,
+    setSampleNote,
   };
 }
 
@@ -3672,6 +3690,66 @@ issue(137, "an embedding note given at intake is stored on the block", () => {
   const plain = api.addSample(p, "EE", "plain block");
   eq(api.get(`SELECT embedding_notes AS n FROM samples WHERE id = ?`, [plain.id]).n, "",
      "no note means an empty note, not a null");
+});
+
+// The correction path: "add a correction path. i should be able to edit all
+// notes.. especially in the logs". A note is typed once at intake and read back
+// in the log days later, so every one of the four has to be rewritable then —
+// individually, without the other three (or the fixative, or the stains) being
+// written back from whatever the caller was holding.
+invariant("every note a sample carries can be corrected after intake", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "oriented block", {
+    embeddingNotes: "cut face down",
+    cutNotes: "10 um",
+    slideNotes: "two sections per slide",
+    overallNotes: "decal ran long",
+    fixative: "PFA",
+    stains: "H&E",
+  });
+  const notes = () =>
+    api.get(
+      `SELECT embedding_notes AS e, cut_notes AS c, slide_notes AS s, overall_notes AS o,
+              fixative_agent AS fix, stains AS st, sample_description AS d
+         FROM samples WHERE id = ?`,
+      [id],
+    );
+
+  const corrected = {
+    embedding_notes: "cut face UP",
+    cut_notes: "8 um",
+    slide_notes: "three sections per slide",
+    overall_notes: "decal ran long; rehydrated overnight",
+  };
+  for (const [field, text] of Object.entries(corrected)) api.setSampleNote(id, field, text);
+
+  const after = notes();
+  eq(after.e, corrected.embedding_notes, "the embedding note is corrected");
+  eq(after.c, corrected.cut_notes, "the cut note is corrected");
+  eq(after.s, corrected.slide_notes, "the slide note is corrected");
+  eq(after.o, corrected.overall_notes, "the sample note is corrected");
+  // Correcting one note must not touch the block's other columns. This is why
+  // the correction path is a single-column write and not updateSampleDetails.
+  eq(after.fix, "PFA", "the fixative is untouched");
+  eq(after.st, "H&E", "the stains are untouched");
+  eq(after.d, "oriented block", "the description is untouched");
+
+  // A note cleared to whitespace reads as empty, not as a blank line: every
+  // screen that shows a note tests the string for content.
+  api.setSampleNote(id, "cut_notes", "   ");
+  eq(notes().c, "", "a note cleared to spaces reads as empty");
+
+  // The column is never taken from the argument. A field that is not a note
+  // must be refused outright rather than written.
+  let refused = false;
+  try {
+    api.setSampleNote(id, "sample_description", "not a note");
+  } catch {
+    refused = true;
+  }
+  assert(refused, "a column that is not a note is refused");
+  eq(notes().d, "oriented block", "and nothing was written");
 });
 
 // ---------------------------------------------------------------------------

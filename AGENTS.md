@@ -28,6 +28,10 @@ It lists every suite this repository has, with either the command a pull request
 So **a new suite, script, test directory or test config must be added to `tests/suites.json` in the same change**, or CI goes red.
 This is the same mechanism as projtracker's `tests/suites.json`, read the same way.
 
+`pnpm test:legacy` regenerates its fixture, so it leaves
+`tests/fixtures/legacy-pre-0023.b64` modified in git with no change of substance.
+Restore it (`git checkout --`) rather than committing it.
+
 Playwright suites drive the real app in Chromium against the sql.js Tauri
 shim. A schema or workflow change should run the first two; the third walks the
 screen and Undo/Redo (`docs/stress_test_v3.md`):

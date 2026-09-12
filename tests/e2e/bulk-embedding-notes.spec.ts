@@ -84,8 +84,9 @@ async function exportedNotes(page: Page): Promise<{ csv: Map<string, string>; xl
 
 /**
  * Read one block's note back from the drawer and the expanded Logs row, and
- * from the two exports. `""` means the block has none, and then neither
- * surface may show an empty heading for it.
+ * from the two exports. `""` means the block has none: the drawer, which only
+ * displays the note, then shows no heading for it, while the Logs row — the
+ * surface the note is corrected on — shows an empty box.
  */
 async function expectNoteEverywhere(
   page: Page,
@@ -103,15 +104,13 @@ async function expectNoteEverywhere(
   }
   await page.locator("button:has(svg.lucide-x)").first().click();
 
+  // In the Logs the note is editable rather than displayed, so the box is there
+  // either way and the assertion is on its VALUE — empty for a block that was
+  // given no note.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: code, exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  if (note) {
-    await expect(page.getByText("Embedding notes", { exact: true })).toBeVisible();
-    await expect(page.getByText(note, { exact: true })).toBeVisible();
-  } else {
-    await expect(page.getByText("Embedding notes", { exact: true })).toHaveCount(0);
-  }
+  await expect(page.getByLabel(`Embedding notes for ${code}`)).toHaveValue(note);
   await page.getByRole("cell", { name: code, exact: true }).click(); // collapse
 
   expect(exported.csv.get(code), `${code} in the CSV export`).toBe(note);

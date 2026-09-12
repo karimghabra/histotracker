@@ -39,7 +39,7 @@ import {
   setSamplesProcessingType as setSamplesProcessingTypeDb,
   setSampleArchived,
   setSamplesArchived,
-  setSampleNotes,
+  setSampleNote,
   setSampleDescription,
   setSlideNotes,
   setSlidesDepthTag,
@@ -57,9 +57,11 @@ import {
 } from "../lib/db";
 import type { DbImage } from "../lib/db";
 import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../lib/types";
+import { sampleNoteLabel } from "../lib/sampleNotes";
+import type { SampleNoteField } from "../lib/sampleNotes";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { useUndoStore } from "../lib/undo";
-import { composeDescription, nowTimestamp } from "../lib/utils";
+import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 /**
@@ -262,8 +264,27 @@ export function useActions() {
     [commit],
   );
 
-  const editSampleNotes = useCallback(
-    (sampleId: number, notes: string) => commit("Edit sample notes", () => setSampleNotes(sampleId, notes)),
+  /**
+   * Correct one of a sample's four notes. A note is typed once, at intake, and
+   * read back later in the log; until this existed the log was where you found
+   * out a note was wrong and also where you could do nothing about it.
+   *
+   * Unchanged text is dropped rather than committed, so reading a note — which
+   * means focusing and blurring a textarea — never buries the user's real undo
+   * history under no-op entries.
+   */
+  const editSampleNote = useCallback(
+    async (sampleId: number, field: SampleNoteField, text: string) => {
+      const before = await getSample(sampleId);
+      if (!before) return;
+      if ((before[field] ?? "") === text.trim()) return;
+      // displayCode, because this label is shown to the user in the undo flash
+      // and every other surface calls the block EE-1, not EE-0001 (#87).
+      await commit(
+        `Edit ${displayCode(before.sample_code)} ${sampleNoteLabel(field).toLowerCase()}`,
+        () => setSampleNote(sampleId, field, text),
+      );
+    },
     [commit],
   );
 
@@ -856,7 +877,7 @@ export function useActions() {
     moveProcessingBatch,
     editBatchStart,
     editTimestamp,
-    editSampleNotes,
+    editSampleNote,
     editSampleDescription,
     editSlideNotes,
     tagSlidesDepth,

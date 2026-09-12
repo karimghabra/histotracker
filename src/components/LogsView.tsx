@@ -14,6 +14,7 @@ import {
   STAGE_LABELS,
   STAGE_ORDER,
 } from "../lib/stages";
+import { SAMPLE_NOTES } from "../lib/sampleNotes";
 import { logAgents, outstandingStains } from "../lib/logStains";
 import type { AssignedStain, LogAgent } from "../lib/logStains";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt, parseAgent, CATALOG_SEP } from "../lib/utils";
@@ -1018,7 +1019,7 @@ function FragmentRow({
   onToggleSlideSelect: (id: number) => void;
 }) {
   const {
-    editSampleNotes,
+    editSampleNote,
     editSlideNotes,
     editSampleDescription,
     setArchived,
@@ -1334,33 +1335,39 @@ function FragmentRow({
               </>
             )}
 
-            {/* Written at intake for whoever embeds the block (#137). Read-only
-                here, as it is in the board drawer — it describes a decision
-                made about the specimen, not a running commentary. */}
-            {sample.embedding_notes?.trim() && (
-              <>
+            {/* All four of the sample's notes, correctable right here. The log
+                is where a wrong note is noticed — it is the surface that reads
+                the record back — so it is where the correction has to be
+                possible; embedding and cut notes used to be typed once at
+                intake and then be permanently wrong. They are grouped rather
+                than scattered so a reader can see, in one place, every word
+                written about this block. Same save-on-blur editor as the
+                description and the per-slide notes below; a viewer still only
+                reads them (NotesEditor gates that centrally, #72).
+
+                The empty ones keep their box, unlike the read-only display this
+                replaced (#137) and the board drawer, which still hides what was
+                never written: a correction surface that vanishes for a blank
+                note is a correction surface that cannot fill one in. */}
+            {SAMPLE_NOTES.map(({ field, label, placeholder }) => (
+              <div key={field}>
                 <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                  Embedding notes
+                  {label}
                 </h4>
-                <p className="whitespace-pre-wrap text-[11px] text-ink">{sample.embedding_notes}</p>
-              </>
-            )}
+                <NotesEditor
+                  value={sample[field] ?? ""}
+                  placeholder={placeholder}
+                  ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
+                  onSave={(text) => void editSampleNote(sample.id, field, text)}
+                />
+              </div>
+            ))}
 
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
             </h4>
             <Timeline events={recordedEvents(sample as unknown as Record<string, unknown>, BLOCK_TIMELINE_STAGES)} />
-
-            {/* Sample notes — free text, saved on blur. */}
-            <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-              Sample notes
-            </h4>
-            <NotesEditor
-              value={sample.overall_notes ?? ""}
-              placeholder="Notes about this sample…"
-              onSave={(notes) => void editSampleNotes(sample.id, notes)}
-            />
 
             {/* #136 — the stains this block owes. They have no slide and no
                 timeline, so they cannot live in the list below; without them
