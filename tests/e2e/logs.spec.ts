@@ -92,10 +92,11 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   const slideRow = page.getByRole("button", { name: /EE-1-A/ });
   await expect(slideRow).toBeVisible();
   // Sample notes persist through a refetch.
-  const sampleNotes = page.getByPlaceholder("Notes about this sample…");
+  const sampleNotes = page.getByLabel("General Notes for EE-1", { exact: true });
+  await page.getByLabel("Edit General Notes for EE-1", { exact: true }).click();
   await sampleNotes.fill("Block looks good");
   await sampleNotes.blur();
-  await expect(sampleNotes).toHaveValue("Block looks good");
+  await expect(sampleNotes).toHaveText("Block looks good");
 
   // Expand the slide → its own (separate) panel. No Cut step yet: this group is
   // still sitting in Needs Sectioning, and a queued slide has not been cut
@@ -112,7 +113,9 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   // Collapse + re-expand the sample: both notes survive (read back from the DB).
   await sampleCell.click();
   await sampleCell.click();
-  await expect(page.getByPlaceholder("Notes about this sample…")).toHaveValue("Block looks good");
+  await expect(page.getByLabel("General Notes for EE-1", { exact: true })).toHaveText(
+    "Block looks good",
+  );
   // The slide stayed expanded, so its notes are read straight back from the DB.
   await expect(page.getByPlaceholder("Notes about this slide…")).toHaveValue("Faint staining");
   await page.screenshot({ path: "test-results/logs-expanded.png", fullPage: true });

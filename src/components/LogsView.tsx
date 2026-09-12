@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Pencil, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -14,6 +14,7 @@ import {
   STAGE_LABELS,
   STAGE_ORDER,
 } from "../lib/stages";
+import { SAMPLE_NOTES } from "../lib/sampleNotes";
 import { logAgents, outstandingStains } from "../lib/logStains";
 import type { AssignedStain, LogAgent } from "../lib/logStains";
 import { cn, compareSlideCodes, displayCode, matchesSearch, slideCutAt, parseAgent, CATALOG_SEP } from "../lib/utils";
@@ -237,12 +238,16 @@ function NotesEditor({
   onSave,
   rows = 2,
   ariaLabel,
+  autoFocus,
+  onDone,
 }: {
   value: string;
   placeholder: string;
   onSave: (notes: string) => void;
   rows?: number;
   ariaLabel?: string;
+  autoFocus?: boolean;
+  onDone?: () => void;
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
@@ -259,6 +264,7 @@ function NotesEditor({
   return (
     <textarea
       aria-label={ariaLabel}
+      autoFocus={autoFocus}
       value={text}
       rows={rows}
       readOnly={readOnly}
@@ -268,11 +274,99 @@ function NotesEditor({
       onFocus={() => setFocused(true)}
       onBlur={() => {
         setFocused(false);
-        if (readOnly) return;
-        if (text !== (value ?? "")) onSave(text);
+        if (!readOnly && text !== (value ?? "")) onSave(text);
+        onDone?.();
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
+  );
+}
+
+/**
+ * One of a sample's notes: the words themselves, and a pencil to change them.
+ *
+ * The log is where a note is read BACK, and a note typed at a bench runs to
+ * however many lines it runs to — inside a textarea the tail of a long one sits
+ * behind a scrollbar, which the read-only display this replaced never did. So
+ * the note is ordinary text at whatever height it needs, and it is only text:
+ * not a control, not focusable, not a click target, so it can be dragged over
+ * and copied into a bench book. Editing starts from the pencil beside the
+ * heading instead, which names itself rather than the words it opens.
+ *
+ * Read-only (a viewer, or a workstation nobody has signed in to) simply has no
+ * pencil: nothing here accepts typing and drops it on blur (#72).
+ */
+function SampleNote({
+  label,
+  code,
+  value,
+  placeholder,
+  onSave,
+}: {
+  label: string;
+  code: string;
+  value: string;
+  placeholder: string;
+  onSave: (notes: string) => Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  // The text just typed, held on screen for exactly as long as the write of it
+  // is in flight. A save is a write plus a whole-database snapshot for the undo
+  // stack — without the hold the note flips back to the words it replaced the
+  // instant focus leaves, or vanishes if it is the first thing written here,
+  // which reads as "it did not take" and invites a retype. The write finishing
+  // is what ends the hold, whatever it did: wrote, wrote nothing, or failed. So
+  // the screen goes back to the record as soon as the record can answer, and an
+  // undo landing in the meantime is what the row then shows.
+  const [pending, setPending] = useState<string | null>(null);
+  const readOnly = useReadOnly();
+  const shown = pending ?? value ?? "";
+  return (
+    <div>
+      <div className="mb-1 mt-3 flex items-center gap-1.5">
+        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{label}</h4>
+        {!readOnly && (
+          <button
+            type="button"
+            aria-label={`Edit ${label} for ${code}`}
+            title="Correct this note"
+            onClick={() => setEditing(true)}
+            // Negative margin against the padding: a hand at a bench needs more
+            // than an 11px square to hit, and this is the only way in.
+            className="-m-1.5 p-1.5 text-ink-faint hover:text-brand"
+          >
+            <Pencil size={11} />
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <NotesEditor
+          value={shown}
+          placeholder={placeholder}
+          rows={6}
+          ariaLabel={`${label} for ${code}`}
+          autoFocus
+          onSave={(text) => {
+            setPending(text);
+            // Not caught: a failed save still reaches App's unhandledrejection
+            // backstop to be said out loud (#72).
+            void onSave(text).finally(() => setPending((p) => (p === text ? null : p)));
+          }}
+          onDone={() => setEditing(false)}
+        />
+      ) : shown.trim() ? (
+        // `note` rather than a control: the words are content, so a screen
+        // reader speaks them, and the label names the field without replacing
+        // them the way a button's would.
+        <p
+          role="note"
+          aria-label={`${label} for ${code}`}
+          className="w-full whitespace-pre-wrap rounded-md border border-line px-2 py-1 text-[11px] text-ink"
+        >
+          {shown}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1018,7 +1112,7 @@ function FragmentRow({
   onToggleSlideSelect: (id: number) => void;
 }) {
   const {
-    editSampleNotes,
+    editSampleNote,
     editSlideNotes,
     editSampleDescription,
     setArchived,
@@ -1334,33 +1428,44 @@ function FragmentRow({
               </>
             )}
 
-            {/* Written at intake for whoever embeds the block (#137). Read-only
-                here, as it is in the board drawer — it describes a decision
-                made about the specimen, not a running commentary. */}
-            {sample.embedding_notes?.trim() && (
-              <>
-                <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                  Embedding notes
-                </h4>
-                <p className="whitespace-pre-wrap text-[11px] text-ink">{sample.embedding_notes}</p>
-              </>
-            )}
+            {/* All four of the sample's notes, correctable right here. The log
+                is where a wrong note is noticed — it is the surface that reads
+                the record back — so it is where the correction has to be
+                possible; embedding and cut notes used to be typed once at
+                intake and then be permanently wrong. They are grouped rather
+                than scattered so a reader can see, in one place, every word
+                written about this block. Same save-on-blur editor as the
+                description and the per-slide notes below, but read as plain
+                text — a long note is read back whole, and the pencil beside each
+                heading is the way into it.
+
+                A note nobody wrote leaves that pencil behind, so it can still be
+                written later — the reason the read-only display this replaced
+                (#137) was not enough. Where nothing can be written there is no
+                pencil and no text either, and the row reads as terse as it did
+                before: on a viewer, and on a workstation nobody has signed in to
+                yet, which is how the app comes up (#128 — `useReadOnly` is true
+                for both). */}
+            {SAMPLE_NOTES.map(({ field, label, placeholder }) => {
+              const written = (sample[field] ?? "").trim();
+              if (readOnly && !written) return null;
+              return (
+                <SampleNote
+                  key={field}
+                  label={label}
+                  code={displayCode(sample.sample_code)}
+                  value={sample[field] ?? ""}
+                  placeholder={placeholder}
+                  onSave={(text) => editSampleNote(sample.id, field, text)}
+                />
+              );
+            })}
 
             {/* Sample timeline — the block's own lifecycle. */}
             <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
               Sample timeline
             </h4>
             <Timeline events={recordedEvents(sample as unknown as Record<string, unknown>, BLOCK_TIMELINE_STAGES)} />
-
-            {/* Sample notes — free text, saved on blur. */}
-            <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-              Sample notes
-            </h4>
-            <NotesEditor
-              value={sample.overall_notes ?? ""}
-              placeholder="Notes about this sample…"
-              onSave={(notes) => void editSampleNotes(sample.id, notes)}
-            />
 
             {/* #136 — the stains this block owes. They have no slide and no
                 timeline, so they cannot live in the list below; without them

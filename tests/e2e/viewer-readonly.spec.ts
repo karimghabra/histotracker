@@ -256,6 +256,35 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await ws.getByRole("button", { name: "Placed in ethanol" }).click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
 
+  // Two of the block's four notes written from the workstation's own Logs, two
+  // left unwritten — what the viewer does with each is the point below.
+  await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
+  for (const [label, written] of [
+    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["General Notes", "decal ran long on this one"],
+  ]) {
+    await ws.getByLabel(`Edit ${label} for EE-1`, { exact: true }).click();
+    const box = ws.getByLabel(`${label} for EE-1`, { exact: true });
+    await box.fill(written);
+    await box.blur();
+  }
+  // Both writes are in the database before the sync that carries them over; a
+  // save-on-blur write is still in flight when the blur returns.
+  await expect
+    .poll(() =>
+      ws.evaluate(
+        () =>
+          (
+            window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }
+          ).__SHIM_SELECT__(
+            `SELECT cut_notes AS cut, overall_notes AS overall
+               FROM samples WHERE sample_code = 'EE-0001'`,
+          )[0],
+      ),
+    )
+    .toEqual({ cut: "10 um, discard the first ribbon", overall: "decal ran long on this one" });
+
   await vw.goto("/?freshdb=1");
   await expect(vw.locator("text=/^viewer$/i").first()).toBeVisible();
   await streamTo(ws, vw, vw.getByText("EE-1", { exact: true }).first());
@@ -268,10 +297,26 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await expect(vw.getByRole("button", { name: /Archive EE-1/ })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Request stain for/ })).toHaveCount(0);
   // Notes are readable but not editable — they used to accept typing and throw
-  // it away on blur (#72). Target the notes textarea by placeholder; the Logs
-  // search box is also a textbox and is legitimately editable.
-  const notes = vw.getByPlaceholder("Notes about this sample…");
-  await expect(notes).toHaveAttribute("readonly", "");
+  // it away on blur (#72). Every note this block actually carries is correctable
+  // on the workstation, so each one has to refuse to open here — one that opened
+  // would be the #72 bug again.
+  for (const [label, written] of [
+    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["General Notes", "decal ran long on this one"],
+  ]) {
+    // The words are here to read — and to select, to copy into a bench book —
+    // and nothing offers to open them: the pencil the workstation used to write
+    // this note is not on this machine at all.
+    const box = vw.getByLabel(`${label} for EE-1`, { exact: true });
+    await expect(box).toHaveText(written);
+    await expect(box).toHaveRole("note");
+    await expect(vw.getByLabel(`Edit ${label} for EE-1`, { exact: true })).toHaveCount(0);
+  }
+  // A note nobody wrote gets no box on a viewer: an empty one is there to be
+  // filled in, and this machine cannot fill it in.
+  for (const label of ["Embedding Notes", "Slide Notes"]) {
+    await expect(vw.getByLabel(`${label} for EE-1`, { exact: true })).toHaveCount(0);
+  }
 
   await wsCtx.close();
   await vwCtx.close();

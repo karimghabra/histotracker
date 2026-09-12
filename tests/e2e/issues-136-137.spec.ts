@@ -272,14 +272,20 @@ test("#137: a block created without embedding notes says nothing about them", as
   await newSample(page, { description: "plain block" });
   await expect(page.getByText("EE-1")).toBeVisible();
 
-  // An empty optional note must not leave an empty heading behind on either
-  // surface that shows it.
+  // An empty optional note must not leave an empty heading behind where the
+  // note is only DISPLAYED, which is the board drawer.
   await openBlockDrawer(page, "EE-1");
   await expect(page.getByRole("heading", { name: "Embedding Notes" })).toHaveCount(0);
   await page.locator("button:has(svg.lucide-x)").first().click();
 
+  // The Logs row is the correction surface, so there the pencil stays — the row
+  // says nothing about the block, but the note can still be written later (see
+  // notes-correction.spec.ts). A correction surface that hides a blank note
+  // cannot fill one in.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  await expect(page.getByText("Embedding notes")).toHaveCount(0);
+  await expect(page.getByLabel("Embedding Notes for EE-1", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Edit Embedding Notes for EE-1", { exact: true }).click();
+  await expect(page.getByLabel("Embedding Notes for EE-1", { exact: true })).toHaveValue("");
 });

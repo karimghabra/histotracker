@@ -598,7 +598,11 @@ next launch (https://github.com/karimghabra/histotracker/pull/138).
 The second hazard is gone in 0.18.0, which migrates a backup or a pulled snapshot before swapping it in (`swapInImageFromElsewhere`, `docs/shared_data_sync.md` §1a); the first still stands.
 A box in
 `NewSampleDialog` (one note for a batch, or one per sample); read-back in the
-board drawer, the expanded Logs row, `SAMPLE_COLUMNS` and the Logs CSV/XLSX.
+board drawer, `SAMPLE_COLUMNS` and the Logs CSV/XLSX. In the expanded Logs row
+it is no longer read-back but an editor: all four of a sample's notes are
+correctable there, through `SAMPLE_NOTES` (`src/lib/sampleNotes.ts`) and the
+single-column `setSampleNote`, which is the same shape #79 settled on for the
+description.
 Undo restores whole database images, so undoing an edit restores the note with
 everything else. (On master before the 0.18.0 reconciliation it was also listed
 in `RESTORE_COLUMNS`, which the release line had already deleted as unused;
@@ -612,7 +616,9 @@ build in use can still open the upgraded file. PATH C fails with the old 0025
 migration in place. That harness now applies *every* migration the fixture
 predates rather than naming 0023 alone, which is how it quietly stopped
 covering "the update". `NewSampleDialog.test.tsx` and
-`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes.
+`tests/e2e/bulk-embedding-notes.spec.ts` cover the batch modes;
+`tests/e2e/notes-correction.spec.ts` covers correcting the note afterwards, from
+the Logs.
 
 ### #136 — assigned stains did not reach the log
 

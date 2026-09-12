@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Sample, Slide } from "../lib/types";
+import { ReadOnlyProvider } from "../lib/readOnly";
 
 // LogsView reads its data through react-query hooks and its mutations through
 // useActions; both are replaced so the real component renders against fixtures.
@@ -9,6 +10,13 @@ const data = vi.hoisted(() => ({
   samples: [] as Sample[],
   slides: [] as Slide[],
   catalog: [] as Array<{ id: number; assay_type: string; name: string; is_active: number }>,
+  // Every action the view calls, in order, as [name, ...args].
+  calls: [] as Array<[string, ...unknown[]]>,
+  // How a save behaves: it succeeds when the test lets it, or it fails. The
+  // view holds the typed words on screen for exactly as long as the write is in
+  // flight, so a test has to be able to hold one open.
+  finishSave: null as null | (() => void),
+  failure: null as Error | null,
 }));
 
 vi.mock("../hooks/useData", () => ({
@@ -19,10 +27,42 @@ vi.mock("../hooks/useData", () => ({
   useSampleRemovals: () => ({ data: [] }),
 }));
 vi.mock("../hooks/useActions", () => ({
-  useActions: () => new Proxy({}, { get: () => () => undefined }),
+  useActions: () =>
+    new Proxy(
+      {},
+      {
+        get:
+          (_t, name: string) =>
+          (...args: unknown[]) => {
+            data.calls.push([name, ...args]);
+            if (data.failure) return Promise.reject(data.failure);
+            return new Promise<boolean>((resolve) => {
+              data.finishSave = () => resolve(true);
+            });
+          },
+      },
+    ),
 }));
 
 const { LogsView } = await import("./LogsView");
+
+/**
+ * A failed save rejects a promise nobody awaits — that is how the app reports
+ * one, through the unhandledrejection backstop App installs (#72). Stand in for
+ * that backstop, for the one test that makes a save fail, so the rejection is
+ * expected here rather than reported as a crash. Scoped to that test so a
+ * genuine stray rejection in any other still surfaces.
+ */
+async function expectingAFailedSave(body: () => Promise<void>) {
+  const swallow = () => undefined;
+  process.on("unhandledRejection", swallow);
+  try {
+    await body();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    process.off("unhandledRejection", swallow);
+  }
+}
 
 const assigned = (...agents: Array<[string, string]>) =>
   JSON.stringify(agents.map(([assay_type, assay_name]) => ({ assay_type, assay_name })));
@@ -37,6 +77,9 @@ const sample = (over: Partial<Sample>): Sample =>
     processing_type: "Short",
     current_stage: "embedded",
     date_added: "2026-07-24 10:00",
+    embedding_notes: "",
+    cut_notes: "",
+    slide_notes: "",
     overall_notes: "",
     preselected_stains: "",
     ...over,
@@ -64,10 +107,13 @@ function stainsCell(code: string): HTMLElement {
 }
 
 beforeEach(() => {
+  data.finishSave = null;
+  data.failure = null;
   localStorage.clear();
   nextId = 1;
   data.samples = [];
   data.slides = [];
+  data.calls = [];
   data.catalog = [
     { id: 1, assay_type: "stain", name: "H&E", is_active: 1 },
     { id: 2, assay_type: "stain", name: "Alcian Blue", is_active: 1 },
@@ -150,5 +196,186 @@ describe("LogsView — the Assay Type filter", () => {
     await userEvent.selectOptions(screen.getByDisplayValue("Any type"), "ihc");
     expect(screen.queryByText("EE-3")).not.toBeNull();
     expect(screen.queryByText("EE-4")).toBeNull();
+  });
+});
+
+/**
+ * "add a correction path. i should be able to edit all notes.. especially in
+ * the logs" — the Logs row is where a wrong note is noticed, so it is where all
+ * four of a sample's notes have to be correctable. The round trip through the
+ * real database is proved end to end by tests/e2e/notes-correction.spec.ts and
+ * at the data layer by the workflow harness; what is proved here is the wiring:
+ * each box shows its OWN note, and saving it writes that one field.
+ */
+describe("LogsView — correcting a sample's notes", () => {
+  const FOUR: Array<[string, string, string]> = [
+    ["Embedding Notes", "embedding_notes", "cut face down"],
+    ["Sectioning / Cut Notes", "cut_notes", "10 um"],
+    ["Slide Notes", "slide_notes", "two sections per slide"],
+    ["General Notes", "overall_notes", "decal ran long"],
+  ];
+
+  const withNotes = () =>
+    sample({
+      sample_code: "EE-0001",
+      embedding_notes: "cut face down",
+      cut_notes: "10 um",
+      slide_notes: "two sections per slide",
+      overall_notes: "decal ran long",
+    });
+
+  it("reads every one of the four notes back in the expanded row", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    for (const [label, , written] of FOUR) {
+      expect(
+        screen.getByLabelText(`${label} for EE-1`),
+        `${label} reads back in the expanded row`,
+      ).toHaveTextContent(written);
+    }
+  });
+
+  // Prose until its own pencil is used, so a long note is read whole and can be
+  // dragged over and copied; a box only for the one being corrected.
+  it("opens the one note whose pencil was used, and leaves the others as text", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveValue("10 um");
+    for (const [label, , written] of FOUR.filter(([l]) => l !== "Sectioning / Cut Notes")) {
+      const other = screen.getByLabelText(`${label} for EE-1`);
+      expect(other).toHaveTextContent(written);
+      expect(other).toHaveAttribute("role", "note");
+    }
+  });
+
+  it("writes the corrected text to that note alone", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+    const box = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    await userEvent.clear(box);
+    await userEvent.type(box, "8 um");
+    await userEvent.tab(); // save on blur, the same as the description
+
+    expect(data.calls).toEqual([["editSampleNote", 1, "cut_notes", "8 um"]]);
+  });
+
+  // A blank note is the other half of getting one wrong: the pencil has to be
+  // there to open one, unlike the read-only display it replaced, which vanished.
+  it("offers the editor for a note that was never written", async () => {
+    data.samples = [sample({ sample_code: "EE-0002" })];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-2"));
+
+    for (const [label] of FOUR) {
+      // No note was written, so nothing is quoted back as one — only the pencil
+      // that opens an empty box to write it in.
+      expect(screen.queryByLabelText(`${label} for EE-2`)).toBeNull();
+      await userEvent.click(screen.getByLabelText(`Edit ${label} for EE-2`));
+      expect(screen.getByLabelText(`${label} for EE-2`)).toHaveValue("");
+      await userEvent.tab();
+    }
+  });
+
+  // Reading a note is focus-and-blur. That must not write, or the undo stack
+  // fills with entries that changed nothing.
+  it("does not write when the text was not changed", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    await userEvent.click(screen.getByLabelText("Edit General Notes for EE-1"));
+    await userEvent.tab();
+    expect(data.calls).toEqual([]);
+  });
+
+  // While the write is on its way the record has not caught up yet. What the
+  // user typed has to stay on screen through that gap, or a correction reads as
+  // having been thrown away — and it has to stop the moment the write is done,
+  // because after that the record is the only thing that can be trusted.
+  it("keeps the typed note on screen while the save is in flight", async () => {
+    data.samples = [withNotes()];
+    const { rerender } = render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+    await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+    await userEvent.tab();
+
+    // The write has not finished: the data still reads back the old note.
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
+
+    // It finishes, and the row goes back to reading the record — which is also
+    // what an undo landing in this window leaves behind, and what a save that
+    // wrote nothing (a stray space the record trims away) leaves behind.
+    await act(async () => {
+      data.finishSave?.();
+    });
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
+  });
+
+  // A save that FAILED must let go too, rather than showing a correction that
+  // was never recorded. The message is App's unhandledrejection backstop.
+  it("lets the typed note go when the save fails", async () => {
+    await expectingAFailedSave(async () => {
+      data.samples = [withNotes()];
+      data.failure = new Error("disk went away");
+      const { rerender } = render(<LogsView />);
+      await userEvent.click(screen.getByText("EE-1"));
+
+      await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+      await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+      await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+      await userEvent.tab();
+
+      rerender(<LogsView />);
+      expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
+    });
+  });
+
+  // A viewer cannot correct anything, so an empty box there is an invitation it
+  // cannot accept — it reads the notes the block actually carries and no more.
+  it("offers a viewer only the notes that were written", async () => {
+    data.samples = [sample({ sample_code: "EE-0001", cut_notes: "10 um" })];
+    render(
+      <ReadOnlyProvider value={{ readOnly: true, reason: "viewer" }}>
+        <LogsView />
+      </ReadOnlyProvider>,
+    );
+    await userEvent.click(screen.getByText("EE-1"));
+
+    const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    expect(cut).toHaveTextContent("10 um");
+    // The note is readable and nothing more: no pencil, so no way to open it.
+    expect(screen.queryByLabelText("Edit Sectioning / Cut Notes for EE-1")).toBeNull();
+    for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
+      expect(
+        screen.queryByLabelText(`${label} for EE-1`),
+        `${label} is not offered for a note nobody wrote`,
+      ).toBeNull();
+    }
+  });
+
+  // The refetch that follows a save is what puts the corrected note on screen;
+  // the editor must adopt it rather than keep showing the old text.
+  it("shows the corrected note after the data is read back", async () => {
+    data.samples = [withNotes()];
+    const { rerender } = render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveTextContent("cut face down");
+
+    data.samples = [{ ...data.samples[0], embedding_notes: "cut face UP" }];
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveTextContent("cut face UP");
   });
 });

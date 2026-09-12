@@ -26,6 +26,8 @@ import {
   processingDurationHours,
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
+import { SAMPLE_NOTE_FIELDS } from "./sampleNotes";
+import type { SampleNoteField } from "./sampleNotes";
 import {
   type AppSettings,
   parseSettings,
@@ -1451,9 +1453,41 @@ export async function setSampleDescription(sampleId: number, description: string
   ]);
 }
 
+/**
+ * The sample's general notes, by the name the shipped builds call it. The app
+ * now writes every note through setSampleNote(); this stays because the compat
+ * and stress harnesses drive the data layer by function name across two builds
+ * at once (tests/compat/lab.ts, tests/stress3/32-hostile.spec.ts), so the name
+ * is part of the released surface.
+ */
 export async function setSampleNotes(sampleId: number, notes: string): Promise<void> {
+  await setSampleNote(sampleId, "overall_notes", notes);
+}
+
+/**
+ * Correct one note on a sample. Notes are typed at intake, when the block is
+ * still an abstraction; by the time the mistake is noticed the only surface
+ * that shows the note is the log. `updateSampleDetails` can write these
+ * columns, but only as part of a whole NewSampleInput — the same wrong shape
+ * for a single text field that #79 found for the description: it writes back
+ * whatever the caller happened to be holding for fixative, stains and the
+ * other notes. This touches the one column.
+ *
+ * The column name is looked up from a literal list, never interpolated from
+ * the argument, so a caller cannot reach a column that is not a note.
+ */
+export async function setSampleNote(
+  sampleId: number,
+  field: SampleNoteField,
+  text: string,
+): Promise<void> {
+  const column = SAMPLE_NOTE_FIELDS.find((f) => f === field);
+  if (!column) throw new Error(`Not a sample note field: ${String(field)}`);
   const db = await getDb();
-  await db.execute(`UPDATE samples SET overall_notes = ? WHERE id = ?`, [notes, sampleId]);
+  // Trimmed, exactly like the intake path (addSample/updateSampleDetails) and
+  // the description: a note cleared to spaces must read as empty everywhere,
+  // because every screen that shows one tests the string for content.
+  await db.execute(`UPDATE samples SET ${column} = ? WHERE id = ?`, [text.trim(), sampleId]);
 }
 
 export async function setSlideNotes(slideId: number, notes: string): Promise<void> {
