@@ -208,17 +208,47 @@ describe("LogsView — correcting a sample's notes", () => {
     }
   });
 
-  // Prose until it is clicked, so a long note is read whole; a box only then.
-  it("opens the one note that was clicked, and leaves the others as prose", async () => {
+  // Prose until its own pencil is used, so a long note is read whole and can be
+  // dragged over and copied; a box only for the one being corrected.
+  it("opens the one note whose pencil was used, and leaves the others as text", async () => {
     data.samples = [withNotes()];
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
-    await userEvent.click(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
 
     expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveValue("10 um");
-    for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
-      expect(screen.getByLabelText(`${label} for EE-1`)).not.toHaveValue();
+    for (const [label, , written] of FOUR.filter(([l]) => l !== "Sectioning / Cut Notes")) {
+      const other = screen.getByLabelText(`${label} for EE-1`);
+      expect(other).toHaveTextContent(written);
+      expect(other).toHaveAttribute("role", "note");
     }
+  });
+
+  // Between the blur and the refetch the record has not caught up yet. What the
+  // user typed has to stay on screen through that gap, or a correction reads as
+  // having been thrown away.
+  it("keeps the typed note on screen until the record catches up", async () => {
+    data.samples = [withNotes()];
+    const { rerender } = render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+    await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+    await userEvent.tab();
+
+    // The save is still in flight: the data still reads back the old note.
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
+
+    // It lands, and the note follows the record again — an undo moves it rather
+    // than leaving it stuck on the typed text.
+    data.samples = [{ ...data.samples[0], cut_notes: "8 um" }];
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
+    data.samples = [{ ...data.samples[0], cut_notes: "10 um" }];
+    rerender(<LogsView />);
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
   });
 
   it("writes the corrected text to that note alone", async () => {
@@ -226,7 +256,7 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    await userEvent.click(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
     const box = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
     await userEvent.clear(box);
     await userEvent.type(box, "8 um");
@@ -243,10 +273,10 @@ describe("LogsView — correcting a sample's notes", () => {
     await userEvent.click(screen.getByText("EE-2"));
 
     for (const [label] of FOUR) {
-      // No note was written, so nothing is quoted back as one — what is offered
-      // is the invitation to write it.
+      // No note was written, so nothing is quoted back as one — only the pencil
+      // that opens an empty box to write it in.
       expect(screen.queryByLabelText(`${label} for EE-2`)).toBeNull();
-      await userEvent.click(screen.getByLabelText(`Add ${label} for EE-2`));
+      await userEvent.click(screen.getByLabelText(`Edit ${label} for EE-2`));
       expect(screen.getByLabelText(`${label} for EE-2`)).toHaveValue("");
       await userEvent.tab();
     }
@@ -259,7 +289,7 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    await userEvent.click(screen.getByLabelText("General Notes for EE-1"));
+    await userEvent.click(screen.getByLabelText("Edit General Notes for EE-1"));
     await userEvent.tab();
     expect(data.calls).toEqual([]);
   });
@@ -277,12 +307,8 @@ describe("LogsView — correcting a sample's notes", () => {
 
     const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
     expect(cut).toHaveTextContent("10 um");
-    // Clicking and typing reaches nothing: there is no box here to take it.
-    await userEvent.click(cut);
-    await userEvent.type(cut, "nope");
-    await userEvent.tab();
-    expect(data.calls).toEqual([]);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("10 um");
+    // The note is readable and nothing more: no pencil, so no way to open it.
+    expect(screen.queryByLabelText("Edit Sectioning / Cut Notes for EE-1")).toBeNull();
     for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
       expect(
         screen.queryByLabelText(`${label} for EE-1`),

@@ -278,12 +278,14 @@ test("#137: a block created without embedding notes says nothing about them", as
   await expect(page.getByRole("heading", { name: "Embedding Notes" })).toHaveCount(0);
   await page.locator("button:has(svg.lucide-x)").first().click();
 
-  // The Logs row is the correction surface, so there the box stays — empty, and
-  // saying nothing about the block, but fillable (see notes-correction.spec.ts).
-  // A correction surface that hides a blank note cannot fill one in.
+  // The Logs row is the correction surface, so there the pencil stays — the row
+  // says nothing about the block, but the note can still be written later (see
+  // notes-correction.spec.ts). A correction surface that hides a blank note
+  // cannot fill one in.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  await page.getByLabel("Embedding Notes for EE-1").click();
-  await expect(page.getByLabel("Embedding Notes for EE-1")).toHaveValue("");
+  await expect(page.getByLabel("Embedding Notes for EE-1", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Edit Embedding Notes for EE-1", { exact: true }).click();
+  await expect(page.getByLabel("Embedding Notes for EE-1", { exact: true })).toHaveValue("");
 });

@@ -31,24 +31,46 @@ const CORRECTED = {
   sample: "decal ran long; rehydrated overnight",
 };
 
-/** The four note editors in a block's expanded Logs row, by their own labels. */
+const KINDS = {
+  embedding: "Embedding Notes",
+  cut: "Sectioning / Cut Notes",
+  slide: "Slide Notes",
+  sample: "General Notes",
+} as const;
+
+/**
+ * A block's four notes as they READ in the expanded Logs row — the words
+ * themselves, exactly by their own label.
+ *
+ * `exact`, because the pencil that opens each one is a separate control whose
+ * name contains this one: a substring match would answer with whichever the DOM
+ * happened to hold, which is how a locator ends up asserting against a control
+ * it did not mean.
+ */
 function noteEditors(page: Page, code: string) {
+  const by = (label: string) => page.getByLabel(`${label} for ${code}`, { exact: true });
   return {
-    embedding: page.getByLabel(`Embedding Notes for ${code}`),
-    cut: page.getByLabel(`Sectioning / Cut Notes for ${code}`),
-    slide: page.getByLabel(`Slide Notes for ${code}`),
-    sample: page.getByLabel(`General Notes for ${code}`),
+    embedding: by(KINDS.embedding),
+    cut: by(KINDS.cut),
+    slide: by(KINDS.slide),
+    sample: by(KINDS.sample),
   };
 }
 
+/** The pencil beside a note's heading, which is what opens it for correcting. */
+function editPencil(page: Page, code: string, kind: keyof typeof KINDS) {
+  return page.getByLabel(`Edit ${KINDS[kind]} for ${code}`, { exact: true });
+}
+
 /**
- * Correct a note the way a user does: click the prose open, retype, move on.
+ * Correct a note the way a user does: pencil, retype, move on.
  *
- * A note is READ as prose here, so there is nothing to type into until it is
- * clicked; the same locator finds the textarea once it is.
+ * The note itself is only words — there is nothing to type into until the
+ * pencil opens a box, and the note's own label then finds that box.
  */
-async function correct(box: Locator, text: string) {
-  await box.click();
+async function correct(page: Page, code: string, kind: keyof typeof KINDS, text: string) {
+  await editPencil(page, code, kind).click();
+  const box: Locator = noteEditors(page, code)[kind];
   await box.fill(text);
   await box.blur();
 }
@@ -152,7 +174,7 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   // Correct all four from here. Click to open, save on blur, the same as the
   // description and the per-slide notes already in this row.
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await correct(notes[kind], CORRECTED[kind]);
+    await correct(page, "EE-1", kind, CORRECTED[kind]);
     await expect(notes[kind]).toHaveText(CORRECTED[kind]);
   }
 
@@ -203,12 +225,15 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
   await expandInLogs(page, "EE-1");
   const notes = noteEditors(page, "EE-1");
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await notes[kind].click();
+    // Nothing was written, so nothing is quoted back as a note — the pencil is
+    // what is offered, and it opens an empty box.
+    await expect(notes[kind], `${kind} notes says nothing about the block`).toHaveCount(0);
+    await editPencil(page, "EE-1", kind).click();
     await expect(notes[kind], `${kind} notes opens an empty box`).toHaveValue("");
     await notes[kind].blur();
   }
 
-  await correct(notes.cut, "wedge the block, it is tilting");
+  await correct(page, "EE-1", "cut", "wedge the block, it is tilting");
   await expect
     .poll(async () => (await storedNotes(page, "EE-0001")).cut)
     .toBe("wedge the block, it is tilting");
@@ -218,11 +243,12 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
 
   // Clearing is a correction too: a note emptied to whitespace must read as
   // empty, not as a blank line the drawer then shows a heading for.
-  await correct(noteEditors(page, "EE-1").cut, "   ");
+  await correct(page, "EE-1", "cut", "   ");
   await expect.poll(async () => (await storedNotes(page, "EE-0001")).cut).toBe("");
   await page.goto("/");
   await expandInLogs(page, "EE-1");
-  await noteEditors(page, "EE-1").cut.click();
+  await expect(noteEditors(page, "EE-1").cut).toHaveCount(0);
+  await editPencil(page, "EE-1", "cut").click();
   await expect(noteEditors(page, "EE-1").cut).toHaveValue("");
   await noteEditors(page, "EE-1").cut.blur();
   await openDrawerFromBoard(page, "EE-1");
@@ -258,12 +284,16 @@ test("a long note is read back whole in the Logs, not behind a scrollbar", async
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
   await page.getByLabel("Embedding Notes").fill(LONG);
+  // A one-line note to measure the long one against — note to note, both read
+  // the same way, so the comparison is about length and nothing else.
+  await page.getByLabel("General Notes").fill("decal ran long");
   await page.getByRole("button", { name: /Create Sample/ }).click();
   await expect(page.getByText("EE-1")).toBeVisible();
 
   await expandInLogs(page, "EE-1");
   const notes = noteEditors(page, "EE-1");
   await expect(notes.embedding).toHaveText(LONG);
+  await expect(notes.sample).toHaveText("decal ran long");
 
   // Every line of it is on screen. The note is read as prose, so there is no
   // box for the tail of it to hide inside. (1px of slack for sub-pixel rounding.)
@@ -271,11 +301,11 @@ test("a long note is read back whole in the Logs, not behind a scrollbar", async
     .poll(() => notes.embedding.evaluate((el) => el.scrollHeight - el.clientHeight))
     .toBeLessThanOrEqual(1);
 
-  // And it took the room it needed: twelve lines stand far taller than the
-  // one-line note below them, rather than both being the same fixed height.
+  // And it took the room it needed: twelve lines of it stand far taller than
+  // the one-line note below, rather than both stopping at the same fixed height.
   const long = await notes.embedding.boundingBox();
-  const short = await notes.sample.boundingBox();
-  expect(long!.height).toBeGreaterThan(short!.height * 6);
+  const oneLine = await notes.sample.boundingBox();
+  expect(long!.height).toBeGreaterThan(oneLine!.height * 6);
 });
 
 /**
@@ -296,8 +326,8 @@ test("a note opens on Enter, not merely by being tabbed to", async ({ page }) =>
   await expandInLogs(page, "EE-1");
   const embedding = noteEditors(page, "EE-1").embedding;
 
-  await embedding.focus();
-  await expect(embedding, "arriving at a note leaves it as the words").toHaveRole("note");
+  await editPencil(page, "EE-1", "embedding").focus();
+  await expect(embedding, "arriving at the pencil leaves the note as words").toHaveRole("note");
   await expect(embedding).toHaveText(INTAKE.embedding);
 
   await page.keyboard.press("Enter");
@@ -322,7 +352,7 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await page.getByLabel("Description for EE-1").fill("TE8-12 fixing sample, re-embedded");
 
   const embedding = noteEditors(page, "EE-1").embedding;
-  await correct(embedding, CORRECTED.embedding);
+  await correct(page, "EE-1", "embedding", CORRECTED.embedding);
   await expect(embedding).toHaveText(CORRECTED.embedding);
 
   // Both corrections are in the database before anything is undone. A save is
@@ -344,9 +374,8 @@ test("a correction is undoable, and the undo names the note it restores", async 
 
   // Reading a note must not itself become an undo entry: open one and close it
   // with no change, and Redo still offers the correction above it, not a no-op.
-  const sampleNotes = noteEditors(page, "EE-1").sample;
-  await sampleNotes.click();
-  await sampleNotes.blur();
+  await editPencil(page, "EE-1", "sample").click();
+  await noteEditors(page, "EE-1").sample.blur();
   await page.getByTitle("Redo (Ctrl+Y)").click();
   await expect(page.getByText("Redone: Edit EE-1 embedding notes")).toBeVisible();
   await expect(noteEditors(page, "EE-1").embedding).toHaveText(CORRECTED.embedding);

@@ -86,7 +86,8 @@ async function exportedNotes(page: Page): Promise<{ csv: Map<string, string>; xl
  * Read one block's note back from the drawer and the expanded Logs row, and
  * from the two exports. `""` means the block has none: the drawer, which only
  * displays the note, then shows no heading for it, while the Logs row — the
- * surface the note is corrected on — shows an empty box.
+ * surface the note is corrected on — keeps the heading and its pencil, so the
+ * note can still be written later.
  */
 async function expectNoteEverywhere(
   page: Page,
@@ -104,17 +105,18 @@ async function expectNoteEverywhere(
   }
   await page.locator("button:has(svg.lucide-x)").first().click();
 
-  // In the Logs the note is correctable as well as displayed, so it is there
-  // either way: read as prose, and empty for a block that was given no note —
-  // which only the box it opens can show.
+  // In the Logs the note is correctable as well as readable: the words when
+  // there are words, and for a block that was given no note nothing at all —
+  // only the pencil, which opens an empty box.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: code, exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  const box = page.getByLabel(`Embedding Notes for ${code}`);
+  const box = page.getByLabel(`Embedding Notes for ${code}`, { exact: true });
   if (note) {
     await expect(box).toHaveText(note);
   } else {
-    await box.click();
+    await expect(box).toHaveCount(0);
+    await page.getByLabel(`Edit Embedding Notes for ${code}`, { exact: true }).click();
     await expect(box).toHaveValue("");
     await box.blur();
   }

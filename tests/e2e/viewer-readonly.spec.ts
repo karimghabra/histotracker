@@ -260,12 +260,15 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   // left unwritten — what the viewer does with each is the point below.
   await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
   await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
-  await ws.getByLabel("Sectioning / Cut Notes for EE-1").click();
-  await ws.getByLabel("Sectioning / Cut Notes for EE-1").fill("10 um, discard the first ribbon");
-  await ws.getByLabel("Sectioning / Cut Notes for EE-1").blur();
-  await ws.getByLabel("General Notes for EE-1").click();
-  await ws.getByLabel("General Notes for EE-1").fill("decal ran long on this one");
-  await ws.getByLabel("General Notes for EE-1").blur();
+  for (const [label, written] of [
+    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["General Notes", "decal ran long on this one"],
+  ]) {
+    await ws.getByLabel(`Edit ${label} for EE-1`, { exact: true }).click();
+    const box = ws.getByLabel(`${label} for EE-1`, { exact: true });
+    await box.fill(written);
+    await box.blur();
+  }
   // Both writes are in the database before the sync that carries them over; a
   // save-on-blur write is still in flight when the blur returns.
   await expect
@@ -301,19 +304,18 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
     ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
     ["General Notes", "decal ran long on this one"],
   ]) {
-    const box = vw.getByLabel(`${label} for EE-1`);
+    // The words are here to read — and to select, to copy into a bench book —
+    // and nothing offers to open them: the pencil the workstation used to write
+    // this note is not on this machine at all.
+    const box = vw.getByLabel(`${label} for EE-1`, { exact: true });
     await expect(box).toHaveText(written);
-    // Clicking opens nothing: the note is the words, not a control. It stays
-    // readable — and selectable, to copy into a bench book — and never becomes
-    // a box that would take typing and drop it on blur.
-    await box.click();
     await expect(box).toHaveRole("note");
-    await expect(box).toHaveText(written);
+    await expect(vw.getByLabel(`Edit ${label} for EE-1`, { exact: true })).toHaveCount(0);
   }
   // A note nobody wrote gets no box on a viewer: an empty one is there to be
   // filled in, and this machine cannot fill it in.
   for (const label of ["Embedding Notes", "Slide Notes"]) {
-    await expect(vw.getByLabel(`${label} for EE-1`)).toHaveCount(0);
+    await expect(vw.getByLabel(`${label} for EE-1`, { exact: true })).toHaveCount(0);
   }
 
   await wsCtx.close();

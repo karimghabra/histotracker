@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Pencil, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -274,9 +274,8 @@ function NotesEditor({
       onFocus={() => setFocused(true)}
       onBlur={() => {
         setFocused(false);
+        if (!readOnly && text !== (value ?? "")) onSave(text);
         onDone?.();
-        if (readOnly) return;
-        if (text !== (value ?? "")) onSave(text);
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
@@ -284,99 +283,87 @@ function NotesEditor({
 }
 
 /**
- * One of a sample's notes: prose to read, a textarea only once someone means to
- * change it.
+ * One of a sample's notes: the words themselves, and a pencil to change them.
  *
  * The log is where a note is read BACK, and a note typed at a bench runs to
- * however many lines it runs to. Inside a textarea the tail of a long one sits
- * behind a scrollbar, which the read-only display this replaced never did — so
- * the note stays ordinary text, at whatever height it needs, until it is
- * clicked or tabbed into. Read-only (a viewer, or a workstation nobody has
- * signed in to) never gets that far: there is nothing there for it to correct,
- * so the note is only ever the prose, rather than a control that accepts typing
- * and drops it on blur (#72).
+ * however many lines it runs to — inside a textarea the tail of a long one sits
+ * behind a scrollbar, which the read-only display this replaced never did. So
+ * the note is ordinary text at whatever height it needs, and it is only text:
+ * not a control, not focusable, not a click target, so it can be dragged over
+ * and copied into a bench book. Editing starts from the pencil beside the
+ * heading instead, which names itself rather than the words it opens.
+ *
+ * Read-only (a viewer, or a workstation nobody has signed in to) simply has no
+ * pencil: nothing here accepts typing and drops it on blur (#72).
  */
 function SampleNote({
+  label,
+  code,
   value,
   placeholder,
-  ariaLabel,
   onSave,
 }: {
+  label: string;
+  code: string;
   value: string;
   placeholder: string;
-  ariaLabel: string;
   onSave: (notes: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  // The text just typed, held on screen until the record catches up with it. A
+  // save is a write plus a whole-database snapshot for the undo stack, and the
+  // refetch behind that is not instant on a real lab database — without this
+  // the note flips back to the words it replaced the instant focus leaves, or
+  // vanishes if it is the first thing written here, which reads as "it did not
+  // take" and invites a retype.
+  const [pending, setPending] = useState<{ text: string; was: string } | null>(null);
   const readOnly = useReadOnly();
-  const reason = useReadOnlyReason();
-  const text = value ?? "";
-  if (editing) {
-    return (
-      <NotesEditor
-        value={text}
-        placeholder={placeholder}
-        rows={6}
-        ariaLabel={ariaLabel}
-        autoFocus
-        onSave={onSave}
-        onDone={() => setEditing(false)}
-      />
-    );
-  }
-  // Nothing was written, so there is no note to read: what stands here is the
-  // invitation to write one, and it says so. The intake hint stays where it is
-  // honest — inside the box, once it is open — rather than reading, under the
-  // heading, as an instruction someone recorded about this block.
-  if (!text.trim()) {
-    return (
-      <button
-        type="button"
-        aria-label={`Add ${ariaLabel}`}
-        onClick={() => setEditing(true)}
-        className="w-full rounded-md border border-dashed border-line bg-white px-2 py-1 text-left text-[11px] text-ink-faint hover:border-brand/50 hover:text-ink"
-      >
-        Add a note
-      </button>
-    );
-  }
-  // `note` rather than `button`: a button's aria-label REPLACES what it contains,
-  // so the note itself would never be spoken on the surface that exists to read
-  // it back. This names the field and leaves the words as the content they are —
-  // selectable and copyable into a bench book, as the display it replaced was.
+  useEffect(() => {
+    if (pending && pending.was !== value) setPending(null);
+  }, [pending, value]);
+  const shown = pending && pending.was === value ? pending.text : (value ?? "");
   return (
-    <p
-      role="note"
-      aria-label={ariaLabel}
-      title={
-        readOnly
-          ? readOnlyNotice(reason, "Read-only viewer — edited on the workstation")
-          : "Click to correct this note"
-      }
-      // Read-only is not merely a disabled control: there is nothing to reach
-      // here at all (#72), so it stays out of the way of a keyboard entirely.
-      // Where a correction IS possible, opening it is deliberate — a click, or
-      // Enter on a note the user has tabbed to. Never on focus alone: tabbing
-      // down the row towards the slides would otherwise replace all four notes
-      // with textareas on the way past.
-      tabIndex={readOnly ? undefined : 0}
-      onClick={readOnly ? undefined : () => setEditing(true)}
-      onKeyDown={
-        readOnly
-          ? undefined
-          : (e) => {
-              if (e.key !== "Enter" && e.key !== " ") return;
-              e.preventDefault();
-              setEditing(true);
-            }
-      }
-      className={cn(
-        "w-full whitespace-pre-wrap rounded-md border border-line px-2 py-1 text-[11px] text-ink",
-        !readOnly && "cursor-text bg-white hover:border-brand/50",
-      )}
-    >
-      {text}
-    </p>
+    <div>
+      <div className="mb-1 mt-3 flex items-center gap-1.5">
+        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{label}</h4>
+        {!readOnly && (
+          <button
+            type="button"
+            aria-label={`Edit ${label} for ${code}`}
+            title="Correct this note"
+            onClick={() => setEditing(true)}
+            className="text-ink-faint hover:text-brand"
+          >
+            <Pencil size={11} />
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <NotesEditor
+          value={shown}
+          placeholder={placeholder}
+          rows={6}
+          ariaLabel={`${label} for ${code}`}
+          autoFocus
+          onSave={(text) => {
+            setPending({ text, was: value ?? "" });
+            onSave(text);
+          }}
+          onDone={() => setEditing(false)}
+        />
+      ) : shown.trim() ? (
+        // `note` rather than a control: the words are content, so a screen
+        // reader speaks them, and the label names the field without replacing
+        // them the way a button's would.
+        <p
+          role="note"
+          aria-label={`${label} for ${code}`}
+          className="w-full whitespace-pre-wrap rounded-md border border-line px-2 py-1 text-[11px] text-ink"
+        >
+          {shown}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1459,17 +1446,14 @@ function FragmentRow({
               const written = (sample[field] ?? "").trim();
               if (readOnly && !written) return null;
               return (
-                <div key={field}>
-                  <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                    {label}
-                  </h4>
-                  <SampleNote
-                    value={sample[field] ?? ""}
-                    placeholder={placeholder}
-                    ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
-                    onSave={(text) => void editSampleNote(sample.id, field, text)}
-                  />
-                </div>
+                <SampleNote
+                  key={field}
+                  label={label}
+                  code={displayCode(sample.sample_code)}
+                  value={sample[field] ?? ""}
+                  placeholder={placeholder}
+                  onSave={(text) => void editSampleNote(sample.id, field, text)}
+                />
               );
             })}
 
