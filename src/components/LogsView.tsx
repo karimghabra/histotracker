@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Search, Send, Star, Tag, Trash2 } from "lucide-react";
 import type { Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
@@ -232,6 +232,11 @@ function unmetRequest(slide: Slide): string | null {
 }
 
 // Free-text notes with a save-on-blur textarea (only writes when changed).
+//
+// The box grows to the note inside it. `rows` is the MINIMUM height, never a
+// ceiling: the log is where a note is read back, and a several-line note typed
+// at intake used to be read whole here — a fixed two-row box would put the rest
+// of it behind a scrollbar, which is a worse log in exchange for an editable one.
 function NotesEditor({
   value,
   placeholder,
@@ -247,6 +252,7 @@ function NotesEditor({
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
+  const box = useRef<HTMLTextAreaElement | null>(null);
   // A viewer READS notes; it must not appear to edit them. Gating here covers
   // every use of this editor — the description, sample notes and slide notes —
   // rather than three separate call-site checks, one of which would be missed
@@ -257,8 +263,18 @@ function NotesEditor({
   useEffect(() => {
     if (!focused) setText(value ?? "");
   }, [value, focused]);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    if (el.scrollHeight === 0) return;
+    // border-box, so the borders scrollHeight leaves out have to be added back
+    // or the last line sits one hairline behind a scrollbar.
+    el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`;
+  }, [text]);
   return (
     <textarea
+      ref={box}
       aria-label={ariaLabel}
       value={text}
       rows={rows}
@@ -427,8 +443,12 @@ export function LogsView() {
         // extra (#83).
         const removedCount = slidesForSample.filter(isRemoved).length;
         const extras = slidesForSample.length - removedCount - progress.total;
+        // Every kind of note the block carries, not just the general one: the
+        // expanded row now corrects all four, so a marker derived from one of
+        // them reads "no notes" about a note this very view just saved.
         const hasNotes =
-          Boolean(sample.overall_notes?.trim()) || slidesForSample.some((s) => Boolean(s.notes?.trim()));
+          SAMPLE_NOTES.some(({ field }) => Boolean(sample[field]?.trim())) ||
+          slidesForSample.some((s) => Boolean(s.notes?.trim()));
         return {
           sample,
           slides: slidesForSample,

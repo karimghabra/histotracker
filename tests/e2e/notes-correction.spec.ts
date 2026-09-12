@@ -203,6 +203,52 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
   await expect(page.getByRole("heading", { name: "Cut Notes", exact: true })).toHaveCount(0);
 });
 
+/**
+ * The Logs is where the record is READ back, so making a note editable there
+ * must not cost the reading of it: a note typed over several lines at intake
+ * used to render whole, and a fixed two-row box would hide all but the first
+ * two behind a scrollbar.
+ */
+test("a several-line note is read back whole in the Logs, not behind a scrollbar", async ({
+  page,
+}) => {
+  await boot(page);
+
+  const LONG = [
+    "cut face down, proximal end left",
+    "the tendon insertion points at the notch in the cassette",
+    "do not re-orient it after the first ribbon",
+    "wax was low on this one, top it up before embedding",
+    "block 3 of 4 from the same limb",
+    "ask Alex before re-embedding",
+  ].join("\n");
+
+  await page.getByRole("button", { name: "New Sample" }).click();
+  await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
+  await page.getByLabel("Embedding Notes").fill(LONG);
+  await page.getByRole("button", { name: /Create Sample/ }).click();
+  await expect(page.getByText("EE-1")).toBeVisible();
+
+  await expandInLogs(page, "EE-1");
+  const notes = noteEditors(page, "EE-1");
+  await expect(notes.embedding).toHaveValue(LONG);
+
+  // Nothing of the note is scrolled out of sight: the box is as tall as its
+  // own content. (1px of slack for sub-pixel line heights.)
+  await expect
+    .poll(async () =>
+      notes.embedding.evaluate((el: HTMLTextAreaElement) => el.scrollHeight - el.clientHeight),
+    )
+    .toBeLessThanOrEqual(1);
+
+  // And it grew to get there — an empty note keeps a readable minimum box,
+  // which is what a six-line note would have been stuck at.
+  const emptyBox = await notes.cut.evaluate((el: HTMLTextAreaElement) => el.clientHeight);
+  const fullBox = await notes.embedding.evaluate((el: HTMLTextAreaElement) => el.clientHeight);
+  expect(emptyBox).toBeGreaterThan(0);
+  expect(fullBox).toBeGreaterThan(emptyBox * 2);
+});
+
 test("a correction is undoable, and the undo names the note it restores", async ({ page }) => {
   await boot(page);
   await page.getByRole("button", { name: "New Sample" }).click();

@@ -244,6 +244,22 @@ describe("LogsView — correcting a sample's notes", () => {
     expect(data.calls).toEqual([]);
   });
 
+  // The collapsed row's 📝 marker says the block carries notes. This row is now
+  // where all four are written, so a marker drawn from the general note alone
+  // reads "no notes" about a note this very view just saved.
+  it("marks a block whose only note is one of the other three", async () => {
+    data.samples = [
+      sample({ sample_code: "EE-0001", cut_notes: "wedge the block, it is tilting" }),
+      sample({ sample_code: "EE-0002" }),
+    ];
+    render(<LogsView />);
+
+    const marked = screen.getByText("EE-1").closest("tr")!;
+    const unmarked = screen.getByText("EE-2").closest("tr")!;
+    expect(within(marked).getByTitle("Has notes")).toBeTruthy();
+    expect(within(unmarked).queryByTitle("Has notes")).toBeNull();
+  });
+
   // The refetch that follows a save is what puts the corrected note on screen;
   // the editor must adopt it rather than keep showing the old text.
   it("shows the corrected note after the data is read back", async () => {
