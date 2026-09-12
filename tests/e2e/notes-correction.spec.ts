@@ -282,6 +282,7 @@ test("a correction is undoable, and the undo names the note it restores", async 
   const description = page.getByLabel("Description for EE-1");
   await description.fill("TE8-12 fixing sample, re-embedded");
   await description.blur();
+  await expect(description).toHaveValue("TE8-12 fixing sample, re-embedded");
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByText("Undone: Edit EE-1 description")).toBeVisible();
 });
