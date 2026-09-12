@@ -238,12 +238,16 @@ function NotesEditor({
   onSave,
   rows = 2,
   ariaLabel,
+  autoFocus,
+  onDone,
 }: {
   value: string;
   placeholder: string;
   onSave: (notes: string) => void;
   rows?: number;
   ariaLabel?: string;
+  autoFocus?: boolean;
+  onDone?: () => void;
 }) {
   const [text, setText] = useState(value ?? "");
   const [focused, setFocused] = useState(false);
@@ -260,6 +264,7 @@ function NotesEditor({
   return (
     <textarea
       aria-label={ariaLabel}
+      autoFocus={autoFocus}
       value={text}
       rows={rows}
       readOnly={readOnly}
@@ -269,11 +274,74 @@ function NotesEditor({
       onFocus={() => setFocused(true)}
       onBlur={() => {
         setFocused(false);
+        onDone?.();
         if (readOnly) return;
         if (text !== (value ?? "")) onSave(text);
       }}
       className="w-full resize-y rounded-md border border-line bg-white px-2 py-1 text-[11px] text-ink outline-none placeholder:text-ink-faint focus:border-brand"
     />
+  );
+}
+
+/**
+ * One of a sample's notes: prose to read, a textarea only once someone means to
+ * change it.
+ *
+ * The log is where a note is read BACK, and a note typed at a bench runs to
+ * however many lines it runs to. Inside a textarea the tail of a long one sits
+ * behind a scrollbar, which the read-only display this replaced never did — so
+ * the note stays ordinary text, at whatever height it needs, until it is
+ * clicked or tabbed into. Read-only (a viewer, or a workstation nobody has
+ * signed in to) never gets that far: there is nothing there for it to correct,
+ * and the disabled control says so rather than accepting typing and dropping it
+ * on blur (#72).
+ */
+function SampleNote({
+  value,
+  placeholder,
+  ariaLabel,
+  onSave,
+}: {
+  value: string;
+  placeholder: string;
+  ariaLabel: string;
+  onSave: (notes: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const readOnly = useReadOnly();
+  const reason = useReadOnlyReason();
+  const text = value ?? "";
+  if (editing) {
+    return (
+      <NotesEditor
+        value={text}
+        placeholder={placeholder}
+        rows={6}
+        ariaLabel={ariaLabel}
+        autoFocus
+        onSave={onSave}
+        onDone={() => setEditing(false)}
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      disabled={readOnly}
+      title={
+        readOnly
+          ? readOnlyNotice(reason, "Read-only viewer — edited on the workstation")
+          : "Click to correct this note"
+      }
+      // Both, because WebKit does not focus a button on click the way Chromium
+      // does, and a keyboard user arrives by Tab without a click at all.
+      onClick={() => setEditing(true)}
+      onFocus={() => setEditing(true)}
+      className="w-full whitespace-pre-wrap rounded-md border border-line bg-white px-2 py-1 text-left text-[11px] text-ink hover:border-brand/50 disabled:hover:border-line"
+    >
+      {text.trim() ? text : <span className="text-ink-faint">{placeholder || "—"}</span>}
+    </button>
   );
 }
 
@@ -1342,8 +1410,8 @@ function FragmentRow({
                 intake and then be permanently wrong. They are grouped rather
                 than scattered so a reader can see, in one place, every word
                 written about this block. Same save-on-blur editor as the
-                description and the per-slide notes below; a viewer still only
-                reads them (NotesEditor gates that centrally, #72).
+                description and the per-slide notes below, but read as prose
+                until they are clicked, so a long note is read back whole.
 
                 An empty box is kept here so a note that was never written can
                 still be filled in — the reason the read-only display this
@@ -1351,8 +1419,7 @@ function FragmentRow({
                 the empty ones are left out and the row reads as terse as it did
                 before: on a viewer, and on a workstation nobody has signed in to
                 yet, which is how the app comes up (#128 — `useReadOnly` is true
-                for both). Six rows because a note is typed at a bench and runs
-                to several lines; the box is still draggable past that. */}
+                for both). */}
             {SAMPLE_NOTES.map(({ field, label, placeholder }) => {
               const written = (sample[field] ?? "").trim();
               if (readOnly && !written) return null;
@@ -1361,10 +1428,9 @@ function FragmentRow({
                   <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
                     {label}
                   </h4>
-                  <NotesEditor
+                  <SampleNote
                     value={sample[field] ?? ""}
                     placeholder={placeholder}
-                    rows={6}
                     ariaLabel={`${label} for ${displayCode(sample.sample_code)}`}
                     onSave={(text) => void editSampleNote(sample.id, field, text)}
                   />

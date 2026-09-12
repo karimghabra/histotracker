@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { openBlockDrawer } from "../helpers/stains";
 
@@ -39,6 +39,18 @@ function noteEditors(page: Page, code: string) {
     slide: page.getByLabel(`Slide Notes for ${code}`),
     sample: page.getByLabel(`General Notes for ${code}`),
   };
+}
+
+/**
+ * Correct a note the way a user does: click the prose open, retype, move on.
+ *
+ * A note is READ as prose here, so there is nothing to type into until it is
+ * clicked; the same locator finds the textarea once it is.
+ */
+async function correct(box: Locator, text: string) {
+  await box.click();
+  await box.fill(text);
+  await box.blur();
 }
 
 /**
@@ -134,15 +146,14 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   await expandInLogs(page, "EE-1");
   let notes = noteEditors(page, "EE-1");
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await expect(notes[kind], `${kind} notes read back in the Logs`).toHaveValue(INTAKE[kind]);
+    await expect(notes[kind], `${kind} notes read back in the Logs`).toHaveText(INTAKE[kind]);
   }
 
-  // Correct all four from here. Save-on-blur, the same as the description and
-  // the per-slide notes already in this row.
+  // Correct all four from here. Click to open, save on blur, the same as the
+  // description and the per-slide notes already in this row.
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await notes[kind].fill(CORRECTED[kind]);
-    await notes[kind].blur();
-    await expect(notes[kind]).toHaveValue(CORRECTED[kind]);
+    await correct(notes[kind], CORRECTED[kind]);
+    await expect(notes[kind]).toHaveText(CORRECTED[kind]);
   }
 
   // Every correction is in the database, in its own column, before the reload.
@@ -157,7 +168,7 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   await expandInLogs(page, "EE-1");
   notes = noteEditors(page, "EE-1");
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await expect(notes[kind], `${kind} notes survived the reload`).toHaveValue(CORRECTED[kind]);
+    await expect(notes[kind], `${kind} notes survived the reload`).toHaveText(CORRECTED[kind]);
   }
 
   // And the correction reached the right column: the board drawer reads the
@@ -192,27 +203,28 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
   await expandInLogs(page, "EE-1");
   const notes = noteEditors(page, "EE-1");
   for (const kind of ["embedding", "cut", "slide", "sample"] as const) {
-    await expect(notes[kind]).toHaveValue("");
+    await notes[kind].click();
+    await expect(notes[kind], `${kind} notes opens an empty box`).toHaveValue("");
+    await notes[kind].blur();
   }
 
-  await notes.cut.fill("wedge the block, it is tilting");
-  await notes.cut.blur();
+  await correct(notes.cut, "wedge the block, it is tilting");
   await expect
     .poll(async () => (await storedNotes(page, "EE-0001")).cut)
     .toBe("wedge the block, it is tilting");
   await page.goto("/");
   await expandInLogs(page, "EE-1");
-  await expect(noteEditors(page, "EE-1").cut).toHaveValue("wedge the block, it is tilting");
+  await expect(noteEditors(page, "EE-1").cut).toHaveText("wedge the block, it is tilting");
 
   // Clearing is a correction too: a note emptied to whitespace must read as
   // empty, not as a blank line the drawer then shows a heading for.
-  const cut = noteEditors(page, "EE-1").cut;
-  await cut.fill("   ");
-  await cut.blur();
+  await correct(noteEditors(page, "EE-1").cut, "   ");
   await expect.poll(async () => (await storedNotes(page, "EE-0001")).cut).toBe("");
   await page.goto("/");
   await expandInLogs(page, "EE-1");
+  await noteEditors(page, "EE-1").cut.click();
   await expect(noteEditors(page, "EE-1").cut).toHaveValue("");
+  await noteEditors(page, "EE-1").cut.blur();
   await openDrawerFromBoard(page, "EE-1");
   await expect(page.getByRole("heading", { name: "Cut Notes", exact: true })).toHaveCount(0);
 });
@@ -223,17 +235,23 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
  * used to render whole, and a fixed two-row box would hide all but the first
  * two behind a scrollbar.
  */
-test("a several-line note is read back whole in the Logs, not behind a scrollbar", async ({
-  page,
-}) => {
+test("a long note is read back whole in the Logs, not behind a scrollbar", async ({ page }) => {
   await boot(page);
 
+  // Longer than any fixed-height box would hold: the read-back must not depend
+  // on how many lines someone guessed a note would run to.
   const LONG = [
     "cut face down, proximal end left",
     "the tendon insertion points at the notch in the cassette",
     "do not re-orient it after the first ribbon",
     "wax was low on this one, top it up before embedding",
     "block 3 of 4 from the same limb",
+    "the calcified end is the one nearest the label",
+    "trim slowly, it shattered last time",
+    "keep the ribbons in order, they are a series",
+    "second attempt after the first block cracked",
+    "decal was 4 hours, not the usual 2",
+    "check with the bench book before cutting",
     "ask Alex before re-embedding",
   ].join("\n");
 
@@ -245,19 +263,19 @@ test("a several-line note is read back whole in the Logs, not behind a scrollbar
 
   await expandInLogs(page, "EE-1");
   const notes = noteEditors(page, "EE-1");
-  await expect(notes.embedding).toHaveValue(LONG);
+  await expect(notes.embedding).toHaveText(LONG);
 
-  // Nothing of the note is scrolled out of sight: the box is tall enough for
-  // every line of it. (1px of slack for sub-pixel line heights.)
+  // Every line of it is on screen. The note is read as prose, so there is no
+  // box for the tail of it to hide inside. (1px of slack for sub-pixel rounding.)
   await expect
-    .poll(async () =>
-      notes.embedding.evaluate((el: HTMLTextAreaElement) => el.scrollHeight - el.clientHeight),
-    )
+    .poll(() => notes.embedding.evaluate((el) => el.scrollHeight - el.clientHeight))
     .toBeLessThanOrEqual(1);
 
-  // The box is still the user's to size — a note longer than this one is pulled
-  // open rather than scrolled.
-  await expect(notes.embedding).toHaveCSS("resize", "vertical");
+  // And it took the room it needed: twelve lines stand far taller than the
+  // one-line note below them, rather than both being the same fixed height.
+  const long = await notes.embedding.boundingBox();
+  const short = await notes.sample.boundingBox();
+  expect(long!.height).toBeGreaterThan(short!.height * 6);
 });
 
 test("a correction is undoable, and the undo names the note it restores", async ({ page }) => {
@@ -278,9 +296,8 @@ test("a correction is undoable, and the undo names the note it restores", async 
   await page.getByLabel("Description for EE-1").fill("TE8-12 fixing sample, re-embedded");
 
   const embedding = noteEditors(page, "EE-1").embedding;
-  await embedding.fill(CORRECTED.embedding);
-  await embedding.blur();
-  await expect(embedding).toHaveValue(CORRECTED.embedding);
+  await correct(embedding, CORRECTED.embedding);
+  await expect(embedding).toHaveText(CORRECTED.embedding);
 
   // Both corrections are in the database before anything is undone. A save is
   // fired on blur and nobody awaits it, so undoing on top of one still being
@@ -297,16 +314,16 @@ test("a correction is undoable, and the undo names the note it restores", async 
   // note edits is four indistinguishable entries.
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByText("Undone: Edit EE-1 embedding notes")).toBeVisible();
-  await expect(noteEditors(page, "EE-1").embedding).toHaveValue(INTAKE.embedding);
+  await expect(noteEditors(page, "EE-1").embedding).toHaveText(INTAKE.embedding);
 
-  // Reading a note must not itself become an undo entry: focus and blur with no
-  // change, and Redo still offers the correction above it, not a no-op.
+  // Reading a note must not itself become an undo entry: open one and close it
+  // with no change, and Redo still offers the correction above it, not a no-op.
   const sampleNotes = noteEditors(page, "EE-1").sample;
-  await sampleNotes.focus();
+  await sampleNotes.click();
   await sampleNotes.blur();
   await page.getByTitle("Redo (Ctrl+Y)").click();
   await expect(page.getByText("Redone: Edit EE-1 embedding notes")).toBeVisible();
-  await expect(noteEditors(page, "EE-1").embedding).toHaveValue(CORRECTED.embedding);
+  await expect(noteEditors(page, "EE-1").embedding).toHaveText(CORRECTED.embedding);
 
   // Down to the description underneath it, which names the same block the same
   // way and restores the text it replaced.

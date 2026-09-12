@@ -260,8 +260,10 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   // left unwritten — what the viewer does with each is the point below.
   await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
   await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await ws.getByLabel("Sectioning / Cut Notes for EE-1").click();
   await ws.getByLabel("Sectioning / Cut Notes for EE-1").fill("10 um, discard the first ribbon");
   await ws.getByLabel("Sectioning / Cut Notes for EE-1").blur();
+  await ws.getByLabel("General Notes for EE-1").click();
   await ws.getByLabel("General Notes for EE-1").fill("decal ran long on this one");
   await ws.getByLabel("General Notes for EE-1").blur();
   // Both writes are in the database before the sync that carries them over; a
@@ -293,15 +295,15 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await expect(vw.getByRole("button", { name: /Request stain for/ })).toHaveCount(0);
   // Notes are readable but not editable — they used to accept typing and throw
   // it away on blur (#72). Every note this block actually carries is correctable
-  // on the workstation, so each one has to be read-only here — one left writable
-  // is the #72 bug again.
+  // on the workstation, so each one has to refuse to open here — one that opened
+  // would be the #72 bug again.
   for (const [label, written] of [
     ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
     ["General Notes", "decal ran long on this one"],
   ]) {
     const box = vw.getByLabel(`${label} for EE-1`);
-    await expect(box).toHaveValue(written);
-    await expect(box).toHaveAttribute("readonly", "");
+    await expect(box).toHaveText(written);
+    await expect(box).toBeDisabled();
   }
   // A note nobody wrote gets no box on a viewer: an empty one is there to be
   // filled in, and this machine cannot fill it in.

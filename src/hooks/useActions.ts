@@ -257,7 +257,7 @@ export function useActions() {
     async (sampleId: number, column: string, value: string | null) => {
       const before = await getSample(sampleId);
       if (!before) return;
-      await commit(`Edit time · ${displayCode(before.sample_code)}`, () =>
+      await commit(`Edit time · ${before.sample_code}`, () =>
         setStageTimestamp(sampleId, column, value),
       );
     },

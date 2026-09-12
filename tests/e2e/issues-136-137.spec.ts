@@ -284,5 +284,6 @@ test("#137: a block created without embedding notes says nothing about them", as
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
+  await page.getByLabel("Embedding Notes for EE-1").click();
   await expect(page.getByLabel("Embedding Notes for EE-1")).toHaveValue("");
 });

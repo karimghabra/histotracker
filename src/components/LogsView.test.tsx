@@ -195,7 +195,7 @@ describe("LogsView — correcting a sample's notes", () => {
       overall_notes: "decal ran long",
     });
 
-  it("offers an editor for each of the four notes, showing what was written", async () => {
+  it("reads every one of the four notes back in the expanded row", async () => {
     data.samples = [withNotes()];
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
@@ -203,8 +203,21 @@ describe("LogsView — correcting a sample's notes", () => {
     for (const [label, , written] of FOUR) {
       expect(
         screen.getByLabelText(`${label} for EE-1`),
-        `${label} is editable in the expanded row`,
-      ).toHaveValue(written);
+        `${label} reads back in the expanded row`,
+      ).toHaveTextContent(written);
+    }
+  });
+
+  // Prose until it is clicked, so a long note is read whole; a box only then.
+  it("opens the one note that was clicked, and leaves the others as prose", async () => {
+    data.samples = [withNotes()];
+    render(<LogsView />);
+    await userEvent.click(screen.getByText("EE-1"));
+    await userEvent.click(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
+
+    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveValue("10 um");
+    for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
+      expect(screen.getByLabelText(`${label} for EE-1`)).not.toHaveValue();
     }
   });
 
@@ -213,6 +226,7 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
+    await userEvent.click(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
     const box = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
     await userEvent.clear(box);
     await userEvent.type(box, "8 um");
@@ -229,7 +243,9 @@ describe("LogsView — correcting a sample's notes", () => {
     await userEvent.click(screen.getByText("EE-2"));
 
     for (const [label] of FOUR) {
+      await userEvent.click(screen.getByLabelText(`${label} for EE-2`));
       expect(screen.getByLabelText(`${label} for EE-2`)).toHaveValue("");
+      await userEvent.tab();
     }
   });
 
@@ -257,8 +273,8 @@ describe("LogsView — correcting a sample's notes", () => {
     await userEvent.click(screen.getByText("EE-1"));
 
     const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
-    expect(cut).toHaveValue("10 um");
-    expect(cut).toHaveAttribute("readonly");
+    expect(cut).toHaveTextContent("10 um");
+    expect(cut).toBeDisabled();
     for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
       expect(
         screen.queryByLabelText(`${label} for EE-1`),
@@ -273,10 +289,10 @@ describe("LogsView — correcting a sample's notes", () => {
     data.samples = [withNotes()];
     const { rerender } = render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
-    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveValue("cut face down");
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveTextContent("cut face down");
 
     data.samples = [{ ...data.samples[0], embedding_notes: "cut face UP" }];
     rerender(<LogsView />);
-    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveValue("cut face UP");
+    expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveTextContent("cut face UP");
   });
 });

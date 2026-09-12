@@ -104,13 +104,20 @@ async function expectNoteEverywhere(
   }
   await page.locator("button:has(svg.lucide-x)").first().click();
 
-  // In the Logs the note is editable rather than displayed, so the box is there
-  // either way and the assertion is on its VALUE — empty for a block that was
-  // given no note.
+  // In the Logs the note is correctable as well as displayed, so it is there
+  // either way: read as prose, and empty for a block that was given no note —
+  // which only the box it opens can show.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   await page.getByRole("cell", { name: code, exact: true }).click();
   await expect(page.getByText("Sample timeline")).toBeVisible();
-  await expect(page.getByLabel(`Embedding Notes for ${code}`)).toHaveValue(note);
+  const box = page.getByLabel(`Embedding Notes for ${code}`);
+  if (note) {
+    await expect(box).toHaveText(note);
+  } else {
+    await box.click();
+    await expect(box).toHaveValue("");
+    await box.blur();
+  }
   await page.getByRole("cell", { name: code, exact: true }).click(); // collapse
 
   expect(exported.csv.get(code), `${code} in the CSV export`).toBe(note);
