@@ -157,7 +157,10 @@ async function up(url) {
 }
 
 if (only.includes("render")) {
-  const base = opt("base", execSync("git merge-base HEAD master", { cwd: ROOT }).toString().trim());
+  const explicitBase = opt("base");
+  const base =
+    explicitBase ??
+    execSync("git merge-base HEAD origin/master", { cwd: ROOT }).toString().trim();
   const t0 = Date.now();
   const servers = [];
   try {

@@ -185,7 +185,16 @@ jobs:
         run: pnpm exec playwright install-deps chromium
 
       - name: Render diff against the pull request's base
-        run: node scripts/verify.mjs --only render --base ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+        # On a pull request, the base is the branch it targets. Outside one (a
+        # push straight to a branch, or the release workflow calling this file),
+        # scripts/verify.mjs falls back to merge-base against origin/master
+        # itself, so no --base is passed here at all.
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            node scripts/verify.mjs --only render --base "${{ github.event.pull_request.base.sha }}"
+          else
+            node scripts/verify.mjs --only render
+          fi
 
       - name: Upload the render tier's own logs
         if: failure()
