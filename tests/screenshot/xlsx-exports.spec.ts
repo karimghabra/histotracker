@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
  * separate writer, and a wrong argument shape there is accepted SILENTLY: the
  * file is saved, the app says "Exported.", and the workbook opens with not one
  * cell in it. So these specs click the real button and then decode the bytes
- * that landed in the virtual filesystem — the only place that lie shows up.
+ * that landed in the virtual filesystem - the only place that lie shows up.
  */
 
 async function boot(page: Page) {
@@ -66,7 +66,7 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
 }) => {
   await boot(page);
 
-  // EE-1: a stain assigned at intake and no glass at all — the captain's case.
+  // EE-1: a stain assigned at intake and no glass at all - the captain's case.
   await newSample(page, {
     description: "TE8-12 fixing sample",
     embeddingNotes: "cut face down, proximal end left",
@@ -108,12 +108,24 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
   expect(col(owed[0], "Slide")).toBe("");
   expect(col(owed[0], "Slide Stage")).toBe("requested (not cut)");
 
-  // The two captures this replaced rendered the decoded workbook next to the
-  // Logs screen "so the two can be compared by eye"; the column checks above
-  // already assert the values that comparison was for. Asserting every cell of
-  // every Logs row against the parsed sheet (not just these four columns) is
-  // H1, left for the pull request that fills the render-diff and data-tier
-  // hooks.
+  // Render the decoded workbook next to the screen it was taken from, so the
+  // two can be compared by eye.
+  await page.screenshot({ path: "test-results/nm-logs-screen.png", fullPage: true });
+  await page.setContent(
+    `<style>body{font:13px system-ui;padding:16px}table{border-collapse:collapse}
+     td,th{border:1px solid #bbb;padding:3px 7px;white-space:nowrap}th{background:#eef}</style>
+     <h3>histometer-logs.xlsx - decoded "Log" sheet</h3><table>` +
+      grid
+        .map(
+          (r, i) =>
+            "<tr>" +
+            r.map((c) => `<${i ? "td" : "th"}>${c || "&nbsp;"}</${i ? "td" : "th"}>`).join("") +
+            "</tr>",
+        )
+        .join("") +
+      "</table>",
+  );
+  await page.screenshot({ path: "test-results/nm-logs-xlsx.png", fullPage: true });
 });
 
 test("the Excel workbook export writes every sheet with real rows", async ({ page }) => {
@@ -156,7 +168,7 @@ test("the Excel workbook export writes every sheet with real rows", async ({ pag
 // The third workbook writer: the status workbook a workstation PUBLISHES with
 // every sync, which is what a viewer machine (and the captain, from the
 // release) opens in Excel. Nothing in the UI shows its contents, so an empty
-// one would ship silently — drive a real publish and read the asset back.
+// one would ship silently - drive a real publish and read the asset back.
 test("the published status workbook carries both sheets with real rows", async ({ browser }) => {
   const ns = `nm-workbook-${Date.now()}`;
   const context = await browser.newContext();
@@ -231,7 +243,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
 
-  // No ?freshdb — this opens the existing image, exactly as an update would.
+  // No ?freshdb - this opens the existing image, exactly as an update would.
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({
     timeout: 20_000,
@@ -258,6 +270,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
   await page.getByText("EE-4", { exact: true }).first().click();
   await expect(page.getByRole("heading", { name: "Embedding Notes" })).toBeVisible();
   await expect(page.getByText("embed cut face down")).toBeVisible();
+  await page.screenshot({ path: "test-results/nm-legacy-embedding-notes.png", fullPage: true });
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // The log exported from the upgraded database carries the note and the
@@ -284,7 +297,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
 });
 
 // Adversarial: a note is free text typed by a technician. Both exports have to
-// carry it verbatim — CSV quoting and XLSX XML escaping are different codepaths
+// carry it verbatim - CSV quoting and XLSX XML escaping are different codepaths
 // over the same string, and a workbook is XML, where a bare & is not valid.
 test("a note full of hostile characters survives both exports verbatim", async ({ page }) => {
   const nasty = 'A & B <bisect>, "proximal" end; 100%_LIKE\tαβ 🧫';

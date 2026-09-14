@@ -85,6 +85,14 @@ test("#77: each change is attributed to the person who was signed in for it", as
 
   await openManifest(page);
   await expect(page.getByRole("heading", { name: "Manifest" })).toBeVisible();
+  // The heading renders before the audit query resolves, so the table can still show its
+  // "Loading…" placeholder here. Wait, web-first, for the rows this test reads before the
+  // one-shot read below (#77's flake: CI hid it behind retries, see manifest.spec.ts history).
+  for (const code of ["EE-1", "EE-2"]) {
+    await expect(
+      page.locator("table tbody tr td:nth-child(5)").filter({ hasText: code }).first(),
+    ).toBeVisible();
+  }
 
   const rows = await manifestRows(page);
   expect(rows.length, "the manifest has rows").toBeGreaterThan(0);

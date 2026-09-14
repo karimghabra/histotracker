@@ -7,8 +7,36 @@ Package manager is **pnpm**. Data lives in a local **SQLite** database
 
 ## Verify before you commit
 
+`pnpm verify` (`scripts/verify.mjs`) is the one command that answers "did this
+update break what already works?" Four layers, cheapest first, stopping at the
+first red one:
+
+1. **data**, in parallel: typecheck, the workflow harness, the legacy upgrade,
+   vitest, `test:compat`, the release checks, the suite manifest, the E4
+   capture guard (`scripts/no-unasserted-captures.mjs`, keeps screenshots out
+   of `tests/e2e`), and the production `vite build` plus G1's bundle check
+   (`scripts/bundle-check.mjs`, which catches a dropped Tailwind plugin or a leaked
+   test shim, which every browser suite is blind to since none of them serve
+   the production Vite config).
+2. **render** (`tests/render/`): the pull request's base and this tree served
+   side by side in the same run, the same small lab built on both, ARIA
+   structure diffed and layout/contrast audited at two widths - the screenshot
+   comparison without a screenshot or a stored baseline.
+3. **e2e**: `tests/e2e` at retries 0, a smoke set first (`smoke`, `workflow`,
+   `sync`, `sync-pull-relaunch`), then the rest.
+4. **screenshot** (`--screenshot`, CI only, never on a lab machine): the
+   captures E4 moved out of `tests/e2e` into `tests/screenshot/`, run only
+   once 1-3 are green, per the captain's ruling that screenshots are fine as
+   long as the lightweight checks run first.
+
+CI (`.github/workflows/test.yml`) runs the same layers as separate jobs; the
+`screenshot` job's `needs:` gates it behind the others. `pnpm verify --only
+data` (or `render`, `e2e`) runs one layer alone; `--keep-going` does not stop
+at the first red layer.
+
 ```bash
 pnpm install
+pnpm verify                # the layered gate above; also run individually:
 pnpm build                 # tsc typecheck + vite build
 pnpm test                  # data-layer workflow harness (see below)
 pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
@@ -42,19 +70,22 @@ npx playwright test --config playwright.stress2.config.ts  # scale + invariants
 npx playwright test --config playwright.stress3.config.ts  # the explorer
 ```
 
-**What the whole set costs**, measured 2026-09-11 on the lab's WSL2 host with
-nothing else running. Budget from the loaded figure, not the idle one: the same
-suites took ~34 min while other work shared the machine (e2e 10.4 min, stress2
-16.5 min).
+**What the whole set costs**, measured 2026-09-14 on the lab's WSL2 host,
+idle figures. Budget from a loaded figure when other work shares the machine:
+running several browser suites at once here inflated an unrelated e2e test's
+wait past its timeout. The same caution as "Do not edit files while either
+suite runs" below applies to running two heavy suites side by side.
 
 | suite | idle | scope |
 | --- | --- | --- |
-| `build` + `test` + `test:ui` + `test:legacy` + `test:release` | 17s | the five node steps |
-| `test:compat` | 16s | 26 tests |
-| `npx playwright test` | 482s | 148 tests |
+| `pnpm verify --only data` | 21s | tsc, harness, legacy, vitest, compat, release, suites, E4 guard, G1 build+bundle |
+| `pnpm verify --only render` | 30s | 8 surfaces x 2 widths, base vs head |
+| `pnpm verify --only e2e` (= `npx playwright test`, retries 0) | 514s | 153 tests, `tests/e2e` |
+| `pnpm test:screenshot` | ~130s | 35 tests writing the 26 captures E4 moved here |
 | stress2 | 702s | 14 tests |
 | stress3 | 363s | 13 tests |
-| **total** | **1580s (26m20s)** | |
+
+`pnpm verify` (without `--screenshot`) runs the first three in sequence, stopping at the first red one.
 
 **Never run the packaged desktop app or its suite on the lab machine.** It opens
 real windows on the desktop someone is working on. Browser suites are headless;

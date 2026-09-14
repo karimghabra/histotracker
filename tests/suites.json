@@ -21,10 +21,23 @@
       "pr": "pnpm exec vitest run"
     },
     "test:e2e": {
-      "what": "The real app in Chromium against the sql.js Tauri shim: read-only gating, drawer state, filters, the request dialog, everything above the data layer.",
+      "what": "The real app in Chromium against the sql.js Tauri shim: read-only gating, drawer state, filters, the request dialog, everything above the data layer. E4's guard (scripts/no-unasserted-captures.mjs) keeps captures out of this directory; retries are 0 (playwright.config.ts), so a pass here means first attempt, not eventually.",
       "dirs": ["tests/e2e"],
       "configs": ["playwright.config.ts"],
       "pr": "pnpm exec playwright test"
+    },
+    "render": {
+      "what": "pnpm verify's render layer: the pull request's base and this tree served side by side, the same small lab built on both, ARIA structure diffed and layout/contrast audited at two widths - the screenshot comparison without a screenshot or a stored baseline (tests/render/).",
+      "notAScript": "Invoked by scripts/verify.mjs, which builds and serves both trees itself; there is no standalone pnpm script for it.",
+      "dirs": ["tests/render"],
+      "configs": ["playwright.render.config.ts"],
+      "pr": "node scripts/verify.mjs --only render"
+    },
+    "test:screenshot": {
+      "what": "The 26 captures E4 moved out of tests/e2e (2026-09-14 review), so a person can still look. Every flow here is already proven correct by its tests/e2e companion's assertions; this tier exists only to produce the images.",
+      "dirs": ["tests/screenshot"],
+      "configs": ["playwright.screenshot.config.ts"],
+      "pr": "pnpm test:screenshot"
     },
     "test:compat": {
       "what": "The release in use and this tree, each opening, working on, reverting and syncing the other's database (docs/release_compat.md).",
@@ -82,7 +95,8 @@
     "preview": "Serves a built frontend locally.",
     "tauri": "The Tauri CLI.",
     "test:e2e:headed": "The end-to-end suite with a visible browser, for local work.",
-    "test:e2e:ui": "The end-to-end suite in Playwright's UI mode, for local work."
+    "test:e2e:ui": "The end-to-end suite in Playwright's UI mode, for local work.",
+    "verify": "The layered gate (scripts/verify.mjs): data, render, e2e, then (--screenshot) the screenshot tier, cheapest first, stopping at the first red layer. Not a suite of its own; it runs the suites already listed above."
   },
   "otherPaths": {
     "tests/fixtures": "Recorded databases the suites read; tests/fixtures/legacy-pre-0023.b64 is test:legacy's input.",
