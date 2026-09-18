@@ -94,6 +94,12 @@ jobs:
       - name: Component and unit tests
         run: pnpm exec vitest run
 
+      # The lab-record scenarios on the real src/lib/db.ts (tests/scenarios):
+      # the staining-rack model, the Logs export pinned cell by cell, and the
+      # open issues, each expected to fail until its fix lands.
+      - name: Data-layer scenarios
+        run: pnpm test:scenarios
+
       # E4: a screenshot in tests/e2e is asserted on by nothing on a green run.
       # Captures belong in the screenshot tier (tests/screenshot/); this keeps
       # them out of the lightweight suite.

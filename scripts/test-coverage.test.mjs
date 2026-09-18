@@ -98,11 +98,12 @@ test("this repository's own list holds, and names what its pull requests do not 
   assert.equal(result.stderr, "");
   assert.equal(result.code, 0);
   assert.ok(result.stdout.includes(MARKER));
-  for (const suite of ["test:staining", "test:stress", "test:stress2", "test:stress3"]) {
+  for (const suite of ["test:stress", "test:stress2", "test:stress3"]) {
     assert.ok(result.stdout.includes(`\`pnpm ${suite}\``), `${suite} is missing from the report`);
   }
-  // The proven case: it must be named as unrun, not quietly left out.
-  assert.match(result.stdout, /pnpm test:stress2[\s\S]*never been wired into any CI job/);
+  assert.ok(!result.stdout.includes("test:staining"), "test:staining is retired (A2 replaces it)");
+  // The proven case: it must be named as unrun, and the report must say when it does run.
+  assert.match(result.stdout, /pnpm test:stress2`[^\n]*every night on master \(`pnpm test:stress2`\)/);
 });
 
 test("a complete list passes, and says what CI skips and what it runs", async (t) => {
@@ -110,6 +111,52 @@ test("a complete list passes, and says what CI skips and what it runs", async (t
   assert.equal(result.code, 0);
   assert.ok(result.stdout.includes("| `pnpm test:stress` | The walk at scale. | It takes minutes. |"));
   assert.ok(result.stdout.includes("CI does run: `pnpm test:ui`, `pnpm test:e2e`, `cargo test --lib --locked`."));
+});
+
+const NIGHTLY_WORKFLOW = `name: Nightly stress
+on:
+  schedule:
+    - cron: "43 3 * * *"
+jobs:
+  stress:
+    steps:
+      - run: pnpm test:stress
+`;
+
+function nightlyManifest() {
+  const manifest = baseManifest();
+  manifest.nightlyWorkflows = [".github/workflows/nightly.yml"];
+  manifest.suites["test:stress"].nightly = "pnpm test:stress";
+  return manifest;
+}
+
+function withNightly(t, manifest, workflow = NIGHTLY_WORKFLOW) {
+  const root = repo(t, { manifest });
+  writeFileSync(join(root, ".github", "workflows", "nightly.yml"), workflow);
+  return root;
+}
+
+test("a suite the nightly workflow runs says so in the report", async (t) => {
+  const result = await run(["--root", withNightly(t, nightlyManifest())]);
+  assert.equal(result.code, 0);
+  assert.ok(result.stdout.includes("It takes minutes. It runs every night on master (`pnpm test:stress`), and a failure opens an issue. |"));
+});
+
+test("a nightly claim the workflow does not bear out fails the check", async (t) => {
+  const result = await run(["--root", withNightly(t, nightlyManifest(), NIGHTLY_WORKFLOW.replace("- run: pnpm test:stress\n", "      # pnpm test:stress\n"))]);
+  assert.equal(result.code, 1);
+  assert.ok(result.stderr.includes('"test:stress" says the nightly run uses `pnpm test:stress`, but .github/workflows/nightly.yml never runs that command'));
+});
+
+test("a nightly claim with no nightly workflow named, or a missing one, fails the check", async (t) => {
+  const manifest = nightlyManifest();
+  delete manifest.nightlyWorkflows;
+  const unnamed = await run(["--root", repo(t, { manifest })]);
+  assert.equal(unnamed.code, 1);
+  assert.ok(unnamed.stderr.includes('names no "nightlyWorkflows"'));
+  const missing = await run(["--root", repo(t, { manifest: nightlyManifest() })]);
+  assert.equal(missing.code, 1);
+  assert.ok(missing.stderr.includes('names .github/workflows/nightly.yml in "nightlyWorkflows", which does not exist'));
 });
 
 test("a suite is matched against every workflow, not only the first", async (t) => {

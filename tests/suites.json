@@ -1,6 +1,12 @@
 {
   "$comment": "Every test suite this repository has, and whether a pull request's CI runs it. scripts/test-coverage.mjs fails CI when a package.json script, a directory under tests/ or a test config is missing from this file, and posts the suites marked notOnPr on every pull request, so a green check never claims a suite it did not run.",
-  "workflows": [".github/workflows/test.yml", ".github/workflows/release-integrity.yml"],
+  "workflows": [
+    ".github/workflows/test.yml",
+    ".github/workflows/release-integrity.yml"
+  ],
+  "nightlyWorkflows": [
+    ".github/workflows/nightly.yml"
+  ],
   "suites": {
     "pnpm exec tsc --noEmit": {
       "what": "The frontend typechecks. tsconfig.json includes src only, so nothing under tests/ or scripts/ is covered (AGENTS.md, 'the other hand-maintained ports').",
@@ -11,38 +17,66 @@
       "what": "The data-layer workflow harness: the real migrations loaded into in-memory SQLite, the lab-pipeline invariants, and a gate per GitHub issue.",
       "pr": "node scripts/workflow-test.mjs"
     },
+    "test:scenarios": {
+      "what": "The lab-record logic on this tree's real src/lib/db.ts, in Node, on a real SQLite file (tests/scenarios): A2's staining-rack model (slides entering staining pool into one rack per agent across samples, which replaces the retired test:staining), H1's Logs export pinned cell by cell as it is today (three note columns), and A1's open issues #139, #144 and #148, each marked it.fails so CI stays green until the fix lands and goes red if the marker outlives it.",
+      "dirs": [
+        "tests/scenarios"
+      ],
+      "configs": [
+        "vitest.scenarios.config.ts"
+      ],
+      "pr": "pnpm test:scenarios"
+    },
     "test:legacy": {
       "what": "A real populated pre-0023 database, taken up both upgrade paths.",
       "pr": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs"
     },
     "test:ui": {
       "what": "Component and render tests under jsdom. vitest.config.ts includes src/**/*.test.{ts,tsx} only.",
-      "configs": ["vitest.config.ts"],
+      "configs": [
+        "vitest.config.ts"
+      ],
       "pr": "pnpm exec vitest run"
     },
     "test:e2e": {
       "what": "The real app in Chromium against the sql.js Tauri shim: read-only gating, drawer state, filters, the request dialog, everything above the data layer. E4's guard (scripts/no-unasserted-captures.mjs) keeps captures out of this directory; retries are 0 (playwright.config.ts), so a pass here means first attempt, not eventually.",
-      "dirs": ["tests/e2e"],
-      "configs": ["playwright.config.ts"],
+      "dirs": [
+        "tests/e2e"
+      ],
+      "configs": [
+        "playwright.config.ts"
+      ],
       "pr": "pnpm exec playwright test"
     },
     "render": {
       "what": "pnpm verify's render layer: the pull request's base and this tree served side by side, the same small lab built on both, ARIA structure diffed and layout/contrast audited at two widths - the screenshot comparison without a screenshot or a stored baseline (tests/render/).",
       "notAScript": "Invoked by scripts/verify.mjs, which builds and serves both trees itself; there is no standalone pnpm script for it.",
-      "dirs": ["tests/render"],
-      "configs": ["playwright.render.config.ts"],
+      "dirs": [
+        "tests/render"
+      ],
+      "configs": [
+        "playwright.render.config.ts"
+      ],
       "pr": "node scripts/verify.mjs --only render"
     },
     "test:screenshot": {
       "what": "The 26 captures E4 moved out of tests/e2e (2026-09-14 review), so a person can still look. Every flow here is already proven correct by its tests/e2e companion's assertions; this tier exists only to produce the images.",
-      "dirs": ["tests/screenshot"],
-      "configs": ["playwright.screenshot.config.ts"],
+      "dirs": [
+        "tests/screenshot"
+      ],
+      "configs": [
+        "playwright.screenshot.config.ts"
+      ],
       "pr": "pnpm test:screenshot"
     },
     "test:compat": {
       "what": "The release in use and this tree, each opening, working on, reverting and syncing the other's database (docs/release_compat.md).",
-      "dirs": ["tests/compat"],
-      "configs": ["vitest.compat.config.ts"],
+      "dirs": [
+        "tests/compat"
+      ],
+      "configs": [
+        "vitest.compat.config.ts"
+      ],
       "pr": "pnpm test:compat"
     },
     "test:release": {
@@ -58,33 +92,48 @@
       "notAScript": "The Rust shell is built by cargo, not by pnpm; the job runs it in src-tauri.",
       "pr": "cargo test --lib --locked"
     },
-    "test:staining": {
-      "what": "The staining-stack model agreed for 0.3.3: cross-sample racks, substage advance as a unit, scatter on leaving staining.",
-      "notOnPr": "It is self-contained by design (scripts/staining-stack-harness.mjs): it builds its own tables and its own reference implementation, so it asserts nothing about this tree's migrations or src/lib/db.ts and cannot go red on a change to them."
-    },
     "test:stress": {
-      "what": "The v1 stress walk: hand-written paths that fill the database up, with retries off and console errors fatal.",
-      "dirs": ["tests/stress"],
-      "configs": ["playwright.stress.config.ts"],
-      "notOnPr": "It is slow and fills the database up rather than proving one behaviour, so playwright.stress.config.ts keeps it out of the path that gates every push. Superseded in method by test:stress2 and test:stress3."
+      "what": "The v1 stress walk that remains after 01 to 05 were retired (superseded by test:stress2 and test:stress3): 06-durability and 07-bench-reality, with retries off and console errors fatal.",
+      "dirs": [
+        "tests/stress"
+      ],
+      "configs": [
+        "playwright.stress.config.ts"
+      ],
+      "notOnPr": "It is slow and fills the database up rather than proving one behaviour, so it stays out of the path that gates every push.",
+      "nightly": "pnpm test:stress"
     },
     "test:stress2": {
       "what": "Scale and invariants: a seeded random walk of thousands of data-layer actions, fuzzed interleavings, sentinel values, and an invariant set derived from defects that were real.",
-      "dirs": ["tests/stress2"],
-      "configs": ["playwright.stress2.config.ts"],
-      "notOnPr": "It has never been wired into any CI job. It is minutes long, and AGENTS.md asks for it to be run locally on a schema or workflow change. Recorded here rather than left silent: this is the suite whose absence from CI went unnoticed until a pull request author happened to write it down by hand."
+      "dirs": [
+        "tests/stress2"
+      ],
+      "configs": [
+        "playwright.stress2.config.ts"
+      ],
+      "notOnPr": "It is minutes long (about 12 idle) and peaks near 11 GB of memory, so it stays out of the path that gates every push.",
+      "nightly": "pnpm test:stress2"
     },
     "test:stress3": {
       "what": "The explorer: the walk of v2 driven through the real UI, with each surface compared against a count recomputed from the store, plus Undo and Redo (docs/stress_test_v3.md).",
-      "dirs": ["tests/stress3"],
-      "configs": ["playwright.stress3.config.ts"],
-      "notOnPr": "It has never been wired into any CI job. It drives the browser for minutes, and AGENTS.md asks for it to be run locally on a schema or workflow change."
+      "dirs": [
+        "tests/stress3"
+      ],
+      "configs": [
+        "playwright.stress3.config.ts"
+      ],
+      "notOnPr": "It drives the browser for minutes, so it stays out of the path that gates every push.",
+      "nightly": "pnpm test:stress3"
     },
     "playwright test --config playwright.showcase.config.ts": {
       "what": "The tutorial and screenshot walkthrough: it photographs the app's screens for a person to look at.",
       "notAScript": "It has no package.json script; the config's own header says to run it with `npx playwright test --config playwright.showcase.config.ts`.",
-      "dirs": ["tests/tutorial"],
-      "configs": ["playwright.showcase.config.ts"],
+      "dirs": [
+        "tests/tutorial"
+      ],
+      "configs": [
+        "playwright.showcase.config.ts"
+      ],
       "notOnPr": "It is kept out of the main suite on purpose so it never gates a release, and it takes screenshots rather than asserting behaviour."
     }
   },

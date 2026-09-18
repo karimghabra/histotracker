@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "node scripts/workflow-test.mjs",
-    "test:staining": "node scripts/staining-stack-harness.mjs",
+    "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
     "test:legacy": "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs",
     "test:ui": "vitest run",
     "test:compat": "node scripts/release-compat.mjs",

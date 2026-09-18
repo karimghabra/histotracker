@@ -28,7 +28,10 @@
  * does: it gates on more than one workflow ("workflows" is a list), a suite
  * may be a command rather than a package.json script ("notAScript", which is
  * how the Rust shell and the typecheck are accounted for), and a directory
- * under tests/ may be shared support rather than a suite ("otherPaths").
+ * under tests/ may be shared support rather than a suite ("otherPaths"), and
+ * a suite pull requests skip may say a nightly workflow runs it ("nightly",
+ * checked against "nightlyWorkflows" the way "pr" is checked against the
+ * pull-request ones).
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
@@ -167,6 +170,26 @@ function check(root, manifest) {
     }
   }
 
+  // A suite pull requests do not run may say a nightly workflow does ("nightly"). That claim is
+  // held to the same standard as "pr": the command must be in the workflow, not in a comment.
+  const nightlyPaths = manifest.nightlyWorkflows ?? [];
+  let nightlyLines = [];
+  for (const path of nightlyPaths) {
+    if (!existsSync(join(root, path))) problems.push(`${MANIFEST} names ${path} in "nightlyWorkflows", which does not exist.`);
+    else nightlyLines = nightlyLines.concat(workflowLines(readFileSync(join(root, path), "utf8")));
+  }
+  for (const [name, suite] of Object.entries(suites)) {
+    if (suite.nightly === undefined) continue;
+    if (typeof suite.nightly !== "string" || suite.nightly.trim() === "") {
+      problems.push(`"${name}" in ${MANIFEST} has an empty "nightly"; give the command the nightly workflow runs it with, or drop it.`);
+    } else if (nightlyPaths.length === 0) {
+      problems.push(`"${name}" in ${MANIFEST} says a nightly workflow runs it, but ${MANIFEST} names no "nightlyWorkflows".`);
+    } else if (!invokes(nightlyLines, suite.nightly.trim())) {
+      problems.push(`"${name}" says the nightly run uses \`${suite.nightly}\`, but ${nightlyPaths.join(", ")} never runs that command.`);
+    }
+    if (suite.pr) problems.push(`"${name}" in ${MANIFEST} has both "pr" and "nightly"; "nightly" is for a suite pull requests do not run.`);
+  }
+
   for (const [name, suite] of Object.entries(suites)) {
     const hasPr = typeof suite.pr === "string" && suite.pr.trim() !== "";
     const hasReason = typeof suite.notOnPr === "string" && suite.notOnPr.trim() !== "";
@@ -192,7 +215,10 @@ function report(manifest) {
   } else {
     lines.push("A green check here says nothing about these suites:", "", "| Suite | What it covers | Why CI does not run it |", "|---|---|---|");
     const cell = (text) => text.replace(/\|/g, "\\|");
-    for (const [name, suite] of unrun) lines.push(`| \`${invocation(name, suite)}\` | ${cell(suite.what)} | ${cell(suite.notOnPr)} |`);
+    for (const [name, suite] of unrun) {
+      const nightly = suite.nightly ? ` It runs every night on master (\`${suite.nightly}\`), and a failure opens an issue.` : "";
+      lines.push(`| \`${invocation(name, suite)}\` | ${cell(suite.what)} | ${cell(suite.notOnPr + nightly)} |`);
+    }
   }
   lines.push("", `CI does run: ${run.join(", ")}.`, "", "From `tests/suites.json`, which CI checks against the tree on every run.");
   return `${lines.join("\n")}\n`;
