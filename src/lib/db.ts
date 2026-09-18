@@ -85,6 +85,21 @@ export const VIEWER_REFUSAL = "This is a read-only viewer — changes are made o
 export const SIGNED_OUT_REFUSAL = "Sign in before making modifications.";
 
 /**
+ * Refuse, before anything changes, to put an earlier state of the database back
+ * (undo, redo, revert to a backup) unless a user is signed in (#146).
+ *
+ * The restore swaps the file through the Rust `save_file` command, which no
+ * write gate sees, and the session rows are only put back afterwards. Refusing
+ * late is refusing too late: by then the file is already the snapshot's, and
+ * with it the snapshot's `active_user_id`. So this runs first, and the callers
+ * that keep a history of their own (undo, redo) run it before they touch it.
+ */
+export function assertMayRestore(): void {
+  if (viewerReadOnly) throw new Error(VIEWER_REFUSAL);
+  if (signedOutReadOnly) throw new Error(SIGNED_OUT_REFUSAL);
+}
+
+/**
  * The unwrapped `execute` for each open connection.
  *
  * Signing in is itself a write, so the session writes below have to reach past
@@ -592,6 +607,7 @@ export async function swapInImageFromElsewhere(
   image: DbImage,
   options: { keepSession: boolean; beforeSwap?: () => Promise<unknown> },
 ): Promise<void> {
+  if (options.keepSession) assertMayRestore();
   const migrated = await bringImageUpToDate(image);
   await options.beforeSwap?.();
   if (options.keepSession) await restoreDbPreservingSession(migrated);
@@ -624,6 +640,7 @@ async function bringImageUpToDate(image: DbImage): Promise<DbImage> {
  * keeps every foreign-key reference valid.
  */
 export async function restoreDbPreservingSession(image: DbImage): Promise<void> {
+  assertMayRestore();
   const live = await getDb();
   const users = await live.select<
     Array<{ id: number; name: string; initials: string; is_active: number; created_at: string }>
@@ -634,9 +651,12 @@ export async function restoreDbPreservingSession(image: DbImage): Promise<void> 
 
   await restoreDb(image);
 
+  // Session writes, not lab-record writes: the guarded `execute` refuses while nobody is signed in,
+  // and the restore above has already replaced the file by the time it would.
   const db = await getDb();
   for (const u of users) {
-    await db.execute(
+    await sessionExecute(
+      db,
       `INSERT INTO users (id, name, initials, is_active, created_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name, initials = excluded.initials, is_active = excluded.is_active`,
@@ -644,7 +664,8 @@ export async function restoreDbPreservingSession(image: DbImage): Promise<void> 
     );
   }
   for (const s of settings) {
-    await db.execute(
+    await sessionExecute(
+      db,
       `INSERT INTO app_settings (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       [s.key, s.value],
