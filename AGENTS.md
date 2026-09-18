@@ -198,7 +198,7 @@ breaks at runtime. Update all of these in the same change:
   See `docs/shared_data_sync.md` §1a.
   A column may skip its numbered migration and live in `ensureRuntimeSchema()` alone when a migration would break rollback to the build in use, which refuses a database recording a version it does not know, and so does every sync viewer still on it.
   Precedent: `samples.embedding_notes` (#137, https://github.com/karimghabra/histotracker/pull/138).
-- `src-tauri/src/backup.rs` + `src/lib/backup.ts` + `useBackupScheduler.ts` —
+- `src-tauri/src/backup.rs` (thin Tauri commands) over `backup_fs.rs` (the file logic, tested on temp dirs; `scripts/backup-mutants.sh` proves those tests can fail) + `src/lib/backup.ts` + `useBackupScheduler.ts` —
   robust local DB backups (atomic write, validation, rotation) taken every N
   hours during the working day, with revert-to-backup in `BackupsDialog.tsx`.
   An image from elsewhere, a backup or a pulled sync snapshot, goes live only through `swapInImageFromElsewhere()` (`src/lib/db.ts`).
