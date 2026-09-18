@@ -1040,6 +1040,14 @@ function makeApi(db) {
     return target;
   }
 
+  // Port of SLIDE_WORK_STAMPS — src/lib/db.ts. Every slide stamp that records work
+  // on cut glass; the retraction guard reads all of them (#139).
+  const SLIDE_WORK_STAMPS = [
+    "stage_staining_started_at", "stage_deparaffinized_at", "stage_stained_at", "stage_refrax_at",
+    "stage_coverslipped_at", "stage_dried_at", "stage_ready_for_imaging_at",
+    "stage_pictures_taken_at", "stage_analyzed_at",
+  ];
+
   // Port of revertSectionToStage() — src/lib/db.ts. Dragging a cut group back to
   // Needs Sectioning clears stage_cut_at on its slides, so it has to be refused
   // once any of that glass has actually been worked on: otherwise the slide
@@ -1049,10 +1057,9 @@ function makeApi(db) {
       const worked = all(
         `SELECT slide_code FROM slides
           WHERE section_request_id = ? AND current_stage <> 'removed'
-            AND (stage_stained_at IS NOT NULL OR stage_coverslipped_at IS NOT NULL
-                 OR stage_pictures_taken_at IS NOT NULL)`, [sectionId]);
+            AND (${SLIDE_WORK_STAMPS.map((c) => `${c} IS NOT NULL`).join(" OR ")})`, [sectionId]);
       if (worked.length > 0) {
-        throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already stained or imaged`);
+        throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already worked on (stained, imaged or analyzed)`);
       }
       run(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [sectionId]);
       // The slides leave their racks too. Clearing the cut date alone left a
@@ -1150,10 +1157,12 @@ function makeApi(db) {
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
     const ts = now();
     const slide = get(
-      `SELECT sl.section_request_id, sr.sample_id, sl.slide_code
+      `SELECT sl.section_request_id, sr.sample_id, sl.slide_code, sr.current_stage AS group_stage
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [slideId]);
     if (!slide) throw new Error("That extra slide is no longer available.");
+    // refuseIfGroupNotCut(): a group still in Needs Sectioning is a plan, not glass (#139).
+    if (slide.group_stage === "needs_sectioning") throw new Error("still waiting to be cut");
     const cat = get(`SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`, [assayType, assayName]);
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
@@ -4104,6 +4113,55 @@ invariant("a cut cannot be retracted once the glass has been stained", () => {
     `SELECT stage_cut_at AS cut, stage_stained_at AS stained FROM slides WHERE id = ?`, [slide.id]);
   assert(after.cut != null, "the cut date survives the refused revert");
   assert(after.stained != null, "and so does the staining date");
+});
+
+// #139 — the retraction guard looked at three stamps and missed the two that
+// `updateSectionStage` writes for a group dragged straight to Ready for Imaging
+// or Analyzed, so the retraction cleared stage_cut_at and left the slide reading
+// "ready for imaging, never cut".
+for (const stamp of ["stage_ready_for_imaging_at", "stage_analyzed_at"]) {
+  issue(139, `a cut cannot be retracted once its slides carry ${stamp}`, () => {
+    const api = makeApi(freshDb());
+    const p = api.seedProject();
+    const { id } = api.addSample(p, "EE", `retract after ${stamp}`);
+    api.markEmbedded(id);
+    const [section] = api.createSectionRequests(id, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    // What updateSectionStage(group, "ready_for_imaging" | "analyzed") writes on a
+    // group dragged there from Needs Sectioning: the cut and the stamp, no stain date.
+    api.run(`UPDATE slides SET stage_cut_at = ?, ${stamp} = ? WHERE section_request_id = ?`, [now(), now(), section]);
+
+    let refused = false;
+    try {
+      api.revertSectionToStage(section, "needs_sectioning");
+    } catch {
+      refused = true;
+    }
+    assert(refused, "the retraction is refused");
+    const after = api.get(
+      `SELECT stage_cut_at AS cut, ${stamp} AS stamp FROM slides WHERE section_request_id = ?`, [section]);
+    assert(after.cut != null, "the cut date survives");
+    assert(after.stamp != null, "and so does the stamp");
+  });
+}
+
+issue(139, "an extra slide in a group still waiting to be cut cannot be stained", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "planned extra");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  const extra = api.addSlideToSection(section, { extra: true });
+  let refused = false;
+  try {
+    api.assignExtraSlideToAssay(extra, "stain", "H&E");
+  } catch {
+    refused = true;
+  }
+  assert(refused, "glass that has not been cut cannot go on a stainer");
 });
 
 invariant("an untouched cut group can still be dragged back", () => {

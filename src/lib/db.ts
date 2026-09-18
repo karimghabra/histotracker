@@ -4083,14 +4083,16 @@ export async function assignExtraSlideToAssay(input: {
   const rows = await db.select<Array<{
     sample_id: number;
     slide_code: string;
+    section_request_id: number;
   }>>(
-    `SELECT sr.sample_id, sl.slide_code
+    `SELECT sr.sample_id, sl.slide_code, sl.section_request_id
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`,
     [input.slideId],
   );
   const slide = rows[0];
   if (!slide) throw new Error("That extra slide is no longer available.");
+  await refuseIfGroupNotCut(db, slide.section_request_id, "stained");
   const catalog = await db.select<Array<{ id: number }>>(
     `SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`,
     [input.assayType, assayName],
@@ -4875,6 +4877,7 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
   if (slide.current_stage === "removed") {
     throw new Error("That slide was removed — its imaging can no longer be changed.");
   }
+  await refuseIfGroupNotCut(db, slide.section_request_id, "imaged");
   const timestamp = nowTimestamp();
   await db.execute(
     `UPDATE slides
@@ -5021,6 +5024,7 @@ export async function completeSectionImaging(sectionId: number): Promise<void> {
     [sectionId],
   );
   if ((rows[0]?.total ?? 0) === 0) return;
+  await refuseIfGroupNotCut(db, sectionId, "imaged");
   await db.execute(
     `UPDATE slides
         SET current_stage = 'pictures_taken',
@@ -5217,6 +5221,47 @@ export async function updateSectionStage(id: number, stageKey: string): Promise<
   );
 }
 
+/**
+ * Every slide stamp that says work was done on cut glass. Once any of them is
+ * set the cut is a fact, so none can outlive a cleared `stage_cut_at`.
+ *
+ * `stage_stain_requested_at` is left out on purpose: it records the request, not
+ * work, and retracting a cut takes it off again (with the rack). The list is the
+ * one place the retraction guard reads, so a stamp added to `slides` that means
+ * work has to be added here too (#139: two were missing, and the guard passed a
+ * retraction that left slides reading "ready for imaging, never cut").
+ */
+const SLIDE_WORK_STAMPS = [
+  "stage_staining_started_at",
+  "stage_deparaffinized_at",
+  "stage_stained_at",
+  "stage_refrax_at",
+  "stage_coverslipped_at",
+  "stage_dried_at",
+  "stage_ready_for_imaging_at",
+  "stage_pictures_taken_at",
+  "stage_analyzed_at",
+] as const;
+
+/**
+ * A group still waiting in Needs Sectioning is a plan, not glass (#95): its
+ * slides have not been cut, so nothing can have been done to them. Every route
+ * that records work on a slide checks this, or the record reads "imaged, never
+ * cut" (#139's other half, reached going forward instead of backward).
+ */
+async function refuseIfGroupNotCut(db: Database, sectionId: number, action: string): Promise<void> {
+  const rows = await db.select<Array<{ current_stage: string }>>(
+    `SELECT current_stage FROM section_requests WHERE id = ?`,
+    [sectionId],
+  );
+  if (rows[0]?.current_stage === "needs_sectioning") {
+    throw new Error(
+      `This slide's cut group is still waiting to be cut, so it cannot be ${action} yet. ` +
+        `Move the group out of Needs Sectioning first.`,
+    );
+  }
+}
+
 export async function revertSectionToStage(id: number, stageKey: string): Promise<void> {
   const db = await getDb();
   const targetOrder = SECTION_STAGE_ORDER[stageKey];
@@ -5239,15 +5284,14 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
     const worked = await db.select<Array<{ slide_code: string }>>(
       `SELECT slide_code FROM slides
         WHERE section_request_id = ? AND current_stage <> 'removed'
-          AND (stage_stained_at IS NOT NULL OR stage_coverslipped_at IS NOT NULL
-               OR stage_pictures_taken_at IS NOT NULL)
+          AND (${SLIDE_WORK_STAMPS.map((c) => `${c} IS NOT NULL`).join(" OR ")})
         ORDER BY slide_ordinal, id`,
       [id],
     );
     if (worked.length > 0) {
       const codes = worked.map((row) => displayCode(row.slide_code)).join(", ");
       throw new Error(
-        `${codes} ${worked.length === 1 ? "has" : "have"} already been stained or imaged, so ` +
+        `${codes} ${worked.length === 1 ? "has" : "have"} already been worked on (stained, imaged or analyzed), so ` +
           `this cut cannot be retracted. Reassign or remove the slide instead.`,
       );
     }

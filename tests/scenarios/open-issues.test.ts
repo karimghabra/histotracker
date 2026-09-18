@@ -1,13 +1,14 @@
-// Open issues #139, #144 and #148, each as a scenario on the real db.ts.
+// Open issues #144 and #148 (and #139, fixed and now a hard check), each as a scenario on the real db.ts.
 //
 // Each assertion is written against the harm the issue describes, not against one
 // fix: where the issue leaves the remedy open (refuse the action, or allow it and
 // keep the record straight), every remedy that removes the harm passes.
 //
-// Each test is `it.fails`: the bug is open, so the test is expected to fail and CI stays green.
+// Each open issue's test is `it.fails`: the bug is open, so the test is expected to fail and CI stays green.
 // The day the fix lands the test passes, `it.fails` reports that as a failure, and whoever fixed
 // the issue must change `it.fails` to `it` here, which turns the scenario into a hard check.
 import { afterEach, describe, expect, it } from "vitest";
+import { workedButNeverCut } from "./invariants";
 import { openLab, type Lab } from "./lab";
 
 let lab: Lab | null = null;
@@ -16,29 +17,10 @@ afterEach(async () => {
   lab = null;
 });
 
-/** Stamps that say glass was worked on. None can be true of a slide that was never cut. */
-const WORK_AFTER_CUT = [
-  "stage_stained_at",
-  "stage_coverslipped_at",
-  "stage_ready_for_imaging_at",
-  "stage_pictures_taken_at",
-  "stage_analyzed_at",
-];
-
-function workedButNeverCut(l: Lab): string[] {
-  return l
-    .rows(
-      `SELECT slide_code, ${WORK_AFTER_CUT.join(", ")} FROM slides
-        WHERE current_stage <> 'removed' AND stage_cut_at IS NULL
-          AND (${WORK_AFTER_CUT.map((c) => `${c} IS NOT NULL`).join(" OR ")})`,
-    )
-    .map((r) => `${r.slide_code} never cut but ${WORK_AFTER_CUT.filter((c) => r[c]).join(", ")}`);
-}
-
+// #139 is fixed: it is a plain `it`, and retraction-routes.test.ts sweeps every other route.
 describe("#139: retracting a cut never leaves glass that was worked on but never cut", () => {
   for (const reached of ["ready_for_imaging", "analyzed"]) {
-    // OPEN ISSUE #139: remove `.fails` in the pull request that fixes it.
-    it.fails(`after the group reached ${reached}`, async () => {
+    it(`after the group reached ${reached}`, async () => {
       lab = await openLab();
       const block = await lab.sample(`retract after ${reached}`);
       const [group] = await lab.db.createSectionRequests(block, [
