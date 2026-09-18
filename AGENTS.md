@@ -5,6 +5,26 @@ Histology lab workflow tracker. **Tauri 2** desktop app: a **Rust** shell
 Package manager is **pnpm**. Data lives in a local **SQLite** database
 (`sqlite:histometer.db`) via `tauri-plugin-sql`.
 
+## Running the app: never on the maintainer's display
+
+These rules bind every agent, including automated validation and test agents.
+
+1. This repository is developed on a WSL machine where `DISPLAY=:0` and the Wayland socket `wayland-0` are the maintainer's REAL Windows desktop, not a virtual display.
+   Never launch the Histometer desktop app (the Tauri build), a browser in headed mode, or anything that opens a window against them.
+   Never set `DISPLAY`, `WAYLAND_DISPLAY` or `XDG_RUNTIME_DIR` to reach one.
+2. Checks that need the running app run only under a virtual display in CI (for example `xvfb-run` on a GitHub Actions Linux runner), or not at all.
+   If a check cannot run without a real display, report it as an untested scenario.
+   That is a correct result, never a reason to look for a display.
+3. Never contact real GitHub, Google, or any live service with any token, real or fake, from a test or a validation run.
+   Use the fakes the test suites provide.
+4. Never read, open, or write the maintainer's live data.
+   Every run uses a scratch location created for it.
+5. Screenshots are not evidence here.
+   Assert on text, structure and state.
+
+The commands below already honour these rules: `pnpm verify`, `pnpm test`, `pnpm test:ui`, and the headless browser suites against the sql.js Tauri shim.
+`tests/suites.json` says which suite runs where.
+
 ## Verify before you commit
 
 `pnpm verify` (`scripts/verify.mjs`) is the one command that answers "did this
