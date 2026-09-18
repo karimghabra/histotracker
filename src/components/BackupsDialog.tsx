@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DatabaseBackup, FolderOpen, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { Button, Modal } from "./ui";
+import { useReadOnly } from "../lib/readOnly";
+import { SIGNED_OUT_REFUSAL } from "../lib/db";
 import {
   backupsDirPath,
   createBackup,
@@ -129,6 +131,8 @@ export function BackupsDialog({
   }
 
   const anyBusy = busy !== null;
+  // Signed out (the idle timer can fire with this open): the data layer refuses a revert too (#146).
+  const signedOut = useReadOnly();
 
   return (
     <Modal title="Database backups" onClose={onClose} width="max-w-2xl">
@@ -256,8 +260,8 @@ export function BackupsDialog({
               <Button
                 variant="subtle"
                 className="px-2 py-1.5"
-                title="Revert the database to this backup"
-                disabled={anyBusy}
+                title={signedOut ? SIGNED_OUT_REFUSAL : "Revert the database to this backup"}
+                disabled={anyBusy || signedOut}
                 onClick={() => void revert(entry)}
               >
                 {busy === entry.name ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}

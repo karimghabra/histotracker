@@ -18,6 +18,7 @@ import {
   closeSlideStackIfEmpty,
   removeSectionRequestIfEmpty,
   removeSlidesForStack,
+  assertMayRestore,
   restoreDbPreservingSession,
   getSample,
   getSectionRequest,
@@ -843,6 +844,8 @@ export function useActions() {
   );
 
   const undo = useCallback(async (): Promise<string | null> => {
+    // Before the stack or the file is touched (#146): nobody signed in, no restore.
+    assertMayRestore();
     const { undoStack } = useUndoStore.getState();
     if (undoStack.length === 0) return null;
     const label = undoStack[undoStack.length - 1].label;
@@ -856,6 +859,8 @@ export function useActions() {
   }, [invalidate]);
 
   const redo = useCallback(async (): Promise<string | null> => {
+    // Before the stack or the file is touched (#146): nobody signed in, no restore.
+    assertMayRestore();
     const { redoStack } = useUndoStore.getState();
     if (redoStack.length === 0) return null;
     const label = redoStack[redoStack.length - 1].label;

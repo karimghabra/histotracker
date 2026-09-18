@@ -322,12 +322,20 @@ export default function App() {
       const key = e.key.toLowerCase();
       if (key === "z" && !e.shiftKey) {
         e.preventDefault();
-        const label = await undo();
-        flash(label ? `Undone: ${label}` : "Nothing to undo");
+        try {
+          const label = await undo();
+          flash(label ? `Undone: ${label}` : "Nothing to undo");
+        } catch (err) {
+          flash(err instanceof Error ? err.message : String(err));
+        }
       } else if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
-        const label = await redo();
-        flash(label ? `Redone: ${label}` : "Nothing to redo");
+        try {
+          const label = await redo();
+          flash(label ? `Redone: ${label}` : "Nothing to redo");
+        } catch (err) {
+          flash(err instanceof Error ? err.message : String(err));
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -796,8 +804,8 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Undo (Ctrl+Z)"
-                  disabled={undoDepth === 0}
-                  onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""))}
+                  disabled={undoDepth === 0 || !activeUser}
+                  onClick={() => undo().then((l) => flash(l ? `Undone: ${l}` : ""), (err) => flash(err instanceof Error ? err.message : String(err)))}
                 >
                   <Undo2 size={15} />
                 </Button>
@@ -805,8 +813,8 @@ export default function App() {
                   variant="subtle"
                   className="px-2"
                   title="Redo (Ctrl+Y)"
-                  disabled={redoDepth === 0}
-                  onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""))}
+                  disabled={redoDepth === 0 || !activeUser}
+                  onClick={() => redo().then((l) => flash(l ? `Redone: ${l}` : ""), (err) => flash(err instanceof Error ? err.message : String(err)))}
                 >
                   <Redo2 size={15} />
                 </Button>

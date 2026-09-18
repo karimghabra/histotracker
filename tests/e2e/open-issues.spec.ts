@@ -1,11 +1,11 @@
-// Open issues #140, #142 and #146, walked through the real app. Each assertion is on the
+// Open issues #140 and #142, and #146 (fixed, kept here as the regression), walked through the real app. Each assertion is on the
 // harm the issue names, so any fix that removes the harm passes.
 //
 // Each test is marked `test.fail()`: the bug is open, so the test is expected to fail and CI stays
 // green. The day the fix lands the test passes, Playwright reports that as a failure, and whoever
 // fixed the issue must delete the `test.fail()` line here, which turns it into a hard check.
 import { test, expect, type Page } from "@playwright/test";
-import { openSettings, setTheme } from "../helpers/app";
+import { openBackups, openSettings, setTheme } from "../helpers/app";
 import { DB, addProject, addSample, boot, signOutAndBackIn } from "../helpers/lab";
 
 test("#140: after a sign-out and sign-in, the sidebar's selection and the board's filters agree", async ({ page }) => {
@@ -62,7 +62,6 @@ test.describe("#142: on a dark OS", () => {
 });
 
 test("#146: signed out, Undo can neither change the record nor sign anyone in", async ({ page }) => {
-  test.fail(true, "OPEN ISSUE #146: delete this line in the pull request that fixes it");
   await boot(page);
   await addProject(page, "EE", "Enthesis Engineering");
   await addSample(page, "first block", "EE");
@@ -94,4 +93,68 @@ test("#146: signed out, Undo can neither change the record nor sign anyone in", 
     if (JSON.stringify(now) !== JSON.stringify(signedOut)) break;
   }
   expect(JSON.stringify(now), "the record and the session after Undo while signed out").toBe(JSON.stringify(signedOut));
+});
+
+test("#146: signed out, reverting to a backup can neither change the record nor sign anyone in", async ({ page }) => {
+  page.on("dialog", (d) => void d.accept());
+  await boot(page);
+  await addProject(page, "EE", "Enthesis Engineering");
+  await addSample(page, "first block", "EE");
+
+  // A backup taken while signed in, then a change it does not contain.
+  await openBackups(page);
+  await page.getByRole("button", { name: "Back up now" }).click();
+  await expect(page.getByText("Manual").first()).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Database backups" })).toHaveCount(0);
+  await addSample(page, "second block", "EE");
+
+  const record = () =>
+    page.evaluate(async (path) => {
+      const db = (await import(/* @vite-ignore */ path)) as Record<string, (...a: unknown[]) => Promise<never>>;
+      const samples = (await db.listOpenSamples()) as Array<{ sample_code: string }>;
+      const user = (await db.getActiveUser()) as { name: string } | null;
+      return { samples: samples.map((s) => s.sample_code).sort().join(","), signedIn: user?.name ?? "nobody" };
+    }, DB);
+  const before = await record();
+  expect(before.samples.split(",")).toHaveLength(2);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "Keep reading" }).click();
+  const signedOut = { ...before, signedIn: "nobody" };
+  expect(await record()).toEqual(signedOut);
+
+  // The way in: Settings still opens for a signed-out user, but Backups & revert is not offered to them.
+  await openSettings(page);
+  const backups = page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: /Backups/ });
+  const offered = await backups.isEnabled();
+  if (offered) {
+    await backups.click();
+    const revert = page.getByRole("button", { name: "Revert" }).first();
+    if (await revert.isEnabled()) await revert.click();
+  }
+
+  // The way round it: the revert itself, called with nobody signed in. It must refuse.
+  const refusal = await page.evaluate(async (path) => {
+    const backup = (await import(/* @vite-ignore */ path.replace("db.ts", "backup.ts"))) as {
+      listBackups(): Promise<Array<{ name: string }>>;
+      revertToBackup(name: string): Promise<void>;
+    };
+    const [entry] = await backup.listBackups();
+    try {
+      await backup.revertToBackup(entry.name);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }, DB);
+
+  // A revert swaps a whole image in, which lands in milliseconds; watch for 4 s and stop at the first harm.
+  let now = signedOut;
+  for (const deadline = Date.now() + 4000; Date.now() < deadline; await page.waitForTimeout(200)) {
+    now = await record();
+    if (JSON.stringify(now) !== JSON.stringify(signedOut)) break;
+  }
+  expect(JSON.stringify(now), "the record and the session after a revert while signed out").toBe(JSON.stringify(signedOut));
+  expect(refusal, "the revert is refused, in words that say why").toBe("Sign in before making modifications.");
 });

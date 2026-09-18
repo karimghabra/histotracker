@@ -5,6 +5,7 @@ import { useAppSettings, useSettingsMutations } from "../hooks/useData";
 import { DEFAULT_SETTINGS, SETTING_LIMITS, clampSetting, type AppSettings } from "../lib/settings";
 import { THEME_OPTIONS } from "../lib/themes";
 import { useIsViewer, useReadOnly } from "../lib/readOnly";
+import { SIGNED_OUT_REFUSAL } from "../lib/db";
 
 /**
  * Workstation settings (#92), reached from the cog at the bottom of the left
@@ -185,7 +186,11 @@ export function SettingsDialog({
             <Button onClick={onOpenManage}>
               <Users size={15} /> Manage users, projects &amp; stains
             </Button>
-            <Button onClick={onOpenBackups}>
+            <Button
+              onClick={onOpenBackups}
+              disabled={readOnly}
+              title={readOnly ? SIGNED_OUT_REFUSAL : undefined}
+            >
               <DatabaseBackup size={15} /> Backups &amp; revert
             </Button>
           </div>
