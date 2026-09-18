@@ -9,7 +9,7 @@
 #   OUT     scratch directory for the copy and the logs (default: a fresh temp directory)
 #   TARGET  extra cargo flags, e.g. "--target x86_64-unknown-linux-musl" on a host with no C compiler
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SRC=src-tauri/src/backup_fs.rs
 OUT=${OUT:-$(mktemp -d)}
 TARGET=${TARGET:-}
@@ -32,6 +32,7 @@ perl -0pe 's/use serde::Serialize;\n//; s/#\[derive\(Serialize, Clone\)\]/#[deri
 if grep -q serde "$OUT/backup_fs.orig.rs"; then echo "serde is still in the copy: update this script"; exit 1; fi
 restore() { cp "$OUT/backup_fs.orig.rs" "$CRATE/src/lib.rs"; }
 
+# shellcheck disable=SC2086 # TARGET is a list of cargo flags, split on purpose.
 tests() { (cd "$CRATE" && cargo test -q --lib $TARGET >"$OUT/$1.log" 2>&1); }
 failing() { grep -oE '^    tests::[a-z_0-9]+' "$OUT/$1.log" | sed 's/^ *tests:://' | sort -u | paste -sd, -; }
 
