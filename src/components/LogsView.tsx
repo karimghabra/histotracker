@@ -403,11 +403,14 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
 export function LogsView({
   projects,
   projectFilterId,
+  onProjectFilterChange,
 }: {
   /** The ACTIVE projects (the sidebar's list). A deactivated project's samples stay in the database but not in the Logs (#161). */
   projects: Project[];
   /** The sidebar's project selection, the same one the Board filters by; null is All projects (#160). */
   projectFilterId: number | null;
+  /** Sets the sidebar's selection, so the Logs' own project dropdown and the sidebar always agree (#160). */
+  onProjectFilterChange: (id: number | null) => void;
 }) {
   // #133 — the Logs get the actions the dashboard has, driven by the selection
   // that was already here for tagging. One ticked list, three things to do with
@@ -730,6 +733,17 @@ export function LogsView({
             className="w-56 bg-transparent text-xs text-ink outline-none placeholder:text-ink-faint"
           />
         </label>
+        <select
+          aria-label="Filter the Logs by project"
+          className={selectClass}
+          value={projectFilterId === null ? "all" : String(projectFilterId)}
+          onChange={(e) => onProjectFilterChange(e.target.value === "all" ? null : Number(e.target.value))}
+        >
+          <option value="all">All projects</option>
+          {projects.map((p) => (
+            <option key={p.id} value={String(p.id)}>{p.code}</option>
+          ))}
+        </select>
         <select className={selectClass} value={stain} onChange={(e) => setStain(e.target.value)}>
           <option value="all">Any stain / IHC</option>
           {stainNames.map((name) => (

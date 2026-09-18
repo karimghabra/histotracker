@@ -52,7 +52,9 @@ const { LogsView: LogsViewUnderTest } = await import("./LogsView");
 // App passes the active projects and the sidebar's selection; by default a
 // test sees one active project and All projects, as a fresh session does.
 function LogsView(props: Partial<ComponentProps<typeof LogsViewUnderTest>>) {
-  return <LogsViewUnderTest projects={data.projects} projectFilterId={null} {...props} />;
+  return (
+    <LogsViewUnderTest projects={data.projects} projectFilterId={null} onProjectFilterChange={() => {}} {...props} />
+  );
 }
 
 /**
@@ -428,6 +430,25 @@ describe("LogsView — which blocks are listed", () => {
     rerender(<LogsView projectFilterId={null} />);
     expect(has("EE-1")).toBe(true);
     expect(has("ZZ-1")).toBe(true);
+  });
+
+  // #160 — the Logs' own dropdown is the sidebar's selection: it shows it, and
+  // setting it sets the sidebar's (App owns the one value).
+  it("shows the sidebar's selection in its project dropdown, and sets it from there (#160)", async () => {
+    data.projects = [project(1, "EE"), project(2, "ZZ")];
+    const onProjectFilterChange = vi.fn();
+    const { rerender } = render(<LogsView projectFilterId={2} onProjectFilterChange={onProjectFilterChange} />);
+    const dropdown = screen.getByLabelText("Filter the Logs by project");
+    expect(dropdown).toHaveDisplayValue("ZZ");
+    expect(within(dropdown).getAllByRole("option").map((o) => o.textContent)).toEqual(["All projects", "EE", "ZZ"]);
+
+    await userEvent.selectOptions(dropdown, "EE");
+    expect(onProjectFilterChange).toHaveBeenLastCalledWith(1);
+    await userEvent.selectOptions(dropdown, "All projects");
+    expect(onProjectFilterChange).toHaveBeenLastCalledWith(null);
+
+    rerender(<LogsView projectFilterId={null} onProjectFilterChange={onProjectFilterChange} />);
+    expect(dropdown).toHaveDisplayValue("All projects");
   });
 
   // #158 — both toggles start on; a choice already made is remembered and wins.

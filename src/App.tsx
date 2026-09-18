@@ -904,6 +904,7 @@ export default function App() {
                 key={`logs-${activeUser?.id ?? "none"}`}
                 projects={projects}
                 projectFilterId={selectedProjectId}
+                onProjectFilterChange={setSelectedProjectId}
               />
             </div>
           ) : (

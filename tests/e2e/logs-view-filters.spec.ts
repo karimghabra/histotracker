@@ -15,6 +15,8 @@ const boardNav = (page: Page) => page.locator("nav").getByRole("button", { name:
 const cell = (page: Page, code: string) => page.getByRole("cell", { name: code, exact: true });
 const sidebarProject = (page: Page, name: RegExp | string) =>
   page.locator("aside").first().getByRole("button", { name });
+const logsProject = (page: Page) => page.getByLabel("Filter the Logs by project");
+const logsProjectShown = (page: Page) => logsProject(page).locator("option:checked");
 
 /** Two projects with one block each: EE-1 and ZZ-1. */
 async function twoProjects(page: Page) {
@@ -98,14 +100,42 @@ test("#160: the sidebar's project selection filters the Logs, and the export fol
   await expect(cell(page, "ZZ-1")).toBeVisible();
 });
 
+test("#160: the Logs' project dropdown and the sidebar are one selection, set from either side", async ({ page }) => {
+  await twoProjects(page);
+  await logsNav(page).click();
+  await expect(logsProjectShown(page)).toHaveText("All projects");
+
+  // Sidebar → dropdown.
+  await sidebarProject(page, /Zebrafish/).click();
+  await expect(logsProjectShown(page)).toHaveText("ZZ");
+  await expect(cell(page, "EE-1")).toHaveCount(0);
+
+  // Dropdown → sidebar, and on to the Board.
+  await logsProject(page).selectOption({ label: "EE" });
+  await expect(sidebarProject(page, /Enthesis/)).toHaveAttribute("aria-current", "true");
+  await expect(cell(page, "EE-1")).toBeVisible();
+  await expect(cell(page, "ZZ-1")).toHaveCount(0);
+  await boardNav(page).click();
+  await expect(page.getByText("EE-1", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("ZZ-1", { exact: true })).toHaveCount(0);
+
+  await logsNav(page).click();
+  await logsProject(page).selectOption({ label: "All projects" });
+  await expect(sidebarProject(page, "All projects")).toHaveAttribute("aria-current", "true");
+  await expect(cell(page, "EE-1")).toBeVisible();
+  await expect(cell(page, "ZZ-1")).toBeVisible();
+});
+
 test("#160 with #140: signing out clears the selection, so the Logs are unfiltered again", async ({ page }) => {
   await twoProjects(page);
-  await sidebarProject(page, /Zebrafish/).click();
   await logsNav(page).click();
+  await logsProject(page).selectOption({ label: "ZZ" });
   await expect(cell(page, "EE-1")).toHaveCount(0);
 
   await signOutAndBackIn(page);
   await logsNav(page).click();
+  await expect(logsProjectShown(page)).toHaveText("All projects");
+  await expect(sidebarProject(page, "All projects")).toHaveAttribute("aria-current", "true");
   await expect(cell(page, "EE-1")).toBeVisible();
   await expect(cell(page, "ZZ-1")).toBeVisible();
 });

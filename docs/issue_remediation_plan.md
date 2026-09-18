@@ -52,8 +52,9 @@
   Nothing is written to the database.
 - **#160 · ✅ fixed.**
   The sidebar's project selection is the Logs' project filter as well as the Board's, passed to `LogsView` as `projectFilterId`.
-  The Logs' own project dropdown is gone, since a second control could disagree with the sidebar.
-  Sign-out clears the selection (#140), so it clears the Logs' scope with it.
+  The Logs' own project dropdown stays, bound to that same selection (`onProjectFilterChange`), so setting either sets both and they cannot disagree.
+  It lists the active projects only.
+  Sign-out clears the selection (#140), so it clears the Logs' scope and resets the dropdown to All projects with it.
   The CSV and Excel export read the same filtered list, so they follow it.
 - **#158 · ✅ fixed.**
   "Show archived" and "Show removed" start ON.
