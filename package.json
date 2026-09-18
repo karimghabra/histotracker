@@ -21,7 +21,9 @@
     "test:stress2": "playwright test --config playwright.stress2.config.ts",
     "test:stress3": "playwright test --config playwright.stress3.config.ts",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:screenshot": "playwright test --config playwright.screenshot.config.ts",
+    "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

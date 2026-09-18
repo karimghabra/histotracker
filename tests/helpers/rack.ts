@@ -61,9 +61,13 @@ export async function reassignInRack(
 }
 
 /** Move the first slide in the open rack, and say which one it was. */
-export async function reassignFirstInRack(page: Page, value: string): Promise<string | null> {
+export async function reassignFirstInRack(page: Page, value: string): Promise<string> {
+  // The slide list comes from an async query; wait for it before the one-shot
+  // read below, or a slow tick reads the list as empty and this silently no-ops.
+  await expect(drawer(page).locator("span.block.truncate.text-xs.font-semibold").first()).toBeVisible();
   const codes = await rackSlideCodes(page);
-  if (codes.length === 0) return null;
+  expect(codes.length, "slides listed in the open rack").toBeGreaterThan(0);
   const [moved] = await reassignInRack(page, [codes[0]], value);
-  return moved ?? null;
+  expect(moved, "the slide that was moved").toBeTruthy();
+  return moved!;
 }

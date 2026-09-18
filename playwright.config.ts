@@ -16,9 +16,11 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
   workers: 1,
-  // The app re-renders on background timers (auto-advance/sync), so a few
-  // interactions are timing-sensitive; retry rather than chase per-frame waits.
-  retries: 2,
+  // Both flakes retries were hiding (manifest.spec.ts:90, issues-113-120.spec.ts's
+  // #115) were one-shot reads racing an async query, not app timing; each is now a
+  // web-first wait. A retry no longer papers over a real defect, so it stays off:
+  // standing order 8 forbids retrying in place of diagnosing.
+  retries: 0,
   // 30s (the default) was already tight for the specs that walk a block all the
   // way from intake to Embedded Inventory — a dozen drags, each with a settle.
   // Asking for a stain now costs a trip through the Logs (#113/#114 moved the

@@ -60,7 +60,7 @@ async function drag(page: Page, src: string, col: string) {
   await page.mouse.move(t.x + t.width / 2, t.y + 140, { steps: 10 });
   await page.mouse.move(t.x + t.width / 2, t.y + 142, { steps: 3 });
   await page.mouse.up();
-  // dnd-kit swallows every click for 50ms after a drop — wait it out.
+  // dnd-kit swallows every click for 50ms after a drop - wait it out.
   await settleAfterDrop(page);
 }
 
@@ -74,8 +74,7 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await expect(sampleCell).toBeVisible();
   // The stains summary shows the stain we cut.
   await expect(page.getByRole("cell", { name: /Alcian Blue/ }).first()).toBeVisible();
-  // The table's structure (this replaced a capture of it) is diffed against the
-  // base build's render of the same surface by the render tier (tests/render/).
+  await page.screenshot({ path: "test-results/logs-table.png", fullPage: true });
 
   // Filter by that stain → the sample stays; filter by an unused one → it drops.
   const stainSelect = page
@@ -119,8 +118,7 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   );
   // The slide stayed expanded, so its notes are read straight back from the DB.
   await expect(page.getByPlaceholder("Notes about this slide…")).toHaveValue("Faint staining");
-  // The expanded row's layout (this replaced a capture of it) is covered by the
-  // render tier's "logs-row" surface (tests/render/).
+  await page.screenshot({ path: "test-results/logs-expanded.png", fullPage: true });
 
   // Sorting: clicking a header keeps the sample listed.
   await page.getByRole("columnheader", { name: /Slides/ }).click();

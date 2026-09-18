@@ -94,6 +94,19 @@ jobs:
       - name: Component and unit tests
         run: pnpm exec vitest run
 
+      # E4: a screenshot in tests/e2e is asserted on by nothing on a green run.
+      # Captures belong in the screenshot tier (tests/screenshot/); this keeps
+      # them out of the lightweight suite.
+      - name: Capture guard
+        run: node scripts/no-unasserted-captures.mjs
+
+      # G1: every browser suite serves vite.config.playwright.ts, never the
+      # production config, so a bundle break (a dropped plugin, a bad import, a
+      # test shim leaking into production) is otherwise first seen on release
+      # day.
+      - name: Production build and bundle check
+        run: pnpm exec vite build --outDir dist --emptyOutDir --logLevel warn && node scripts/bundle-check.mjs dist
+
       # Cache the browser binary — it is ~190 MB and otherwise dominates the run.
       - name: Cache Playwright browsers
         id: pw-cache
@@ -125,6 +138,70 @@ jobs:
           path: |
             playwright-report/
             test-results/
+          retention-days: 7
+
+  # pnpm verify's render layer: the pull request's base and this tree, served
+  # side by side in the same run, the same small lab built on both under a
+  # frozen clock, eight surfaces read as ARIA structure plus a layout/contrast
+  # audit at two widths, no screenshot, no stored baseline. A structural
+  # difference is reported, because an update is meant to change something; a
+  # new audit line on head that base does not have (a cut-off control,
+  # unreadable text) fails. The captain's ruling of 2026-09-14: this job runs
+  # against the pull request's base.
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install system deps for cached browser
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Render diff against the pull request's base
+        # On a pull request, the base is the branch it targets. Outside one (a
+        # push straight to a branch, or the release workflow calling this file),
+        # scripts/verify.mjs falls back to merge-base against origin/master
+        # itself, so no --base is passed here at all.
+        run: |
+          if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
+            node scripts/verify.mjs --only render --base "${{ github.event.pull_request.base.sha }}"
+          else
+            node scripts/verify.mjs --only render
+          fi
+
+      - name: Upload the render tier's own logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-diff
+          path: .verify-out/render/
           retention-days: 7
 
   # Is this change compatible with the build the lab is running? Runs the REAL
@@ -197,3 +274,54 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --lib --locked
+
+  # pnpm verify's screenshot layer: the 26 captures E4 moved out of tests/e2e,
+  # so a person can still look, per the captain's ruling of 2026-09-14 ("its
+  # fine to take screenshots, as long as more lightweight e2e tests are
+  # performed first"). Runs last, and only once the data, render and e2e
+  # layers are all green; never on the lab machine.
+  screenshot:
+    needs: [suites, workflow-harness, browser-tests, release-compat, render]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install system deps for cached browser
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Screenshot tier
+        run: pnpm test:screenshot
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-tier
+          path: test-results/
+          retention-days: 7
