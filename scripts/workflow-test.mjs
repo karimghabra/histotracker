@@ -1399,7 +1399,8 @@ function makeApi(db) {
     const section = get(
       `SELECT sr.sample_id AS sample, s.sample_code AS code,
               (SELECT MAX(sl.stage_cut_at) FROM slides sl
-                WHERE sl.section_request_id = sr.id AND sl.current_stage <> 'removed') AS cut
+                WHERE sl.section_request_id = sr.id
+                  AND (sl.current_stage <> 'removed' OR sr.current_stage <> 'needs_sectioning')) AS cut
          FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`,
       [sectionId]);
     if (!section) throw new Error("That cut group no longer exists.");
@@ -4182,6 +4183,26 @@ issue(139, "a slide added to a retracted group is not stamped cut by a removed s
   const added = api.addSlideToSection(section, { assayType: "stain", assayName: "H&E" });
   eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [added]).cut, null,
      "nothing was cut, so the new slide has no cut date");
+});
+
+// A group still past Needs Sectioning was cut even when every slide in it has since been
+// removed, so a slide added there is cut too.
+issue(139, "a slide added to a cut group whose slides were all removed is stamped cut", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EF", "cut, all removed");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.run(`UPDATE section_requests SET current_stage = 'sectioned' WHERE id = ?`, [section]);
+  api.run(`UPDATE slides SET stage_cut_at = ? WHERE section_request_id = ?`, [now(), section]);
+  for (const { id: slide } of api.all(`SELECT id FROM slides WHERE section_request_id = ?`, [section])) {
+    api.removeSlide(slide, "broke at the bench");
+  }
+  const added = api.addSlideToSection(section, { assayType: "stain", assayName: "H&E" });
+  assert(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [added]).cut,
+     "the group was cut, so the new slide carries a cut date");
 });
 
 invariant("an untouched cut group can still be dragged back", () => {

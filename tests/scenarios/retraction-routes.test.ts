@@ -201,4 +201,20 @@ describe("adding a slide to a group is stamped cut only because glass in it was 
     const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
     expect(cutStamps(lab, added).stage_cut_at).not.toBeNull();
   });
+
+  it("a group still past Needs Sectioning with every slide removed was cut, so the new slide is cut", async () => {
+    lab = await openLab();
+    const { group } = await queuedGroup(lab, "cut group, all removed", 2);
+    await lab.db.updateSectionStage(group, "sectioned");
+    for (const { id } of lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [group])) {
+      await lab.db.removeSlide(Number(id), "broke at the bench");
+    }
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("sectioned");
+
+    const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
+    expect(cutStamps(lab, added).stage_cut_at, "the blade did touch this block").not.toBeNull();
+    expect(cutStamps(lab, added).current_stage).toBe("stain_requested");
+    const extra = await lab.db.addSlideToSection(group, { extra: true });
+    expect(cutStamps(lab, extra).stage_cut_at).not.toBeNull();
+  });
 });
