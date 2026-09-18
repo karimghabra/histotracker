@@ -1398,7 +1398,8 @@ function makeApi(db) {
   function addSlideToSection(sectionId, target) {
     const section = get(
       `SELECT sr.sample_id AS sample, s.sample_code AS code,
-              (SELECT MAX(sl.stage_cut_at) FROM slides sl WHERE sl.section_request_id = sr.id) AS cut
+              (SELECT MAX(sl.stage_cut_at) FROM slides sl
+                WHERE sl.section_request_id = sr.id AND sl.current_stage <> 'removed') AS cut
          FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`,
       [sectionId]);
     if (!section) throw new Error("That cut group no longer exists.");
@@ -4162,6 +4163,25 @@ issue(139, "an extra slide in a group still waiting to be cut cannot be stained"
     refused = true;
   }
   assert(refused, "glass that has not been cut cannot go on a stainer");
+});
+
+// A slide added to a group is stamped cut because glass in the group was cut, never
+// because a REMOVED sibling once was: a retraction leaves that sibling beside a queued group.
+issue(139, "a slide added to a retracted group is not stamped cut by a removed sibling", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "retracted, removed sibling");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.run(`UPDATE slides SET stage_cut_at = ? WHERE section_request_id = ?`, [now(), section]);
+  const [gone] = api.all(`SELECT id FROM slides WHERE section_request_id = ? ORDER BY id`, [section]);
+  api.removeSlide(gone.id, "broke at the bench");
+  api.revertSectionToStage(section, "needs_sectioning");
+  const added = api.addSlideToSection(section, { assayType: "stain", assayName: "H&E" });
+  eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [added]).cut, null,
+     "nothing was cut, so the new slide has no cut date");
 });
 
 invariant("an untouched cut group can still be dragged back", () => {

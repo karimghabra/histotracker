@@ -4573,7 +4573,8 @@ export async function addSlideToSection(
   >(
     `SELECT sr.sample_id AS sample_id, s.sample_code AS parent_code,
             sr.current_stage AS section_stage,
-            (SELECT MAX(sl.stage_cut_at) FROM slides sl WHERE sl.section_request_id = sr.id) AS cut_at
+            (SELECT MAX(sl.stage_cut_at) FROM slides sl
+              WHERE sl.section_request_id = sr.id AND sl.current_stage <> 'removed') AS cut_at
        FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
       WHERE sr.id = ?`,
     [sectionId],
@@ -4594,7 +4595,9 @@ export async function addSlideToSection(
   const timestamp = nowTimestamp();
   // "Already cut" is read off the SIBLING slides, not the group's stage: the
   // group's stage moves on for other reasons, and the cut stamp is the thing
-  // that says a blade touched the block (#95).
+  // that says a blade touched the block (#95). Only LIVE siblings count: a
+  // removed slide keeps the stamp it earned when a retraction leaves it beside a
+  // queued group, and reading it would stamp a new slide cut when nothing was.
   const alreadyCut = Boolean(section.cut_at);
   const assayName = "extra" in target ? "" : target.assayName.trim();
   if (!("extra" in target) && !assayName) {
