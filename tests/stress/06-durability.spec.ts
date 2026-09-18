@@ -315,7 +315,7 @@ test("durability: exhausted blocks, archived samples and an already-running batc
       const stillListed = await page.getByRole("cell", { name: "EX-2", exact: true }).count();
       findings.push({
         where: "archive",
-        detail: `EX-2 ${stillListed ? "is still listed" : "is hidden"} with Show archived off`,
+        detail: `EX-2 ${stillListed ? "is still listed" : "is hidden"} after archiving (Show archived starts on, #158)`,
       });
       // …and nothing was deleted.
       const gone = await count(page, `SELECT COUNT(*) AS n FROM samples WHERE sample_code = 'EX-0002'`);

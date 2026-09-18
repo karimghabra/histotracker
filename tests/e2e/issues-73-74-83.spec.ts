@@ -166,7 +166,10 @@ test("#74: a sample can be archived, hidden, and restored", async ({ page }) => 
   await page.getByRole("cell", { name: "EE-2", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-2" }).click();
 
-  // Hidden from the log by default, and gone from the board.
+  // Still in the log (Show archived starts on, #158) and flagged; hide it, and
+  // it is gone from the log, and from the board either way.
+  await expect(page.getByText("Archived").first()).toBeVisible();
+  await page.getByLabel("Show archived").uncheck();
   await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toHaveCount(0, {
     timeout: 15000,
   });

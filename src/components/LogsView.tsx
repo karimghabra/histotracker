@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Pencil, Search, Send, Star, Tag, Trash2 } from "lucide-react";
-import type { Sample, Slide } from "../lib/types";
+import type { Project, Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
 import { useActions } from "../hooks/useActions";
@@ -400,7 +400,15 @@ function StageFilter({ selected, onToggle }: { selected: Set<PhaseKey>; onToggle
   );
 }
 
-export function LogsView() {
+export function LogsView({
+  projects,
+  projectFilterId,
+}: {
+  /** The ACTIVE projects (the sidebar's list). A deactivated project's samples stay in the database but not in the Logs (#161). */
+  projects: Project[];
+  /** The sidebar's project selection, the same one the Board filters by; null is All projects (#160). */
+  projectFilterId: number | null;
+}) {
   // #133 — the Logs get the actions the dashboard has, driven by the selection
   // that was already here for tagging. One ticked list, three things to do with
   // it, exactly as the rack panel works since 0.14.1.
@@ -453,7 +461,6 @@ export function LogsView() {
     [sampleRemovalList],
   );
 
-  const [project, setProject] = useViewPref("logs.project", "all");
   const [stain, setStain] = useViewPref("logs.stain", "all");
   const [assayType, setAssayType] = useViewPref<"all" | "stain" | "ihc">("logs.assayType", "all");
   const [onlyMatching, setOnlyMatching] = useViewPref("logs.onlyMatching", false);
@@ -465,13 +472,15 @@ export function LogsView() {
   const [sortDir, setSortDir] = useViewPref<"asc" | "desc">("logs.sortDir", "asc");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [exportMsg, setExportMsg] = useState<string | null>(null);
-  // Archived samples are hidden by default and can be shown on demand (#74).
-  const [showArchived, setShowArchived] = useViewPref("logs.showArchived", false);
+  // Archived samples can be hidden on demand (#74). They start shown (#158): a
+  // log that hides part of the record by default reads as missing work. A choice
+  // the user has made is remembered for the session and still wins over this.
+  const [showArchived, setShowArchived] = useViewPref("logs.showArchived", true);
   // Removed blocks and slides are the record of something that went wrong, so
-  // they belong in the log — but not in the way of everyday reading (#105).
-  const [showRemoved, setShowRemoved] = useViewPref("logs.showRemoved", false);
+  // they belong in the log, shown from the start for the same reason (#105, #158).
+  const [showRemoved, setShowRemoved] = useViewPref("logs.showRemoved", true);
   const phasesKey = [...phases].join(",");
-  useEffect(() => setExportMsg(null), [project, stain, assayType, phasesKey, fromDate, toDate, search]);
+  useEffect(() => setExportMsg(null), [projectFilterId, stain, assayType, phasesKey, fromDate, toDate, search]);
 
   const slidesBySample = useMemo(() => {
     const map = new Map<string, Slide[]>();
@@ -491,10 +500,7 @@ export function LogsView() {
     return map;
   }, [slides]);
 
-  const projectCodes = useMemo(
-    () => [...new Set(samples.map((s) => s.project_code).filter(Boolean) as string[])].sort(),
-    [samples],
-  );
+  const activeProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
   const stainNames = useMemo(
     () => [...new Set(catalog.map((c) => c.name))].sort((a, b) => a.localeCompare(b)),
     [catalog],
@@ -548,7 +554,11 @@ export function LogsView() {
       if (!showArchived && sample.archived_at) return false;
       // …and so do removed ones (#105, #96).
       if (!showRemoved && sample.current_stage === "removed") return false;
-      if (project !== "all" && sample.project_code !== project) return false;
+      // A deactivated project's samples are kept, just not listed (#161);
+      // reactivating it brings them back. The sidebar's selection narrows the
+      // rest exactly as it does the Board (#160).
+      if (!activeProjectIds.has(sample.project_id)) return false;
+      if (projectFilterId !== null && sample.project_id !== projectFilterId) return false;
       // ANY, not the single furthest one: a block in Embedded Inventory whose
       // slides are in staining is in both places, and the filters read as
       // inventories (#119).
@@ -587,7 +597,7 @@ export function LogsView() {
       }
       return true;
     });
-  }, [rows, project, phases, assayType, stain, fromDate, toDate, search, showArchived, showRemoved]);
+  }, [rows, activeProjectIds, projectFilterId, phases, assayType, stain, fromDate, toDate, search, showArchived, showRemoved]);
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
@@ -720,12 +730,6 @@ export function LogsView() {
             className="w-56 bg-transparent text-xs text-ink outline-none placeholder:text-ink-faint"
           />
         </label>
-        <select className={selectClass} value={project} onChange={(e) => setProject(e.target.value)}>
-          <option value="all">All projects</option>
-          {projectCodes.map((code) => (
-            <option key={code} value={code}>{code}</option>
-          ))}
-        </select>
         <select className={selectClass} value={stain} onChange={(e) => setStain(e.target.value)}>
           <option value="all">Any stain / IHC</option>
           {stainNames.map((name) => (

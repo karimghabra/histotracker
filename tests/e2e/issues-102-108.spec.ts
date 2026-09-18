@@ -147,21 +147,23 @@ test("#104: filters survive a view switch and reset on sign-out", async ({ page 
   // Board → Logs → Board. The filter used to reset to All Projects, because the
   // Board unmounts and its useState went with it.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  // Shown by default (#158), so the choice under test is turning it OFF.
   const showArchived = page.getByLabel("Show archived");
-  await showArchived.check();
+  await expect(showArchived).toBeChecked();
+  await showArchived.uncheck();
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await expect(page.getByLabel("Filter needs embedding by project")).toHaveValue(/^\d+$/);
 
   // …and the Logs filter survived the round trip too.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  await expect(page.getByLabel("Show archived")).toBeChecked();
+  await expect(page.getByLabel("Show archived")).not.toBeChecked();
 
   // Signing out drops them: the next person at this machine gets a clean board.
   await page.getByRole("button", { name: "Sign out" }).click();
   // Dismiss the sign-in prompt (#108) — it is modal and would swallow the nav
   // clicks below.
   await page.getByRole("button", { name: "Keep reading" }).click();
-  await expect(page.getByLabel("Show archived")).not.toBeChecked();
+  await expect(page.getByLabel("Show archived")).toBeChecked();
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await expect(page.getByLabel("Filter needs embedding by project")).toHaveValue("all");
 });
@@ -231,11 +233,15 @@ test("#105: Show removed reveals a deleted block in the Logs", async ({ page }) 
   await expect(page.getByText("EE-1", { exact: true })).toHaveCount(0, { timeout: 15000 });
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
-  // Hidden by default now — the log stays readable.
-  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0);
+  // Shown by default (#158), flagged.
+  await expect(page.getByLabel("Show removed")).toBeChecked();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toBeVisible();
 
-  // One click brings it back, flagged, with its reason.
+  // One click takes it out of the way, and one brings it back with its reason.
+  await page.getByLabel("Show removed").uncheck();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "EE-2", exact: true })).toBeVisible();
   await page.getByLabel("Show removed").check();
   const row = page.getByRole("cell", { name: "EE-1", exact: true });
   await expect(row).toBeVisible();

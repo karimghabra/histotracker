@@ -134,6 +134,10 @@ const board = async (page: Page) => {
 };
 const logs = async (page: Page) => {
   await nav("Logs")(page);
+  // The sidebar's project selection filters the Logs too (#160), and an earlier
+  // surface may have picked one: every Logs surface starts from All projects.
+  const all = page.locator("aside").getByRole("button", { name: "All projects", exact: true });
+  if ((await all.count()) && (await all.getAttribute("aria-current")) !== "true") await all.click();
   await expect(page.getByPlaceholder(/Search code/)).toBeVisible();
   const removed = page.getByLabel("Show removed");
   if ((await removed.count()) && !(await removed.isChecked())) await removed.check();
