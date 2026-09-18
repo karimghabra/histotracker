@@ -1,6 +1,7 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 mod backup;
+mod backup_fs;
 mod migrate;
 mod sync;
 

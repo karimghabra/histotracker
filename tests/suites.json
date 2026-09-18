@@ -88,9 +88,14 @@
       "pr": "node --test scripts/test-coverage.test.mjs"
     },
     "cargo test --lib --locked": {
-      "what": "The Rust shell, and in it db_migrate_image (src-tauri/src/migrate.rs), which the TypeScript model in src/test/sqlx-migrator.ts only stands in for. The same job runs `cargo check --locked` first, which is what catches a version bumped in Cargo.toml and not in Cargo.lock.",
+      "what": "The Rust shell, and in it db_migrate_image (src-tauri/src/migrate.rs), which the TypeScript model in src/test/sqlx-migrator.ts only stands in for, and the file logic of backups and restore (src-tauri/src/backup_fs.rs: validated, atomic, name-guarded writes, listing, pruning), run on temporary directories. The same job runs `cargo check --locked` first, which is what catches a version bumped in Cargo.toml and not in Cargo.lock.",
       "notAScript": "The Rust shell is built by cargo, not by pnpm; the job runs it in src-tauri.",
       "pr": "cargo test --lib --locked"
+    },
+    "bash scripts/backup-mutants.sh": {
+      "what": "The proof the backup_fs tests can fail: plants 20 defects one at a time in a copy of src-tauri/src/backup_fs.rs (a bypassed magic check, a name carrying a slash, backslash or .., a copy in place of the atomic rename, a skipped sweep, listing or pruning from the wrong end) and fails when any survives every test. Std only, so it needs no Tauri build.",
+      "notAScript": "A shell script that drives cargo, run by the rust job after cargo test.",
+      "pr": "bash scripts/backup-mutants.sh"
     },
     "test:stress": {
       "what": "The v1 stress walk that remains after 01 to 05 were retired (superseded by test:stress2 and test:stress3): 06-durability and 07-bench-reality, with retries off and console errors fatal.",

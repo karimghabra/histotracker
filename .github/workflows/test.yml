@@ -281,6 +281,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib --locked
 
+      # The backup_fs tests are only worth having if they can fail. This plants
+      # one defect at a time in src-tauri/src/backup_fs.rs (a copy, built as a
+      # crate of its own) and fails when any of them goes uncaught.
+      - name: backup tests catch planted defects
+        run: bash scripts/backup-mutants.sh
+
   # pnpm verify's screenshot layer: the 26 captures E4 moved out of tests/e2e,
   # so a person can still look, per the captain's ruling of 2026-09-14 ("its
   # fine to take screenshots, as long as more lightweight e2e tests are
