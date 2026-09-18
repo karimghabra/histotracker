@@ -1,15 +1,13 @@
-// Open issues #140 and #142, and #146 (fixed, kept here as the regression), walked through the real app. Each assertion is on the
+// Issues #140, #142 and #146 (all fixed, kept here as the regression), walked through the real app. Each assertion is on the
 // harm the issue names, so any fix that removes the harm passes.
 //
-// Each test is marked `test.fail()`: the bug is open, so the test is expected to fail and CI stays
-// green. The day the fix lands the test passes, Playwright reports that as a failure, and whoever
-// fixed the issue must delete the `test.fail()` line here, which turns it into a hard check.
+// An open issue is marked `test.fail()` with a comment naming it: CI stays green while the bug is open, goes red the
+// day the fix lands, and whoever fixed it deletes the marker, which turns the test into a hard check.
 import { test, expect, type Page } from "@playwright/test";
 import { openBackups, openSettings, setTheme } from "../helpers/app";
 import { DB, addProject, addSample, boot, signOutAndBackIn } from "../helpers/lab";
 
 test("#140: after a sign-out and sign-in, the sidebar's selection and the board's filters agree", async ({ page }) => {
-  test.fail(true, "OPEN ISSUE #140: delete this line in the pull request that fixes it");
   await boot(page);
   await addProject(page, "EE", "Enthesis Engineering");
   await addProject(page, "ZZ", "Zebrafish");
@@ -30,6 +28,41 @@ test("#140: after a sign-out and sign-in, the sidebar's selection and the board'
   expect(boardSays,`sidebar selects "${selected.slice(0, 40)}"; board filter value ${value}`).toBe(sidebarSays);
 });
 
+test("#140: a project picked in the Logs filters the board once it is shown again", async ({ page }) => {
+  await boot(page);
+  await addProject(page, "EE", "Enthesis Engineering");
+  await addProject(page, "ZZ", "Zebrafish");
+  await addSample(page, "ee block", "EE");
+  const sidebar = page.locator("aside").first();
+  const filter = page.getByLabel("Filter pre-processing by project");
+
+  // Adding the second project selected it, so the board is filtered to ZZ; pick EE while it is away.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await sidebar.getByRole("button", { name: /^Enthesis Engineering/ }).click();
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+  await expect(page.getByRole("heading", { name: "Pre-processing", exact: true })).toBeVisible();
+
+  await expect(sidebar.locator('[aria-current="true"]').first()).toContainText("Enthesis Engineering");
+  const value = await filter.inputValue();
+  expect(value, "the board filters to the project picked while it was away").not.toBe("all");
+  expect((await filter.locator(`option[value="${value}"]`).innerText()).trim()).toMatch(/^EE/);
+});
+
+test("#140: a hand-set column filter still survives a trip to the Logs (#104)", async ({ page }) => {
+  await boot(page);
+  await addProject(page, "EE", "Enthesis Engineering");
+  await addProject(page, "ZZ", "Zebrafish");
+  await addSample(page, "ee block", "EE");
+  const sidebar = page.locator("aside").first();
+  const filter = page.getByLabel("Filter pre-processing by project");
+
+  await sidebar.getByRole("button", { name: /^Enthesis Engineering/ }).click();
+  await filter.selectOption("all");
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+  await expect(filter, "the hand-set 'all' is not overwritten by the sidebar's selection").toHaveValue("all");
+});
+
 test.describe("#142: on a dark OS", () => {
   test.use({ colorScheme: "dark" });
 
@@ -45,7 +78,6 @@ test.describe("#142: on a dark OS", () => {
   const luminance = ([r, g, b]: number[]) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
   test("#142: the System theme's customizer starts from the dark palette on screen", async ({ page }) => {
-    test.fail(true, "OPEN ISSUE #142: delete this line in the pull request that fixes it");
     await page.goto("/?freshdb=1");
     await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({ timeout: 20_000 });
     await setTheme(page, "system");

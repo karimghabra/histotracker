@@ -232,8 +232,10 @@ export function readThemePalette(theme: string): Palette {
   // Inline values win over the stylesheet, so a custom palette already applied
   // would be read back instead of the theme asked for. Clear, read, restore.
   for (const v of THEME_VARS) root.style.removeProperty(v.name);
-  if (theme === "system" || !theme) root.removeAttribute("data-theme");
-  else root.setAttribute("data-theme", theme);
+  // "system" is read as itself, not as "no theme": its dark palette lives only
+  // under `[data-theme="system"]` inside a prefers-color-scheme media query,
+  // so removing the attribute would read the light defaults on a dark OS (#142).
+  root.setAttribute("data-theme", theme || "system");
 
   const computed = getComputedStyle(root);
   const palette: Palette = {};

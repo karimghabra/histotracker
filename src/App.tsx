@@ -123,6 +123,10 @@ export default function App() {
   );
 
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  // The project selection the Board last applied to its column filters. Kept
+  // here because the Board remounts on every trip to the Logs and every sign-in,
+  // and a project picked while it was away must still reach the columns (#140).
+  const appliedSelection = useRef<string | null>(null);
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
   const [selectedSampleIds, setSelectedSampleIds] = useState<number[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
@@ -227,6 +231,10 @@ export default function App() {
     // on the signed-in user, so they remount in the very same render and would
     // otherwise read the departing user's filters back out on the way past.
     clearViewPrefs();
+    // The sidebar's selection is a view preference too, and clearViewPrefs just
+    // reset every column it drives to "all": leaving it set would name a project
+    // the columns no longer filter to, and clicking it would change nothing (#140).
+    setSelectedProjectId(null);
     selectUser.mutate(null);
   };
   // The window is configurable (#92); the hook's own 30-minute default is now
@@ -903,6 +911,7 @@ export default function App() {
               // Id and code both: the six column filters do not all match on the
               // same column.
               projectFilterId={selectedProjectId ?? "all"}
+              appliedSelection={appliedSelection}
               projectFilterCode={
                 projects.find((project) => project.id === selectedProjectId)?.code ?? "all"
               }
