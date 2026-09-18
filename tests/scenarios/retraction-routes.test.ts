@@ -159,3 +159,62 @@ describe("putting work on a slide whose group is still waiting to be cut", () =>
     if (stack != null) straight(lab, await attempt(() => lab!.db.syncAssayStackWorkflowStep(Number(stack), "stain", 0, true)));
   });
 });
+
+describe("adding a slide to a group is stamped cut only because glass in it was cut", () => {
+  const cutStamps = (l: Lab, slide: number) =>
+    l.rows(`SELECT stage_cut_at, current_stage FROM slides WHERE id = ?`, [slide])[0];
+
+  it("a removed sibling that was once cut does not make the new slide cut, after a retraction", async () => {
+    lab = await openLab();
+    const { group } = await queuedGroup(lab, "retracted, removed sibling", 2);
+    await lab.db.updateSectionStage(group, "sectioned");
+    const [gone] = lab.rows(`SELECT id FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal, id`, [group]);
+    await lab.db.removeSlide(Number(gone.id), "broke at the bench");
+    await lab.db.revertSectionToStage(group, "needs_sectioning");
+    // The removed slide keeps the stamp it earned; the retraction is what leaves it beside a queued group.
+    expect(cutStamps(lab, Number(gone.id)).stage_cut_at).not.toBeNull();
+
+    const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
+    expect(cutStamps(lab, added).stage_cut_at, "nothing was cut, so the new slide has no cut date").toBeNull();
+    expect(cutStamps(lab, added).current_stage).toBe("assigned");
+    const extra = await lab.db.addSlideToSection(group, { extra: true });
+    expect(cutStamps(lab, extra).stage_cut_at).toBeNull();
+  });
+
+  it("a live sibling that really was cut still makes the new slide cut", async () => {
+    lab = await openLab();
+    const { group } = await queuedGroup(lab, "cut group, slide added", 2);
+    await lab.db.updateSectionStage(group, "sectioned");
+    const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
+    expect(cutStamps(lab, added).stage_cut_at).not.toBeNull();
+    expect(cutStamps(lab, added).current_stage).toBe("stain_requested");
+    const extra = await lab.db.addSlideToSection(group, { extra: true });
+    expect(cutStamps(lab, extra).stage_cut_at).not.toBeNull();
+  });
+
+  it("a removed sibling does not hide the cut of a live one", async () => {
+    lab = await openLab();
+    const { group } = await queuedGroup(lab, "cut group, one removed", 2);
+    await lab.db.updateSectionStage(group, "sectioned");
+    const [gone] = lab.rows(`SELECT id FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal, id`, [group]);
+    await lab.db.removeSlide(Number(gone.id), "broke at the bench");
+    const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
+    expect(cutStamps(lab, added).stage_cut_at).not.toBeNull();
+  });
+
+  it("a group still past Needs Sectioning with every slide removed was cut, so the new slide is cut", async () => {
+    lab = await openLab();
+    const { group } = await queuedGroup(lab, "cut group, all removed", 2);
+    await lab.db.updateSectionStage(group, "sectioned");
+    for (const { id } of lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [group])) {
+      await lab.db.removeSlide(Number(id), "broke at the bench");
+    }
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("sectioned");
+
+    const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
+    expect(cutStamps(lab, added).stage_cut_at, "the blade did touch this block").not.toBeNull();
+    expect(cutStamps(lab, added).current_stage).toBe("stain_requested");
+    const extra = await lab.db.addSlideToSection(group, { extra: true });
+    expect(cutStamps(lab, extra).stage_cut_at).not.toBeNull();
+  });
+});
