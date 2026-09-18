@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type MutableRefObject } from "react";
 import { compareSampleCodes, compareSlideCodes } from "../lib/utils";
 import { useViewPref } from "../hooks/useViewPref";
 import type { ProcessingBatch, Sample, SectionRequest, Slide, SlideStack, Project } from "../lib/types";
@@ -267,6 +267,7 @@ export function Board({
   onToggleSamplePriority,
   projectFilterId,
   projectFilterCode,
+  appliedSelection,
   projects,
   readOnly = false,
 }: {
@@ -307,6 +308,8 @@ export function Board({
    */
   projectFilterId: number | "all";
   projectFilterCode: string;
+  /** What the last Board applied; owned by the parent so it survives a remount. */
+  appliedSelection?: MutableRefObject<string | null>;
   /** Every live project, so a column can offer the selected one even when it
    *  holds none of its work (#131). */
   projects: Project[];
@@ -345,24 +348,28 @@ export function Board({
   // still reachable. Picking a project is the broad stroke; the per-column
   // dropdown is the exception you make afterwards.
   //
-  // The mount run is skipped, and that is the whole subtlety. `useEffect` with a
-  // dependency array still runs once on mount, and the Board REMOUNTS every time
-  // you come back from the Logs — so without this guard, a trip to the Logs
-  // stamped the sidebar's selection over the column filter you had just set, and
-  // #104 ("filters survive a view switch") was quietly broken. It survived the
-  // local run by timing and failed all three attempts in CI.
+  // The mount run compares against what the LAST Board applied, and that is the
+  // whole subtlety. `useEffect` with a dependency array still runs once on
+  // mount, and the Board REMOUNTS every time you come back from the Logs, so
+  // stamping the sidebar's selection over the column filters on every mount
+  // broke #104 ("filters survive a view switch"): a trip to the Logs overwrote
+  // the filter you had just set by hand. Skipping the mount run outright broke
+  // the other way (#140): a project picked while the Logs or Manifest was
+  // showing had no Board mounted to apply it, and the next Board adopted it
+  // unapplied, so the sidebar named one project and the columns showed all.
   //
-  // The consequence, stated because it is a real trade: on a fresh load the
-  // columns show whatever was stored for them, not whatever the sidebar restored
-  // to. That is the correct half to lose. #104 is about a choice the user made
-  // by hand surviving; #131 is about what happens when they PICK a project, and
-  // picking is an action, not a restore.
-  const lastSelection = useRef<string | null>(null);
+  // So the record of what was applied lives in App (`appliedSelection`) and
+  // outlives this instance. Equal to the selection: nothing was picked while
+  // away, leave the stored column filters alone (#104). Different: it was, apply
+  // it. Empty: the very first Board of the session, adopt nothing and let the
+  // stored column preferences stand, since picking is an action and a restore is not.
+  const ownAppliedSelection = useRef<string | null>(null);
+  const lastSelection = appliedSelection ?? ownAppliedSelection;
   useEffect(() => {
     const selection = `${projectFilterId}|${projectFilterCode}`;
     if (lastSelection.current === null) {
-      // First render of this Board instance: adopt nothing, remember where we
-      // came in at, and let the stored column preferences stand.
+      // First Board of the session: adopt nothing, remember where we came in
+      // at, and let the stored column preferences stand.
       lastSelection.current = selection;
       return;
     }

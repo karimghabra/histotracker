@@ -99,7 +99,7 @@
   --color-panel: #fbfdf8;
   --color-ink: #243728;
   --color-ink-soft: #60725f;
-  --color-ink-faint: #8b9988;
+  --color-ink-faint: #899786;
   --color-line: #d6e2d1;
   --color-brand: #4f7d4b;
   --color-brand-strong: #365f36;
@@ -112,7 +112,7 @@
   --color-panel: #fdfbff;
   --color-ink: #342b48;
   --color-ink-soft: #6d6380;
-  --color-ink-faint: #9b91ac;
+  --color-ink-faint: #998eaa;
   --color-line: #dfd8ec;
   --color-brand: #7558a6;
   --color-brand-strong: #5e438c;
@@ -125,7 +125,7 @@
   --color-panel: #fffafb;
   --color-ink: #472c35;
   --color-ink-soft: #7f606a;
-  --color-ink-faint: #aa8e97;
+  --color-ink-faint: #a78b94;
   --color-line: #ecd7dd;
   --color-brand: #ad5f78;
   --color-brand-strong: #8f465f;
@@ -151,7 +151,7 @@
   --color-panel: #fbfffd;
   --color-ink: #173b32;
   --color-ink-soft: #52766c;
-  --color-ink-faint: #83a097;
+  --color-ink-faint: #7c9a91;
   --color-line: #cce7dd;
   --color-brand: #25866d;
   --color-brand-strong: #176a54;
@@ -164,7 +164,7 @@
   --color-panel: #fdf6e3;
   --color-ink: #073642;
   --color-ink-soft: #586e75;
-  --color-ink-faint: #839496;
+  --color-ink-faint: #819294;
   --color-line: #d8cfb6;
   --color-brand: #268bd2;
   --color-brand-strong: #006aa3;
@@ -202,34 +202,34 @@
 
 :root[data-theme="arctic"] {
   --color-surface: #edf7fb; --color-panel: #ffffff; --color-ink: #183344;
-  --color-ink-soft: #5a7483; --color-ink-faint: #8aa0ad; --color-line: #d3e6ee;
+  --color-ink-soft: #5a7483; --color-ink-faint: #8198a6; --color-line: #d3e6ee;
   --color-brand: #398db7; --color-brand-strong: #256d92; --color-lane-a: #55a3c6; --color-lane-b: #6bb8ae;
 }
 :root[data-theme="sakura"] {
   --color-surface: #fff1f5; --color-panel: #fffafd; --color-ink: #482f3b;
-  --color-ink-soft: #806575; --color-ink-faint: #aa92a0; --color-line: #efd7e2;
+  --color-ink-soft: #806575; --color-ink-faint: #a58b9a; --color-line: #efd7e2;
   --color-brand: #c65f8b; --color-brand-strong: #9f426b; --color-lane-a: #d9789f; --color-lane-b: #9d7ac2;
 }
 :root[data-theme="citrus"] {
   --color-surface: #f7f6df; --color-panel: #fffef4; --color-ink: #3d4021;
-  --color-ink-soft: #70734b; --color-ink-faint: #9b9d72; --color-line: #e5e2bd;
+  --color-ink-soft: #70734b; --color-ink-faint: #959769; --color-line: #e5e2bd;
   --color-brand: #8a9b25; --color-brand-strong: #687718; --color-lane-a: #b09f29; --color-lane-b: #6d9e61;
 }
 :root[data-theme="parchment"] {
   --color-surface: #f0e7d5; --color-panel: #faf4e7; --color-ink: #3f3528;
-  --color-ink-soft: #756957; --color-ink-faint: #9c907d; --color-line: #ded0b9;
+  --color-ink-soft: #756957; --color-ink-faint: #998c79; --color-line: #ded0b9;
   --color-brand: #92714a; --color-brand-strong: #715333; --color-lane-a: #a98355; --color-lane-b: #748969;
 }
 :root[data-theme="candy"] {
   --color-surface: #f5effc; --color-panel: #fffaff; --color-ink: #3d3150;
-  --color-ink-soft: #766887; --color-ink-faint: #a194b0; --color-line: #e5d8f0;
+  --color-ink-soft: #766887; --color-ink-faint: #9a8daa; --color-line: #e5d8f0;
   --color-brand: #a052b2; --color-brand-strong: #7e3a91; --color-lane-a: #d05f9b; --color-lane-b: #5d9fc5;
 }
 /* Matcha (#78) — soft whisked-green light theme: stone-cream paper, deep tea
    ink, and the two lanes split across matcha green and bamboo. */
 :root[data-theme="matcha"] {
   --color-surface: #eaf0dc; --color-panel: #f8fbf0; --color-ink: #2b3a22;
-  --color-ink-soft: #61734f; --color-ink-faint: #8fa07b; --color-line: #d3e0bd;
+  --color-ink-soft: #61734f; --color-ink-faint: #85976f; --color-line: #d3e0bd;
   --color-brand: #6f9438; --color-brand-strong: #52732a; --color-lane-a: #7ea546; --color-lane-b: #4f9678;
 }
 :root[data-theme="cobalt"] {
@@ -359,6 +359,14 @@ body {
 
 .theme-select,
 .theme-select option {
+  background-color: var(--color-panel);
+  color: var(--color-ink);
+}
+
+/* For a select drawn transparent inside a bordered wrapper: the wrapper carries
+   the box, so the control itself stays clear, but the open list is painted from
+   the <option>s and would otherwise fall back to the browser's own white (#162). */
+.theme-options option {
   background-color: var(--color-panel);
   color: var(--color-ink);
 }

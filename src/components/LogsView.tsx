@@ -1322,7 +1322,7 @@ function FragmentRow({
                     aria-label={`Add a stain to ${displayCode(sample.sample_code)}`}
                     value={stainToAdd}
                     onChange={(event) => setStainToAdd(event.target.value)}
-                    className="bg-transparent text-xs text-ink outline-none"
+                    className="theme-options bg-transparent text-xs text-ink outline-none"
                   >
                     <option value="">Add a stain…</option>
                     {addableAgents.map((agent) => (

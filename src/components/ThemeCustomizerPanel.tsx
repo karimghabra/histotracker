@@ -12,6 +12,49 @@ import {
 } from "../lib/theme";
 
 /**
+ * The hex text box beside a colour.
+ *
+ * It keeps what the person has TYPED as a draft, apart from the palette, because
+ * most of what is typed on the way to a colour is not a colour yet ("#1a2b3"):
+ * a box bound straight to the palette snaps back to the last valid value on
+ * every keystroke, and a colour could only be pasted whole (#141). A value that
+ * parses goes to the palette at once, so the board still follows as you type; a
+ * value that does not is left in the box and the board is left alone.
+ *
+ * A draft belongs to the palette value it was typed against (`base`). When the
+ * palette moves for any other reason, the colour picker or "Start from", the box
+ * shows the new colour instead of a stale draft. Leaving the box drops the draft,
+ * so an unfinished value never outlives the edit.
+ */
+function HexField({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  onCommit: (hex: string) => void;
+}) {
+  const [draft, setDraft] = useState<{ text: string; base: string } | null>(null);
+  return (
+    <input
+      type="text"
+      aria-label={label}
+      value={draft && draft.base === value ? draft.text : value}
+      onChange={(event) => {
+        const text = event.target.value;
+        const hex = toHex(text);
+        setDraft({ text, base: hex ?? value });
+        if (hex) onCommit(hex);
+      }}
+      onBlur={() => setDraft(null)}
+      spellCheck={false}
+      className="w-20 shrink-0 rounded border border-line bg-white px-1.5 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand"
+    />
+  );
+}
+
+/**
  * Build a theme and watch the board change as you do it.
  *
  * A DOCKED panel, not a dialog, and that is the whole design. The theme picker
@@ -44,9 +87,9 @@ export function ThemeCustomizerPanel({
   const dark = isDarkPalette(palette);
 
   function set(name: string, value: string) {
+    // The colour picker always hands over a whole colour. A half-typed hex is
+    // held back by HexField, so the board stays steady while somebody types.
     const hex = toHex(value);
-    // A half-typed hex ("#12") is not a colour yet. Ignoring it rather than
-    // applying black keeps the board steady while somebody types.
     if (!hex) return;
     onChange({ ...palette, [name]: hex });
   }
@@ -122,13 +165,10 @@ export function ThemeCustomizerPanel({
                   {/* The text field is not decoration: a lab with a brand colour
                       has it written down as a hex string, and typing it beats
                       hunting for it in a colour wheel. */}
-                  <input
-                    type="text"
-                    aria-label={`${v.label} hex`}
+                  <HexField
+                    label={`${v.label} hex`}
                     value={palette[v.name] ?? ""}
-                    onChange={(event) => set(v.name, event.target.value)}
-                    spellCheck={false}
-                    className="w-20 shrink-0 rounded border border-line bg-white px-1.5 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand"
+                    onCommit={(hex) => set(v.name, hex)}
                   />
                 </div>
               ))}
