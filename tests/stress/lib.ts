@@ -197,6 +197,16 @@ export async function newSamples(
   await page.getByRole("button", { name: "New Sample" }).click();
   const dialog = page.getByRole("dialog", { name: /New Sample/ });
   await expect(dialog).toBeVisible();
+  // REPAIR (#132 made the dialog ask for the project): answer with the project the sidebar has
+  // selected, which is what this helper's callers meant by "the selected project".
+  const picker = dialog.getByLabel("Project for these samples");
+  if ((await picker.count()) && (await picker.inputValue()) === "") {
+    const selected = page.locator('aside button[aria-current="true"]').first();
+    const name = (await selected.innerText()).split("\n")[0].trim();
+    const value = await picker.locator("option").filter({ hasText: ` · ${name}` }).first().getAttribute("value");
+    expect(value, `the sidebar selects "${name}", which is not a project in the New Sample picker`).toBeTruthy();
+    await picker.selectOption(value!);
+  }
   if (quantity > 1) await dialog.getByLabel("Quantity").fill(String(quantity));
   if (opts.description) {
     await dialog.getByPlaceholder("e.g. 2 week Stretch PLA").fill(opts.description);

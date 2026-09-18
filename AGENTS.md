@@ -32,7 +32,7 @@ update break what already works?" Four layers, cheapest first, stopping at the
 first red one:
 
 1. **data**, in parallel: typecheck, the workflow harness, the legacy upgrade,
-   vitest, `test:compat`, the release checks, the suite manifest, the E4
+   vitest, `test:scenarios`, `test:compat`, the release checks, the suite manifest, the E4
    capture guard (`scripts/no-unasserted-captures.mjs`, keeps screenshots out
    of `tests/e2e`), and the production `vite build` plus G1's bundle check
    (`scripts/bundle-check.mjs`, which catches a dropped Tailwind plugin or a leaked
@@ -60,6 +60,7 @@ pnpm verify                # the layered gate above; also run individually:
 pnpm build                 # tsc typecheck + vite build
 pnpm test                  # data-layer workflow harness (see below)
 pnpm test:ui               # component/render tests (vitest + RTL, jsdom)
+pnpm test:scenarios        # lab-record scenarios on the REAL db.ts (tests/scenarios)
 pnpm test:legacy           # a REAL populated pre-0023 DB, both upgrade paths
 pnpm test:compat           # the released build in use vs this tree, both directions
 pnpm test:release          # release checks' own tests, then this tree's version sources agree
@@ -69,6 +70,10 @@ cd src-tauri && cargo check && cargo test --lib
 
 `pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All of the
 above should pass before pushing.
+
+`test:scenarios` is where a data-layer behaviour goes when it must be tested on the real `src/lib/db.ts` rather than a port of it (`tests/scenarios/lab.ts` opens a lab the way the app does).
+An open issue is a scenario marked `it.fails` (vitest) or `test.fail()` (Playwright, `tests/e2e/open-issues.spec.ts`) with a comment naming it; CI stays green until the fix lands, then goes red until the marker is removed, so **the pull request that fixes an issue deletes its marker**.
+stress2, stress3 and stress v1's `06`/`07` run nightly on master (`.github/workflows/nightly.yml`), a failure opening an issue; they are not in `pnpm verify`.
 
 `tests/suites.json` is the answer to what a green check proved.
 It lists every suite this repository has, with either the command a pull request's CI runs it with or the reason CI does not run it.
@@ -98,12 +103,12 @@ suite runs" below applies to running two heavy suites side by side.
 
 | suite | idle | scope |
 | --- | --- | --- |
-| `pnpm verify --only data` | 21s | tsc, harness, legacy, vitest, compat, release, suites, E4 guard, G1 build+bundle |
+| `pnpm verify --only data` | 21s | tsc, harness, legacy, vitest, scenarios, compat, release, suites, E4 guard, G1 build+bundle |
 | `pnpm verify --only render` | 30s | 8 surfaces x 2 widths, base vs head |
-| `pnpm verify --only e2e` (= `npx playwright test`, retries 0) | 514s | 153 tests, `tests/e2e` |
+| `pnpm verify --only e2e` (= `npx playwright test`, retries 0) | 514s | 156 tests, `tests/e2e` |
 | `pnpm test:screenshot` | ~130s | 35 tests writing the 26 captures E4 moved here |
-| stress2 | 702s | 14 tests |
-| stress3 | 363s | 13 tests |
+| stress2 (nightly in CI) | 702s | 14 tests |
+| stress3 (nightly in CI) | 363s | 13 tests |
 
 `pnpm verify` (without `--screenshot`) runs the first three in sequence, stopping at the first red one.
 

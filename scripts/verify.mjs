@@ -7,8 +7,9 @@
  *   node scripts/verify.mjs [--base <rev>] [--workers <n>] [--keep-going]
  *                           [--only data,render,e2e,screenshot] [--screenshot]
  *
- * 1. data (in parallel): typecheck, harness, legacy upgrade, vitest, compat,
- *    release checks, suite manifest, the E4 capture guard, and the production
+ * 1. data (in parallel): typecheck, harness, legacy upgrade, vitest (which
+ *    includes D1's keystroke test), the data-layer scenarios (A1, A2, H1),
+ *    compat, release checks, suite manifest, the E4 capture guard, and the production
  *    `vite build` plus G1's bundle check.
  * 2. render: the base build and this tree served side by side, the same lab
  *    built on both, ARIA structure diffed and layout/contrast audited, no
@@ -98,6 +99,7 @@ if (only.includes("data")) {
     run("harness", "node scripts/workflow-test.mjs"),
     run("legacy", "node scripts/make-legacy-db.mjs && node scripts/legacy-db-upgrade-test.mjs; s=$?; git checkout -- tests/fixtures/legacy-pre-0023.b64; exit $s"),
     run("unit", "pnpm exec vitest run"),
+    run("scenarios", "pnpm test:scenarios"),
     run("compat", "pnpm test:compat"),
     run("release", "node --test scripts/release-check.test.mjs && node scripts/release-check.mjs versions"),
     run("suites", "node --test scripts/test-coverage.test.mjs && node scripts/test-coverage.mjs"),

@@ -1,0 +1,150 @@
+name: Nightly stress
+
+# The suites too slow for the path that gates every push, run against master
+# every night (the captain's ruling, 2026-09-14): stress2 (scale and
+# invariants), stress3 (the explorer) and the two stress v1 specs that remain,
+# 06-durability and 07-bench-reality. A failure opens an issue, or adds a
+# comment to the one already open, so a red night is never only a red badge.
+#
+# tests/suites.json says which suites run here ("nightly"), and
+# scripts/test-coverage.mjs fails a pull request that claims one this file does
+# not invoke.
+#
+# `workflow_dispatch` runs the same jobs by hand. Only master's own runs open
+# issues, unless `open_issue` is ticked; `rehearse_failure` adds a job that
+# fails on purpose, to prove the failure path end to end.
+
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+    inputs:
+      open_issue:
+        description: "Open an issue on failure even though this is not master's scheduled run"
+        type: boolean
+        default: false
+      rehearse_failure:
+        description: "Add a job that fails on purpose, to prove the issue is opened"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+
+jobs:
+  stress2:
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: stress2
+        run: pnpm test:stress2
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress2
+          path: test-results/
+          retention-days: 7
+
+  stress3:
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: stress3
+        run: pnpm test:stress3
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress3
+          path: test-results/
+          retention-days: 7
+
+  # Stress v1's 01 to 05 are retired (superseded by stress2 and stress3); the
+  # two that remain are what neither of those replaces.
+  stress1:
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: stress v1 (06, 07)
+        run: pnpm test:stress
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress1
+          path: test-results/
+          retention-days: 7
+
+  rehearsal:
+    if: github.event_name == 'workflow_dispatch' && inputs.rehearse_failure
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "A rehearsed failure: this job fails on purpose."
+          exit 1
+
+  report:
+    needs: [stress2, stress3, stress1, rehearsal]
+    if: >-
+      always() && contains(needs.*.result, 'failure') &&
+      (github.event_name == 'schedule' || inputs.open_issue || inputs.rehearse_failure)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue, or comment on the one already open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ toJSON(needs) }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref_name }}
+        run: |
+          failed=$(printf '%s' "$RESULTS" | jq -r 'to_entries[] | select(.value.result == "failure") | .key' | paste -sd, - | sed 's/,/, /g')
+          title="Nightly stress failed"
+          [ "${{ github.event_name }}" = workflow_dispatch ] && title="Nightly stress failed (manual run on $REF)"
+          body=$(printf 'Failed: %s\n\nRun: %s\nCommit: %s (%s)\n\nThe artefacts on the run hold the traces. Close this issue once the next night is green.' "$failed" "$RUN_URL" "$SHA" "$REF")
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
