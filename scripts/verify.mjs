@@ -25,7 +25,7 @@
  */
 import { spawn, execSync } from "node:child_process";
 import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const ROOT = process.cwd();
 // Deliberately NOT under test-results/: Playwright clears its whole outputDir
@@ -123,7 +123,10 @@ async function tree(label, rev) {
     const patch = execSync("git diff HEAD --binary", { cwd: ROOT, maxBuffer: 1 << 28 });
     if (patch.length) {
       writeFileSync(join(dir, ".worktree.patch"), patch);
-      execSync("git apply .worktree.patch", { cwd: dir });
+      // From ROOT with --directory, not from inside `dir`: `dir` sits under ROOT's
+      // work tree, where a bare `git apply` skips every path outside the
+      // subdirectory and exits 0, so the head tree silently held HEAD only.
+      execSync(`git apply --directory=${relative(ROOT, dir)} ${join(dir, ".worktree.patch")}`, { cwd: ROOT });
     }
   }
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"));
