@@ -18,7 +18,7 @@
       "pr": "node scripts/workflow-test.mjs"
     },
     "test:scenarios": {
-      "what": "The lab-record logic on this tree's real src/lib/db.ts, in Node, on a real SQLite file (tests/scenarios): A2's staining-rack model (slides entering staining pool into one rack per agent across samples, which replaces the retired test:staining), H1's Logs export pinned cell by cell as it is today (three note columns), and A1's open issues #139, #144 and #148, each marked it.fails so CI stays green until the fix lands and goes red if the marker outlives it. #146's data-layer proof (signed-out-restore.test.ts) is a hard check: a restore with nobody signed in is refused and no restore changes who is signed in.",
+      "what": "The lab-record logic on this tree's real src/lib/db.ts, in Node, on a real SQLite file (tests/scenarios): A2's staining-rack model (slides entering staining pool into one rack per agent across samples, which replaces the retired test:staining), H1's Logs export pinned cell by cell as it is today (three note columns), and A1's open issues #144 and #148, each marked it.fails so CI stays green until the fix lands and goes red if the marker outlives it. #139 is fixed and a hard check, and A3's route sweep (retraction-routes.test.ts) walks every route that takes a cut back out of a group or puts work on glass never cut, asserting on the invariant in invariants.ts (no live slide carries a work stamp without a cut date). #146's data-layer proof (signed-out-restore.test.ts) is a hard check: a restore with nobody signed in is refused and no restore changes who is signed in.",
       "dirs": [
         "tests/scenarios"
       ],
