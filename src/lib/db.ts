@@ -1883,39 +1883,35 @@ export async function updateBatchMembers(
     )
   ).map((r) => r.sample_id);
 
-  // Taking the LAST sample out dissolves the run (#135).
+  // Taking the LAST sample out ends the run (#135), and what happens to its
+  // record depends on whether the run happened.
   //
-  // This used to throw "A run needs at least one sample", which is true and
-  // unhelpful: a run with nothing in it is not a run, and the technician
-  // emptying it is saying so. Refusing left them with a batch they could not get
-  // rid of except by starting it and marking it done — a lie in the record about
-  // a machine that never ran.
+  // A PLANNED run is a plan withdrawn: nothing was cut, embedded or moved, so it
+  // is DELETED, a deliberate exception to #83 (which protects the record of work
+  // that HAPPENED). 0.16.2 parked it as a `cancelled` shell instead and that was
+  // worse for a plan: a row that says a batch existed, and nothing else.
   //
-  // The run is DELETED, and that is a deliberate exception to #83 rather than an
-  // oversight, so it is worth saying why. #83 protects the record of work that
-  // HAPPENED — glass that was cut, tissue that was processed. A run emptied of
-  // its samples is the opposite: a plan withdrawn. Nothing was cut, nothing was
-  // embedded, and for a planned run nothing physically moved at all.
-  //
-  // 0.16.2 shipped this as a `cancelled` status instead, and that was worse than
-  // either choice. It kept the batch row and deleted its membership, so the
-  // surviving record answered "did batch 3 exist?" — which nobody asks — and not
-  // "what was in it?", which is the only useful question. A shell is not a
-  // record.
-  //
-  // What actually happened is not lost. `audit_events` keeps the batch's
-  // creation and every stage transition its samples made, so "EE-1 went into a
-  // machine at 09:14 and came out at 09:20" is still answerable from the
-  // Manifest — which is where "who did what" belongs, and where it is now
-  // tested (#77). Ids are AUTOINCREMENT, so a deleted batch number is never
-  // handed to a later run.
+  // A RUNNING run is different (#148). The machine physically ran, so deleting
+  // the row and its protocol checklist erased a lab record, and the only trace
+  // left was the generic trigger rows. It is marked `cancelled` and kept whole:
+  // its members and its checklist stay, so "what was in batch 3 and what was
+  // ticked off" is still answerable, and an explicit audit row says who
+  // cancelled it. Its samples go back to in_ethanol, as before.
   if (sampleIds.length === 0) {
-    // Samples first: if the delete fails, they are at least out of a run that
-    // is about to stop existing, rather than pinned to one that already does not.
-    // Only a RUNNING batch moved them; a planned one leaves them in
-    // pre-processing, so there is nothing to put back.
     if (running) {
       for (const id of previousIds) await revertToStage(id, "in_ethanol");
+      await db.execute(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
+      await db.execute(
+        `INSERT INTO audit_events (user_id, action, entity_type, entity_id, summary, details)
+         VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+                 'cancel', 'processing_batch', ?, ?, ?)`,
+        [
+          batchId,
+          `Cancelled running processing batch ${batchId}`,
+          JSON.stringify({ batch_id: batchId, sample_ids: previousIds }),
+        ],
+      );
+      return;
     }
     // Same order as startProcessingBatch's abort unwind: children before parent,
     // and members explicitly rather than relying on ON DELETE CASCADE, which
@@ -2058,7 +2054,7 @@ export async function listOpenProcessingBatches(): Promise<ProcessingBatch[]> {
        JOIN processing_batch_members pbm ON pbm.batch_id = pb.id
        JOIN samples s ON s.id = pbm.sample_id
       WHERE pb.status = 'planned'
-         OR s.current_stage IN ('processing_started', 'processed')
+         OR (pb.status != 'cancelled' AND s.current_stage IN ('processing_started', 'processed'))
       GROUP BY pb.id
       ORDER BY pb.status = 'planned', pb.started_at ASC, pb.id ASC`,
   );

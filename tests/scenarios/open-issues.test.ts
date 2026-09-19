@@ -1,4 +1,4 @@
-// Open issues #144 and #148 (and #139, fixed and now a hard check), each as a scenario on the real db.ts.
+// Open issue #144 (and #139 and #148, fixed and now hard checks), each as a scenario on the real db.ts.
 //
 // Each assertion is written against the harm the issue describes, not against one
 // fix: where the issue leaves the remedy open (refuse the action, or allow it and
@@ -67,8 +67,8 @@ describe("#144: a stain request never plans glass on a block with no tissue left
 });
 
 describe("#148: emptying a processing run that already ran leaves a record that it ran", () => {
-  // OPEN ISSUE #148: remove `.fails` in the pull request that fixes it.
-  it.fails("the last sample taken out of a running run", async () => {
+  // #148 is fixed: a started run is cancelled, never deleted.
+  it("the last sample taken out of a running run", async () => {
     lab = await openLab();
     const block = await lab.sample("in the processor", "in_ethanol");
     const batch: number = await lab.db.startProcessingBatch({
@@ -94,5 +94,53 @@ describe("#148: emptying a processing run that already ran leaves a record that 
       stillThere || recorded.length > 0,
       `running batch ${batch} emptied (${outcome.slice(0, 50)}): row kept=${stillThere}, deletion audit rows=${recorded.length}`,
     ).toBe(true);
+
+    // The remedy the captain ruled on: the run is kept, marked cancelled, with
+    // what was in it, its protocol checklist and an audit record of the cancel.
+    expect(lab.rows(`SELECT status FROM processing_batches WHERE id = ?`, [batch])[0]?.status).toBe("cancelled");
+    expect(lab.rows(`SELECT sample_id FROM processing_batch_members WHERE batch_id = ?`, [batch]).map((r) => r.sample_id)).toEqual([block]);
+    expect(
+      lab.rows(
+        `SELECT COUNT(*) AS n FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
+        [batch],
+      )[0].n,
+    ).toBe(1);
+    expect(recorded.map((r) => r.action)).toContain("cancel");
+    expect(lab.rows(`SELECT current_stage FROM samples WHERE id = ?`, [block])[0].current_stage).toBe("in_ethanol");
+  });
+
+  it("a cancelled run does not come back on the board when one of its samples is processed again", async () => {
+    lab = await openLab();
+    const block = await lab.sample("in the processor", "in_ethanol");
+    const first: number = await lab.db.startProcessingBatch({
+      sampleIds: [block],
+      processingType: "Short",
+      operatorName: "KG",
+      startedAt: "2026-09-14 08:30",
+      checklistLabels: ["Reagents checked"],
+    });
+    await lab.db.updateBatchMembers(first, []);
+    const second: number = await lab.db.startProcessingBatch({
+      sampleIds: [block],
+      processingType: "Short",
+      operatorName: "KG",
+      startedAt: "2026-09-14 10:00",
+      checklistLabels: [],
+    });
+    const open = (await lab.db.listOpenProcessingBatches()).map((b) => b.id);
+    expect(open).toEqual([second]);
+  });
+
+  it("a planned run that is emptied is still deleted", async () => {
+    lab = await openLab();
+    const block = await lab.sample("planned", "in_ethanol");
+    const batch: number = await lab.db.planProcessingBatch({
+      sampleIds: [block],
+      processingType: "Short",
+      operatorName: "KG",
+      plannedStartAt: "2030-01-01 08:00",
+    });
+    await lab.db.updateBatchMembers(batch, []);
+    expect(lab.rows(`SELECT id FROM processing_batches WHERE id = ?`, [batch])).toEqual([]);
   });
 });

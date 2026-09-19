@@ -227,10 +227,10 @@ test("#89: an emptied filter shows nothing, and says which project it is showing
   await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible();
 });
 
-// #135 — the run with one sample in it could not be emptied. The remove control
+// #135, #148 — the run with one sample in it could not be emptied. The remove control
 // was hidden on the last member, and the data layer refused an empty membership,
 // so the only way out was to start a run that was not happening and mark it done.
-test("#135: taking the last sample out removes the run", async ({ page }) => {
+test("#135, #148: taking the last sample out of a started run cancels it and keeps its record", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "the only block", "EE");
   await completePreprocessing(page, "EE-1");
@@ -260,35 +260,32 @@ test("#135: taking the last sample out removes the run", async ({ page }) => {
     .filter({ has: page.getByRole("heading", { name: "Pre-processing", exact: true }) });
   await expect(preprocessing.getByText("EE-1", { exact: true })).toBeVisible({ timeout: 15_000 });
 
-  // The run is removed outright, with its membership (0.16.3). A deliberate
-  // exception to #83, decided at the bench: an emptied run is a plan withdrawn,
-  // not work erased. 0.16.2 kept it as a `cancelled` shell, which could say a
-  // run had existed but not what was in it.
+  // A run that was started happened (#148): it is cancelled, never deleted, and
+  // keeps what was in it and its protocol checklist. (A planned run that is
+  // emptied is still deleted; the harness covers that, #135.)
   await expect(async () => {
     const rows = (await page.evaluate(() =>
       (
         (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
-          `SELECT (SELECT COUNT(*) FROM processing_batches) AS batches,
-                  (SELECT COUNT(*) FROM processing_batch_members) AS members`,
+          `SELECT (SELECT status FROM processing_batches) AS status,
+                  (SELECT COUNT(*) FROM processing_batch_members) AS members,
+                  (SELECT COUNT(*) FROM checklist_runs WHERE scope_type = 'processing_batch') AS checklists`,
         )
-      ) as Array<{ batches: number; members: number }>,
-    ))[0] as { batches: number; members: number };
-    expect(rows.batches, "the run is gone").toBe(0);
-    expect(rows.members, "and its membership with it").toBe(0);
+      ) as Array<{ status: string; members: number; checklists: number }>,
+    ))[0] as { status: string; members: number; checklists: number };
+    expect(rows.status, "the run is kept, marked cancelled").toBe("cancelled");
+    expect(rows.members, "with what was in it").toBe(1);
+    expect(rows.checklists, "and its protocol checklist").toBeGreaterThan(0);
   }).toPass({ timeout: 15_000 });
 
-  // What HAPPENED is not lost: the Manifest still holds the run's creation and
-  // the block's trip in and out of the machine. That is where "who did what"
-  // lives, and it is the reason removing the batch row costs nothing.
-  const trail = (await page.evaluate(() =>
+  const cancelled = (await page.evaluate(() =>
     (
       (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] }).__SHIM_SELECT__(
-        `SELECT summary FROM audit_events WHERE entity_type = 'batch' OR summary LIKE '%processing_started%'`,
+        `SELECT COUNT(*) AS n FROM audit_events WHERE entity_type = 'processing_batch' AND action = 'cancel'`,
       )
-    ) as Array<{ summary: string }>,
-  )) as Array<{ summary: string }>;
-  expect(trail.length, "the Manifest still records the run and the block's stage changes")
-    .toBeGreaterThan(0);
+    ) as Array<{ n: number }>,
+  ))[0] as { n: number };
+  expect(cancelled.n, "the cancellation is on the audit trail").toBe(1);
 
   // And the BLOCK survives — the run goes, the sample does not.
   const survives = (await page.evaluate(() =>
