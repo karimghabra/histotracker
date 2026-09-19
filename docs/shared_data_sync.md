@@ -176,12 +176,15 @@ authoritative role without explicitly choosing it.
 Driven by `useSync.ts` — on mount, every **2 minutes**, and on the manual "Sync
 now" button. Overlapping runs are guarded.
 
-- **Workstation:** `drainRequests()` → `publishSnapshot()`
+- **Workstation:** `syncWorkstation()` = `drainRequests()` → `publishSnapshot()`
   - `drainRequests` imports each `requests/*.json` into `stain_requests`
     (idempotent on `uuid`) and deletes the file from the repo.
-  - `publishSnapshot` verifies the claim, uploads `histometer.db` +
-    `histometer-status.xlsx` as overwriting release assets, then writes the
-    manifest with a fresh version.
+    With nobody signed in it imports nothing (the writes would be stamped
+    "Unsigned", #128): the files stay in `requests/` and the status line says
+    how many wait for someone to sign in (#147).
+  - `publishSnapshot` runs whoever is signed in: it verifies the claim,
+    uploads `histometer.db` + `histometer-status.xlsx` as overwriting release
+    assets, then writes the manifest with a fresh version.
 - **Viewer:** `pullSnapshotIfNewer()`
   - Reads the manifest; if `manifest.version` is newer than
     `last_synced_version`, downloads the DB asset and swaps it in (see §7).
@@ -236,7 +239,7 @@ bites, pause React Query during the swap. The viewer write guard
 **Frontend (`src/`)**
 - `lib/syncConfig.ts` — typed `invoke` wrappers for the config commands + types.
 - `lib/githubSync.ts` — `github_*` wrappers; `publishSnapshot`,
-  `pullSnapshotIfNewer`, `submitRequest`, `drainRequests`; manifest + claim
+  `pullSnapshotIfNewer`, `submitRequest`, `drainRequests`, `syncWorkstation`; manifest + claim
   helpers; `isNewer`.
 - `lib/export.ts` — `buildStatusWorkbookBytes()` + exported column sets.
 - `lib/db.ts` — `stain_requests` queries, `getDbFilePath()`, `resetDb()`,

@@ -44,6 +44,14 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #147 — a signed-out workstation and the request inbox
+
+- **#147 · ✅ fixed.**
+  A workstation cycle is `syncWorkstation()` in `githubSync.ts`: drain the inbox, then publish, and publishing does not depend on who is signed in.
+  Signed out, `drainRequests` imports nothing, since every import write is stamped with the signed-in user (#128); the request files stay in `requests/` and the first cycle after someone signs in drains them.
+  The sync status says how many requests wait for a sign-in.
+  *Test:* `tests/scenarios/signed-out-sync.test.ts`.
+
 ## #150 — mark many slides imaged at once
 
 - **#150 · ✅ fixed.**
