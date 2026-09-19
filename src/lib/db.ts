@@ -1451,12 +1451,30 @@ export async function setSamplesProcessingType(
   return switched;
 }
 
+/**
+ * Mark a block exhausted, or restore it.
+ *
+ * Exhausting a block cancels every cut still waiting for it in Needs Sectioning
+ * (#144): a plan for glass from a block with no tissue left can never be carried
+ * out. The cancel is `removeSectionRequest`, the same path the board's Delete
+ * takes, so each planned slide is soft-removed with a reason and a
+ * `slide_removed` timeline event, and the group is marked removed, not deleted.
+ * Restoring the block does not bring the cancelled cut back.
+ */
 export async function setBlockExhausted(sampleId: number, exhausted: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE samples SET block_exhausted = ? WHERE id = ?`, [
     exhausted ? 1 : 0,
     sampleId,
   ]);
+  if (!exhausted) return;
+  const waiting = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage = 'needs_sectioning'`,
+    [sampleId],
+  );
+  for (const group of waiting) {
+    await removeSectionRequest(group.id, "Block marked exhausted - waiting cut cancelled");
+  }
 }
 
 /** Free-text notes on a sample (the block's general notes) and on a slide. */
@@ -3930,8 +3948,9 @@ export async function requestStainForSample(input: {
   const pendingCut = await db.select<Array<{ id: number }>>(
     `SELECT id FROM section_requests
       WHERE sample_id = ? AND current_stage = 'needs_sectioning'
+        AND NOT EXISTS (SELECT 1 FROM samples WHERE id = ? AND block_exhausted = 1)
       ORDER BY id LIMIT 1`,
-    [input.sampleId],
+    [input.sampleId, input.sampleId],
   );
   if (pendingCut.length > 0) {
     // Appended, not inserted among the extras: slide_ordinal is the order the

@@ -1,4 +1,4 @@
-// Open issue #144 (and #139 and #148, fixed and now hard checks), each as a scenario on the real db.ts.
+// Issues #139, #144 and #148, all fixed and now hard checks, each as a scenario on the real db.ts.
 //
 // Each assertion is written against the harm the issue describes, not against one
 // fix: where the issue leaves the remedy open (refuse the action, or allow it and
@@ -36,8 +36,7 @@ describe("#139: retracting a cut never leaves glass that was worked on but never
 });
 
 describe("#144: a stain request never plans glass on a block with no tissue left", () => {
-  // OPEN ISSUE #144: remove `.fails` in the pull request that fixes it.
-  it.fails("an exhausted block with a cut still waiting in Needs Sectioning", async () => {
+  it("an exhausted block with a cut still waiting in Needs Sectioning", async () => {
     lab = await openLab();
     const block = await lab.sample("spent block");
     await lab.db.createSectionRequests(block, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
@@ -49,8 +48,6 @@ describe("#144: a stain request never plans glass on a block with no tissue left
           [block],
         )[0].n,
       );
-    const before = planned();
-
     let exhausted = true;
     await lab.db.setBlockExhausted(block, true).catch(() => (exhausted = false));
     if (!exhausted) {
@@ -58,11 +55,49 @@ describe("#144: a stain request never plans glass on a block with no tissue left
       expect(lab.rows(`SELECT block_exhausted FROM samples WHERE id = ?`, [block])[0].block_exhausted).toBe(0);
       return;
     }
+    // Exhausting may itself cancel the waiting cut (#144); the request must add nothing on top.
+    const before = planned();
     let outcome = "accepted";
     await lab.db
       .requestStainForSample({ sampleId: block, assayType: "stain", assayName: "PAS" })
       .catch((e: Error) => (outcome = `refused: ${e.message}`));
     expect(planned(), `planned slides on the exhausted block's waiting cut; request ${outcome.slice(0, 60)}`).toBe(before);
+  });
+});
+
+describe("#144: exhausting a block cancels the cut waiting for it, with a record", () => {
+  it("the group is marked removed, its slides removed with a reason, and restoring does not revive it", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, cut queued");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.setBlockExhausted(block, true);
+
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("removed");
+    const slides = lab.rows(`SELECT current_stage, stack_id FROM slides WHERE section_request_id = ?`, [group]);
+    expect(slides.length).toBeGreaterThan(0);
+    expect(slides.every((s) => s.current_stage === "removed" && s.stack_id === null)).toBe(true);
+    const events = lab.rows(
+      `SELECT details FROM sample_timeline_events WHERE sample_id = ? AND event_type = 'slide_removed'`,
+      [block],
+    );
+    expect(events).toHaveLength(slides.length);
+    expect(events.every((e) => /exhausted/i.test(String(e.details)))).toBe(true);
+
+    await lab.db.setBlockExhausted(block, false);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("removed");
+  });
+
+  it("a cut already past the queue is left alone", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, already cut");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.updateSectionStage(group, "sectioned");
+    await lab.db.setBlockExhausted(block, true);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).not.toBe("removed");
   });
 });
 
