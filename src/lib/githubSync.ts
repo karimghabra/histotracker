@@ -372,16 +372,31 @@ async function applyRequestToBlock(payload: RequestFile): Promise<void> {
   }
 }
 
+export interface DrainResult {
+  /** Requests newly imported into the record. */
+  ingested: number;
+  /** Request files left in the inbox because nobody is signed in (#147). */
+  waiting: number;
+}
+
 /**
  * Workstation: import every request file from the inbox into the permanent DB
  * record (idempotent on uuid), then delete it from the repo so the tree stays
- * tiny. Returns how many new requests were ingested.
+ * tiny.
+ *
+ * With nobody signed in, nothing is imported (#147). Importing writes the
+ * request and flags the block, and every one of those writes is stamped with
+ * whoever is signed in, so done signed out it would put "Unsigned" into the
+ * record for good (#128). The files stay in the inbox as their own pending
+ * marker and are drained by the first cycle after someone signs in.
  */
-export async function drainRequests(): Promise<number> {
-  const entries = await githubListDir(REQUESTS_DIR);
+export async function drainRequests(): Promise<DrainResult> {
+  const entries = (await githubListDir(REQUESTS_DIR)).filter((e) => e.name.endsWith(".json"));
+  if (entries.length > 0 && !(await getActiveUser().catch(() => null))) {
+    return { ingested: 0, waiting: entries.length };
+  }
   let ingested = 0;
   for (const entry of entries) {
-    if (!entry.name.endsWith(".json")) continue;
     const file = await githubGetFile(entry.path);
     if (!file) continue;
     let payload: RequestFile;
@@ -422,5 +437,21 @@ export async function drainRequests(): Promise<number> {
     }
     await githubDeleteFile(entry.path, file.sha, `Ingest request ${payload.uuid ?? entry.name}`);
   }
-  return ingested;
+  return { ingested, waiting: 0 };
+}
+
+export interface WorkstationCycle extends DrainResult {
+  /** The version just published. */
+  published: string;
+}
+
+/**
+ * One workstation sync cycle: drain the request inbox, then publish the snapshot.
+ * Publishing does not depend on who is signed in, so a request that cannot be
+ * drained yet never holds it up (#147).
+ */
+export async function syncWorkstation(): Promise<WorkstationCycle> {
+  const drained = await drainRequests();
+  const published = await publishSnapshot();
+  return { ...drained, published };
 }

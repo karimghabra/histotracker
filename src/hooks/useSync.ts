@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SyncConfigPublic } from "../lib/syncConfig";
-import { drainRequests, publishSnapshot, pullSnapshotIfNewer } from "../lib/githubSync";
+import { pullSnapshotIfNewer, syncWorkstation } from "../lib/githubSync";
 
 const SYNC_INTERVAL_MS = 120_000; // 2 minutes
 
@@ -44,13 +44,16 @@ export function useSync(config: SyncConfigPublic | null): SyncState {
     setError(null);
     try {
       if (config.role === "workstation") {
-        const ingested = await drainRequests();
+        const { ingested, waiting } = await syncWorkstation();
         if (ingested > 0) invalidateAll();
-        await publishSnapshot();
+        const published = ingested > 0
+          ? `Imported ${ingested} request${ingested === 1 ? "" : "s"}, published snapshot`
+          : "Published snapshot";
+        // Say why a request has not been imported, rather than leave it sitting (#147).
         setLastMessage(
-          ingested > 0
-            ? `Imported ${ingested} request${ingested === 1 ? "" : "s"}, published snapshot`
-            : "Published snapshot",
+          waiting > 0
+            ? `${published}; ${waiting} request${waiting === 1 ? " waits" : "s wait"} for someone to sign in`
+            : published,
         );
       } else if (config.role === "viewer") {
         const result = await pullSnapshotIfNewer();
