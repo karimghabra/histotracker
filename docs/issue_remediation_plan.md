@@ -44,6 +44,17 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #144 — a stain request joined the cut waiting on a spent block
+
+- **#144 · ✅ fixed.**
+  The captain's ruling on the open product question (whether #70 should cover a queued cut) was **1b**: marking a block exhausted cancels its waiting cut, with a record, so the stain request is then refused as #70 already intends.
+  `setBlockExhausted` (`db.ts`) cancels every cut still in `needs_sectioning` for that block through `removeSectionRequest`, the same path the board's Delete takes: the group is marked `removed`, not deleted, and each planned slide is soft-removed with a reason and a `slide_removed` timeline event. A cut already sectioned or further along is left alone, and restoring the block does not revive a cancelled cut.
+  `requestStainForSample` no longer treats a waiting cut on an exhausted block as somewhere to hang another planned slide, so a database that already holds the stranded state (flag set, group still queued) refuses too.
+  `listOpenSectionRequests` drops a `needs_sectioning` group whose block is exhausted, so a card stranded by an older build leaves the board and cannot be dragged to Sectioned - a read path only, with no migration and no record rewritten.
+  The Mark Exhausted confirmation, single and bulk, says the cut is cancelled and its planned slides removed.
+  No schema change, so the release in use opens this tree's database unchanged.
+  *Test:* `tests/scenarios/open-issues.test.ts` on the real `db.ts` (the #144 `it.fails` markers are gone), and harness gate `issue #144` in `scripts/workflow-test.mjs`.
+
 ## #147 — a signed-out workstation and the request inbox
 
 - **#147 · ✅ fixed.**
@@ -1248,7 +1259,9 @@ Fixed and gated in this pass:
   extra can fulfil the request (that path flags the block for a cut that can
   never happen). A request an existing extra satisfies is still allowed — the
   slide is already cut. The drawer now catches and displays the refusal.
-  Harness gate `issue #70` covers both branches.
+  Harness gate `issue #70` covers both branches. The one path that got round
+  this refusal — a cut still waiting in Needs Sectioning, which the request
+  joined under #125 — is closed by **#144** above.
 - **#79 — editable sample descriptions · ✅ fixed.** The drawer's Description
   section is editable and routes through the existing `saveDetails` action, so
   it records an undo command. No schema change (`updateSampleDetails` already

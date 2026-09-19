@@ -3947,6 +3947,12 @@ export async function requestStainForSample(input: {
   // been cut, and its glass exists — putting a new agent on it would be claiming
   // a section that was never taken. Those blocks still route to the extras
   // branch above, or to a genuine new cut below.
+  //
+  // An exhausted block is excluded (#144): there is no tissue left, so the
+  // waiting cut can never be carried out and joining it would plan glass nobody
+  // can produce. `setBlockExhausted` cancels such a cut, so this only bites on a
+  // database that already holds the state, where the request falls through to
+  // the #70 refusal below.
   const pendingCut = await db.select<Array<{ id: number }>>(
     `SELECT id FROM section_requests
       WHERE sample_id = ? AND current_stage = 'needs_sectioning'
