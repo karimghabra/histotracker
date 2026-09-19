@@ -89,6 +89,22 @@ describe("#144: exhausting a block cancels the cut waiting for it, with a record
     expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("removed");
   });
 
+  it("a database that already holds the state shows no Needs Sectioning card for it", async () => {
+    lab = await openLab();
+    const block = await lab.sample("already spent, cut still queued");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    const raw = await lab.db.getDb();
+    await raw.execute(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [block]);
+
+    const open = (await lab.db.listOpenSectionRequests()) as Array<{ id: number; sample_id: number }>;
+    expect(open.some((request) => request.id === group)).toBe(false);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe(
+      "needs_sectioning",
+    );
+  });
+
   it("a cut already past the queue is left alone", async () => {
     lab = await openLab();
     const block = await lab.sample("spent block, already cut");
@@ -98,6 +114,8 @@ describe("#144: exhausting a block cancels the cut waiting for it, with a record
     await lab.db.updateSectionStage(group, "sectioned");
     await lab.db.setBlockExhausted(block, true);
     expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).not.toBe("removed");
+    const open = (await lab.db.listOpenSectionRequests()) as Array<{ id: number }>;
+    expect(open.some((request) => request.id === group)).toBe(true);
   });
 });
 

@@ -2947,6 +2947,8 @@ export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
       WHERE p.is_active = 1 AND sr.current_stage != 'analyzed'
         AND sr.current_stage != 'removed' -- a retired cut group leaves the board (#83)
         AND s.archived_at IS NULL -- archiving clears the board (#74)
+        -- a cut still waiting for a spent block can never be carried out (#144)
+        AND NOT (s.block_exhausted = 1 AND sr.current_stage = 'needs_sectioning')
       GROUP BY sr.id
       HAVING NOT (
         sr.current_stage = 'ready_for_imaging'
