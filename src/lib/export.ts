@@ -11,6 +11,7 @@ import {
 import type { ProcessingBatch, Project, Sample, SectionRequest, Slide } from "./types";
 import { BLOCK_TIMELINE_STAGES } from "./stages";
 import { outstandingStains } from "./logStains";
+import { SAMPLE_NOTES } from "./sampleNotes";
 import { displayCode, slideCutAt, slideLetterOf, todayIso } from "./utils";
 
 type Accessor<T> = (row: T) => string;
@@ -182,7 +183,9 @@ const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
   "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
-  "Slide Notes", "Embedding Notes", "Sample Notes",
+  // The physical slide's own note, then the sample's four notes under the labels the
+  // intake form and the Logs screen use (src/lib/sampleNotes.ts).
+  "This Slide's Notes", ...SAMPLE_NOTES.map((n) => n.label),
 ];
 
 /**
@@ -211,7 +214,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
       sample.block_exhausted ? "Yes" : "No",
       (sample.date_added ?? "").slice(0, 10),
     ];
-    const tail = [sample.embedding_notes ?? "", sample.overall_notes ?? ""];
+    const tail = SAMPLE_NOTES.map((n) => sample[n.field] ?? "");
     for (const sl of slides) {
       out.push([
         ...base,
@@ -243,7 +246,7 @@ function logRowCells(rows: LogExportRow[]): string[][] {
         agent.assay_name,
         REQUESTED_STAGE,
         "", "", "", "", "", // never cut, so no bench stamps
-        "", // no slide notes without a slide
+        "", // no note of a slide's own without a slide
         ...tail,
       ]);
     }

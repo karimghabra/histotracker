@@ -174,6 +174,31 @@ describe("buildLogsCsv", () => {
     }
   });
 
+  it("carries all four notes under their on-screen labels, and the slide's own note apart from them", () => {
+    const notes = {
+      embedding_notes: "EMB",
+      cut_notes: "CUT",
+      slide_notes: "PLAN",
+      overall_notes: "GEN",
+    };
+    const csv = buildLogsCsv([
+      { sample: sample({ ...notes, preselected_stains: assigned(["stain", "PAS"]) }), slides: [slide({ notes: "GLASS" })] },
+      { sample: sample({ ...notes, sample_code: "EE-0002" }), slides: [] },
+    ]);
+    const lines = csv.trim().split("\n");
+    const header = cells(lines[0]);
+    expect(header.slice(-5)).toEqual([
+      "This Slide's Notes", "Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes",
+    ]);
+    // A slide row, a still-only-assigned stain row and a bare row all carry the four sample notes;
+    // only the slide row has a note of a slide's own.
+    expect(lines.slice(1).map((line) => cells(line).slice(-5))).toEqual([
+      ["GLASS", "EMB", "CUT", "PLAN", "GEN"],
+      ["", "EMB", "CUT", "PLAN", "GEN"],
+      ["", "EMB", "CUT", "PLAN", "GEN"],
+    ]);
+  });
+
   it("labels an unstained extra and RFC-escapes commas/quotes", () => {
     const csv = buildLogsCsv([
       { sample: sample({ sample_description: 'a, "b"' }), slides: [slide({ purpose: "extra", assay_name: "", assay_type: "" })] },
