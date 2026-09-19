@@ -397,10 +397,20 @@ function makeApi(db) {
     const previousIds = all(
       `SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batchId]).map((r) => r.s);
 
-    // Taking the LAST sample out removes the run (#135, 0.16.3). A deliberate
-    // exception to #83 — see the allow-list note in the never-delete invariant.
+    // Taking the LAST sample out ends the run. A PLANNED run is a plan
+    // withdrawn and is deleted (#135, 0.16.3); a RUNNING one happened, so it is
+    // marked cancelled and kept whole, with an audit row (#148).
     if (!sampleIds.length) {
-      if (running) for (const id of previousIds) revertToStage(id, "in_ethanol");
+      if (running) {
+        for (const id of previousIds) revertToStage(id, "in_ethanol");
+        run(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [batchId]);
+        run(`INSERT INTO audit_events (user_id, action, entity_type, entity_id, summary, details)
+             VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+                     'cancel', 'processing_batch', ?, ?, ?)`,
+          [batchId, `Cancelled running processing batch ${batchId}`,
+           JSON.stringify({ batch_id: batchId, sample_ids: previousIds })]);
+        return;
+      }
       run(`DELETE FROM checklist_items WHERE checklist_run_id IN (
              SELECT id FROM checklist_runs
               WHERE scope_type = 'processing_batch' AND scope_id = ?)`, [batchId]);
@@ -3414,18 +3424,13 @@ invariant("no code path deletes a sample, cut group or slide", () => {
   //    had to fix. Two call sites: createSectionRequests' catch block (slides +
   //    section_requests) and startProcessingBatch's (processing_batches).
   //
-  //  · 1 emptied processing run — updateBatchMembers(id, []) (#135, 0.16.3).
-  //    Taking the last sample out removes the run. This is a DELIBERATE
-  //    exception, decided at the bench: #83 protects the record of work that
-  //    happened, and a run emptied of its samples is a plan withdrawn — nothing
-  //    cut, nothing processed, and for a planned run nothing that ever moved.
-  //    What did happen survives in `audit_events`: the batch's creation and
-  //    every stage transition its samples made are still in the Manifest, which
-  //    is where "who did what" belongs and where it is now tested (#77).
-  //
-  //    0.16.2 tried a `cancelled` status instead and it was worse than either
-  //    choice — it kept the batch row and deleted its membership, leaving a
-  //    record that could say a run existed but not what was in it.
+  //  · 1 emptied PLANNED processing run - updateBatchMembers(id, []) (#135,
+  //    0.16.3). Taking the last sample out of a run that never started removes
+  //    it. This is a DELIBERATE exception, decided at the bench: #83 protects
+  //    the record of work that happened, and a planned run emptied of its
+  //    samples is a plan withdrawn - nothing cut, nothing processed, nothing
+  //    that ever moved. A RUNNING run is never deleted (#148): it is marked
+  //    cancelled with its members, checklist and an audit row kept.
   const ALLOWED_ABORT_UNWIND = 4;
   // Strip comments first. The tombstone notes left where deleteSample() and
   // deleteProcessingBatch() used to live NAME the statements they describe, so
@@ -4410,7 +4415,27 @@ invariant("an extra is not real until its cut group has been dispositioned", () 
 // read as one rule instead of three arbitrary strings.
 
 
-issue(135, "taking the last sample out of a run removes the run", () => {
+issue(135, "taking the last sample out of a planned run removes the run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "the only block");
+  api.completePreprocessing(id);
+  const batch = api.planProcessingBatch({
+    sampleIds: [id], processingType: "Short", operatorName: "Alex Rivera",
+    plannedStartAt: "2030-01-01 08:00",
+  });
+
+  // This used to throw "A run needs at least one sample" - true, and unhelpful.
+  // A run with nothing in it is not a run, and emptying it is how you say so.
+  api.updateBatchMembers(batch, []);
+
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batches WHERE id = ?`, [batch]).c, 0,
+     "the plan is gone");
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batch_members WHERE batch_id = ?`, [batch]).c, 0,
+     "and takes its membership with it");
+});
+
+issue(148, "taking the last sample out of a RUNNING run cancels it and keeps its record", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "the only block");
@@ -4420,19 +4445,25 @@ issue(135, "taking the last sample out of a run removes the run", () => {
   });
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "processing_started",
      "the block is in the machine");
+  const checklistBefore = api.get(
+    `SELECT COUNT(*) AS c FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batch]).c;
 
-  // This used to throw "A run needs at least one sample" — true, and unhelpful.
-  // A run with nothing in it is not a run, and emptying it is how you say so.
   api.updateBatchMembers(batch, []);
 
-  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batches WHERE id = ?`, [batch]).c, 0,
-     "the run is gone");
-  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batch_members WHERE batch_id = ?`, [batch]).c, 0,
-     "and takes its membership with it");
+  eq(api.get(`SELECT status FROM processing_batches WHERE id = ?`, [batch]).status, "cancelled",
+     "the run that happened is kept, marked cancelled");
+  eq(api.get(`SELECT COUNT(*) AS c FROM processing_batch_members WHERE batch_id = ?`, [batch]).c, 1,
+     "with what was in it");
+  eq(api.get(
+    `SELECT COUNT(*) AS c FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batch]).c,
+     checklistBefore, "and its protocol checklist");
+  eq(api.get(
+    `SELECT COUNT(*) AS c FROM audit_events WHERE entity_type = 'processing_batch' AND entity_id = ? AND action = 'cancel'`,
+    [batch]).c, 1, "with an audit record of the cancellation");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [id]).s, "in_ethanol",
      "the block is back where it waits to be loaded");
   eq(api.get(`SELECT processing_started_at AS t FROM samples WHERE id = ?`, [id]).t, null,
-     "carrying no start time for a run that no longer exists");
+     "carrying no start time for a run that was cancelled");
 });
 
 invariant("removing a run leaves the SAMPLE untouched", () => {
