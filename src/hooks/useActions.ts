@@ -19,7 +19,9 @@ import {
   removeSectionRequestIfEmpty,
   removeSlidesForStack,
   assertMayRestore,
-  restoreDbPreservingSession,
+  journalHead,
+  pruneJournal,
+  revertJournalRange,
   getSample,
   getSectionRequest,
   getSlide,
@@ -32,7 +34,6 @@ import {
   requestStainForSample as requestStainForSampleDb,
   withdrawStainRequest as withdrawStainRequestDb,
   recordAuditEvent,
-  snapshotDb,
   updateProcessingBatchStart,
   revertSectionToStage,
   revertToStage,
@@ -59,21 +60,25 @@ import {
   sectionMoveRefusal,
   updateSlideStackStage,
 } from "../lib/db";
-import type { DbImage } from "../lib/db";
 import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../lib/types";
 import { sampleNoteLabel } from "../lib/sampleNotes";
 import type { SampleNoteField } from "../lib/sampleNotes";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { useUndoStore } from "../lib/undo";
+import { oldestMark, useUndoStore } from "../lib/undo";
+import { inLane } from "../lib/writeLane";
 import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 /**
  * Central mutation layer. Every action performs its DB write, invalidates the
- * relevant queries, and records a WHOLE-DATABASE snapshot for undo. Because the
- * DB is the single source of truth, undo/redo just swap the entire SQLite file
- * back or forward and let the queries refetch — there are no per-row restore
- * closures to drift out of sync (issue #31; undo/redo rework).
+ * relevant queries, and records an undo entry: the undo journal's mark from
+ * before its first write. Every change writes its own inverse into the journal
+ * (undoJournal.ts), so undo/redo replay the journal back to a mark and let the
+ * queries refetch. There are no per-row restore closures to drift out of sync
+ * (issue #31), and nothing copies the database file.
+ *
+ * Every action, undo and redo runs in the write lane (writeLane.ts), entered when
+ * it is called, so they take effect in the order the user asked for them.
  */
 export function useActions() {
   const qc = useQueryClient();
@@ -125,10 +130,13 @@ export function useActions() {
       // words: a viewer is told to use the workstation, an unsigned user is told
       // to sign in — which is the whole fix, and one click away.
       if (readOnly) throw new Error(readOnlyMessage(reason));
-      const before = await snapshotDb();
+      // The journal's head, not a copy of the database: the undo is written by
+      // the change itself (undoJournal.ts). Runs inside the caller's lane slot.
+      const before = await journalHead();
       const result = await fn();
       invalidate();
-      record({ label, snapshot: before });
+      record({ label, mark: before });
+      await pruneJournal(oldestMark());
       return result;
     },
     [invalidate, reason, record, readOnly],
@@ -503,7 +511,7 @@ export function useActions() {
    * A refusal is per-block, not per-batch: an exhausted block with no extras
    * left legitimately rejects a request (#70), and that must not abandon the
    * eleven blocks behind it in the loop. Failures are collected and returned so
-   * the caller can name them. Still ONE undo step — the snapshot is taken before
+   * the caller can name them. Still ONE undo step: the mark is taken before
    * the first write, so Ctrl+Z puts all of it back.
    */
   const requestStainForSamples = useCallback(
@@ -591,7 +599,7 @@ export function useActions() {
   /**
    * Move a whole selection onto another agent, or back to extras (#126).
    *
-   * ONE undo step for the lot — the snapshot is taken before the first write, so
+   * ONE undo step for the lot: the mark is taken before the first write, so
    * Ctrl+Z puts every slide back where it was rather than unpicking them one at
    * a time.
    *
@@ -669,7 +677,7 @@ export function useActions() {
   /**
    * Mark a whole selection of slides as imaged (#150).
    *
-   * ONE undo step for the lot, the snapshot taken before the first write. Slides the single-slide
+   * ONE undo step for the lot, the mark taken before the first write. Slides the single-slide
    * rule refuses are left untouched and come back in the result, so the caller can list them;
    * the rest are marked. When NOTHING could be marked the call throws, before it records an undo
    * step for a change that never happened.
@@ -872,11 +880,9 @@ export function useActions() {
     assertMayRestore();
     const { undoStack } = useUndoStore.getState();
     if (undoStack.length === 0) return null;
-    const label = undoStack[undoStack.length - 1].label;
-    const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitUndo({ label, snapshot: current });
-    if (!entry) return null;
-    await restoreDbPreservingSession(entry.snapshot as DbImage);
+    const entry = undoStack[undoStack.length - 1];
+    const replayed = await revertJournalRange(entry.mark, entry.end);
+    useUndoStore.getState().commitUndo({ label: entry.label, mark: replayed.from, end: replayed.to });
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
     return entry.label;
@@ -887,17 +893,15 @@ export function useActions() {
     assertMayRestore();
     const { redoStack } = useUndoStore.getState();
     if (redoStack.length === 0) return null;
-    const label = redoStack[redoStack.length - 1].label;
-    const current = await snapshotDb();
-    const entry = useUndoStore.getState().commitRedo({ label, snapshot: current });
-    if (!entry) return null;
-    await restoreDbPreservingSession(entry.snapshot as DbImage);
+    const entry = redoStack[redoStack.length - 1];
+    const replayed = await revertJournalRange(entry.mark, entry.end);
+    useUndoStore.getState().commitRedo({ label: entry.label, mark: replayed.from, end: replayed.to });
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
     return entry.label;
   }, [invalidate]);
 
-  return {
+  return laned({
     moveSamples,
     startProcessingBatch,
     planProcessingBatch,
@@ -946,5 +950,27 @@ export function useActions() {
     togglePriority,
     undo,
     redo,
-  } as const;
+  } as const);
+}
+
+/**
+ * Every action, undo and redo takes its place in the write lane at the moment it
+ * is CALLED (writeLane.ts), so the order is the order of the user's gestures. One
+ * wrapper per underlying function, kept, so an action's identity is as stable as
+ * the useCallback beneath it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyFn = (...args: any[]) => any;
+const lanedFns = new WeakMap<AnyFn, AnyFn>();
+function laned<T extends Record<string, AnyFn>>(actions: T): T {
+  const out: Record<string, AnyFn> = {};
+  for (const [name, fn] of Object.entries(actions)) {
+    let wrapped = lanedFns.get(fn);
+    if (!wrapped) {
+      wrapped = (...args: unknown[]) => inLane(async () => fn(...args));
+      lanedFns.set(fn, wrapped);
+    }
+    out[name] = wrapped;
+  }
+  return out as T;
 }

@@ -27,6 +27,9 @@ import {
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import { SAMPLE_NOTE_FIELDS } from "./sampleNotes";
+import { journalInstallStatements } from "./undoJournal";
+import { useUndoStore } from "./undo";
+import { inLane } from "./writeLane";
 import type { SampleNoteField } from "./sampleNotes";
 import {
   type AppSettings,
@@ -155,20 +158,35 @@ function guardWrites(db: Database): Database {
 }
 
 export function getDb(): Promise<Database> {
-  if (!dbPromise) {
-    dbPromise = Database.load(DB_URL)
-      .then(async (db) => {
-        await ensureRuntimeSchema(db);
-        await reconcileStainRequests(db);
-        await reconcileFulfilledRequests(db);
-        await splitContaminatedStainRacks(db);
-        await backfillSlideLetterMarks(db);
-        await retireDryingChecklistStep(db);
-        return db;
-      })
-      .then(guardWrites);
-  }
+  if (!dbPromise) dbPromise = openDb();
   return dbPromise;
+}
+
+function openDb(): Promise<Database> {
+  return Database.load(DB_URL)
+    .then(async (db) => {
+      await ensureRuntimeSchema(db);
+      await reconcileStainRequests(db);
+      await reconcileFulfilledRequests(db);
+      await splitContaminatedStainRacks(db);
+      await backfillSlideLetterMarks(db);
+      await retireDryingChecklistStep(db);
+      await installUndoJournal(db);
+      return db;
+    })
+    .then(guardWrites);
+}
+
+/**
+ * Journal every change to the lab record for undo (undoJournal.ts). Last, after
+ * the runtime schema and the one-time repairs, so the triggers cover every
+ * column this file now has and the repairs are not themselves undoable. The
+ * statements run in one transaction in Rust; on an unchanged file there are none.
+ */
+async function installUndoJournal(db: Database): Promise<void> {
+  const statements = await journalInstallStatements(db);
+  if (statements.length === 0) return;
+  await invoke("undo_journal_install", { path: await filePathOf(db), statements });
 }
 
 /**
@@ -497,7 +515,10 @@ async function ensureColumn(
  * to publish a snapshot; the viewer overwrites it when swapping one in.
  */
 export async function getDbFilePath(): Promise<string> {
-  const db = await getDb();
+  return filePathOf(await getDb());
+}
+
+async function filePathOf(db: Database): Promise<string> {
   const rows = await db.select<Array<{ file: string }>>(
     `SELECT file FROM pragma_database_list WHERE name = 'main'`,
   );
@@ -522,22 +543,30 @@ export async function resetDb(): Promise<void> {
   dbPromise = null;
 }
 
-// ---- Whole-database snapshots (undo/redo) -----------------------------------
+// ---- Whole-database images (backups, sync) ----------------------------------
 
 /**
- * A snapshot is the raw bytes of the entire SQLite database file — a complete,
- * point-in-time IMAGE of every table. Undo/redo simply swap one of these images
- * back in wholesale: there is nothing to keep in sync — no per-row dump, no
- * topological ordering, no trigger re-firing on restore, no exclude list to
- * drift. The database is the single source of truth and the UI is a pure
- * reflection of it (React Query refetches after a restore), so "undo" is exactly
- * "revert to a previous instance of the database" and nothing more.
+ * An image is the raw bytes of the entire SQLite database file: a complete,
+ * point-in-time copy of every table. A backup is one, and so is the snapshot the
+ * workstation publishes to its viewers. Undo does NOT use them: copying the file
+ * costs time in proportion to its size, which on a lab's database is seconds, and
+ * every undo race lived in that window. Undo uses the journal below instead.
  */
 export type DbImage = Uint8Array;
 
 /**
+ * Bytes as `read_file` delivers them: a raw IPC response arrives as an
+ * ArrayBuffer, where a `Vec<u8>` would arrive as a JSON array of numbers.
+ * `Uint8Array.from` on an ArrayBuffer is EMPTY, which would make an empty
+ * backup, so the shape is checked rather than assumed.
+ */
+export function bytesFromIpc(value: ArrayBuffer | ArrayLike<number>): Uint8Array {
+  return value instanceof ArrayBuffer ? new Uint8Array(value) : Uint8Array.from(value);
+}
+
+/**
  * Capture the current database as a byte image. We checkpoint the WAL into the
- * main file first so the on-disk image is complete — the -wal sidecar holding
+ * main file first so the on-disk image is complete: the -wal sidecar holding
  * un-checkpointed writes is exactly what made naive file copies lossy before.
  * Databases not in WAL mode simply no-op the checkpoint.
  */
@@ -549,30 +578,85 @@ export async function snapshotDb(): Promise<DbImage> {
     // Not in WAL mode (or checkpoint unsupported): the main file is already current.
   }
   const path = await getDbFilePath();
-  const bytes = await invoke<number[]>("read_file", { path });
-  return Uint8Array.from(bytes);
+  return bytesFromIpc(await invoke<ArrayBuffer | number[]>("read_file", { path }));
 }
 
 /**
  * Restore a database image: close the live connection, overwrite the SQLite file
- * with the snapshot bytes, then reopen against them. These are the exact
- * mechanics the sync viewer already uses to swap in a downloaded snapshot —
- * proven, WAL-safe (the closed connection has no dirty -wal), and atomic from
- * the app's point of view. Callers refetch afterwards.
+ * with the image, then reopen against it. WAL-safe (the closed connection has no
+ * dirty -wal). Callers refetch afterwards.
+ *
+ * The overwrite takes time, and while the file is closed, anything that asks for
+ * the database must wait for the NEW file rather than reopen the old one. Before
+ * this gate, a getDb() from anywhere in that window (a refetch, a persisted-undo
+ * snapshot) reopened the old file, restoreDb's own reopen handed that stale
+ * connection back, and the next write put the old state over the restored file:
+ * the restore was silently lost. So the memoized connection is replaced, before
+ * the old one closes, by one that opens only once the overwrite is done.
  *
  * The reopen does not run the numbered migrations, and the record of which ones
  * a file has had lives inside it, so an image goes live with whatever record it
- * brings. That is right for undo images, which this build took in this session.
- * Any other image (a backup, a snapshot pulled from the workstation) goes live
- * through {@link swapInImageFromElsewhere} instead, or the next launch re-runs
- * the migrations it lacks on top of the columns getDb() converged and cannot
- * open the database.
+ * brings. So an image from elsewhere (a backup, a snapshot pulled from the
+ * workstation) goes live only through {@link swapInImageFromElsewhere}, which
+ * migrates it first; otherwise the next launch re-runs the migrations it lacks on
+ * top of the columns getDb() converged and cannot open the database.
  */
 export async function restoreDb(image: DbImage): Promise<void> {
   const path = await getDbFilePath(); // resolve while the connection is still open
-  await resetDb(); // close + drop the pooled handle so the file is unlocked
-  await invoke("save_file", { path, contents: Array.from(image) });
+  const previous = dbPromise;
+  let overwritten!: () => void;
+  const gate = new Promise<void>((resolve) => (overwritten = resolve));
+  dbPromise = gate.then(openDb);
+  try {
+    try {
+      await (await previous)?.close();
+    } catch {
+      // Best-effort: even if close fails, the file is overwritten and reopened.
+    }
+    await invoke("save_file", { path, contents: Array.from(image) });
+  } finally {
+    overwritten(); // a failed overwrite reopens the file as it was
+  }
   await getDb(); // reopen eagerly so callers see a ready connection
+}
+
+// ---- Undo journal (see undoJournal.ts) --------------------------------------
+
+/**
+ * Where the undo journal ends now: an undo entry's mark, taken as its action
+ * begins. Its AUTOINCREMENT high-water mark, so every row the action writes lies
+ * after it even when pruning has emptied the journal.
+ */
+export async function journalHead(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<Array<{ head: number }>>(
+    `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0) AS head`,
+  );
+  return Number(rows[0]?.head ?? 0);
+}
+
+/**
+ * Replay one undo entry's range of the journal, `(from, to]` newest first (`to`
+ * absent: up to the head), which puts every journaled table back as it stood at
+ * `from`. Returns the range the replay itself wrote: the entry that reverses it.
+ *
+ * One transaction, in Rust (`undo_journal_revert`, src-tauri/src/undo_journal.rs):
+ * the replay is many statements, and statements sent through the plugin's pool
+ * cannot share a transaction, so a replay done here could be seen half done or
+ * be left half done. Session tables are not journaled, so the signed-in user and
+ * the settings are never rewound. Gated like every restore (#146).
+ */
+export async function revertJournalRange(from: number, to?: number): Promise<{ from: number; to: number }> {
+  assertMayRestore();
+  const path = await getDbFilePath();
+  const replayed = await invoke<{ from: number; to: number }>("undo_journal_revert", { path, from, to: to ?? null });
+  return { from: Number(replayed.from), to: Number(replayed.to) };
+}
+
+/** Forget journal rows no undo or redo entry can reach: those at or before the oldest mark kept. */
+export async function pruneJournal(oldestMark: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(`DELETE FROM undo_journal WHERE seq <= ?`, [oldestMark]);
 }
 
 /**
@@ -600,18 +684,27 @@ export class ImageRefusedError extends Error {
  * migrations on a copy of the image; one it cannot bring up to date throws
  * {@link ImageRefusedError}. Then `beforeSwap` runs, still before anything
  * changes (a revert takes its safety backup there, so a refused revert leaves
- * none behind). Then the migrated image goes live through {@link restoreDb},
- * keeping the signed-in session and settings when `keepSession` is set.
+ * none behind). Then Undo and Redo are cleared, and the migrated image goes
+ * live through {@link restoreDb}, keeping the signed-in session and settings
+ * when `keepSession` is set.
  */
-export async function swapInImageFromElsewhere(
+export function swapInImageFromElsewhere(
   image: DbImage,
   options: { keepSession: boolean; beforeSwap?: () => Promise<unknown> },
 ): Promise<void> {
-  if (options.keepSession) assertMayRestore();
-  const migrated = await bringImageUpToDate(image);
-  await options.beforeSwap?.();
-  if (options.keepSession) await restoreDbPreservingSession(migrated);
-  else await restoreDb(migrated);
+  // In the write lane (writeLane.ts), so the file is never swapped under an
+  // action or an undo that is still writing to it.
+  return inLane(async () => {
+    if (options.keepSession) assertMayRestore();
+    const migrated = await bringImageUpToDate(image);
+    await options.beforeSwap?.();
+    // The swapped-in file brings its own undo journal, so a mark taken from the
+    // old one would replay the wrong rows. Undo and Redo start again from here;
+    // the way back from a revert is the safety backup `beforeSwap` just took.
+    useUndoStore.getState().clear();
+    if (options.keepSession) await restoreDbPreservingSession(migrated);
+    else await restoreDb(migrated);
+  });
 }
 
 /**

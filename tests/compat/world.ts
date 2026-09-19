@@ -30,6 +30,12 @@ export interface AppProcess {
 
 export interface World {
   process: AppProcess | null;
+  /**
+   * Run by `save_file` after it is called and before it writes: the moment a
+   * restore has closed the database and not yet put the new file in place. A
+   * scenario uses it to act inside that window, deterministically.
+   */
+  beforeSaveFile?: () => Promise<void>;
   remote: {
     files: Map<string, { content: string; sha: string }>;
     assets: Map<string, number[]>;

@@ -33,15 +33,16 @@ which "deploy everywhere together" eliminates.
 
 ### 1a. Additive migrations + runtime convergence (backward compatibility)
 
-The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image restore).
-All three swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
+The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot).
+Both swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
+Undo/redo no longer swap files: they replay the undo journal inside the live database (`src/lib/undoJournal.ts`), which rides in the file as the `undo_journal` table and its triggers, created at runtime with no numbered migration.
+A swap therefore clears Undo and Redo: the swapped-in file brings its own journal, so a mark from the old one means nothing in it.
 
 The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
 `getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
 So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, goes live through one swap-in, `swapInImageFromElsewhere()` (`src/lib/db.ts`), so the two cannot drift apart.
 It first runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
 The image goes live fully migrated, with a record sqlx itself wrote.
-Undo images need none of this: this build took them, in this session, after its own migrations had run.
 
 An image that cannot be brought up to date is refused before anything changes, the live database and its connection included.
 That is one that is not a database or that the migrator cannot read, one made by a newer build, one whose record does not match this build's migrations, and one a migration fails on.

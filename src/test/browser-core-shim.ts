@@ -7,10 +7,13 @@
 // vite.config.playwright.ts. Real builds are untouched.
 //
 // read_file/save_file DO operate on the shared virtual filesystem (shim-fs) so
-// the real image-based undo/redo path — snapshotDb() reads the DB file bytes and
-// restoreDb() overwrites them — runs unmodified against a genuine "file".
+// the real image paths (backups and their revert, the sync publish and pull):
+// snapshotDb() reads the DB file bytes and restoreDb() overwrites them, run
+// unmodified against a genuine "file". The undo journal's two Rust commands are
+// modelled in undoJournalCommands.ts and run on the live sql.js database.
 import { readShimFile, writeShimFile } from "./shim-fs";
-import { migrateImageBytes } from "./browser-sql-shim";
+import { migrateImageBytes, SHIM_DB_FILE, withLiveDatabase } from "./browser-sql-shim";
+import { executeBatch, revertJournal } from "./undoJournalCommands";
 import { ImageRefused } from "./sqlx-migrator";
 
 // Backups live in the same virtual FS under a fixed prefix so the real
@@ -91,6 +94,19 @@ async function routeGithub<T>(cmd: string, a: Record<string, unknown> = {}): Pro
   }
 }
 
+// What moving the live database file across the IPC boundary costs in the real
+// app, where read_file/save_file carry it as a JSON integer array. A spec sets
+// window.__SNAPSHOT_IPC_MS__ to a measured figure (a 23 MB lab: ~1.7 s each
+// way); unset, the shim answers at once, which is what hid the undo races from
+// every spec that overlapped two saves. An array gives successive calls their
+// own costs (the last repeats), for two transfers that finish out of order.
+async function ipcCost(path: string): Promise<void> {
+  const w = globalThis as { __SNAPSHOT_IPC_MS__?: number | number[] };
+  const knob = w.__SNAPSHOT_IPC_MS__ ?? 0;
+  const ms = Array.isArray(knob) ? (knob.length > 1 ? knob.shift()! : knob[0] ?? 0) : knob;
+  if (ms > 0 && path === SHIM_DB_FILE) await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): Promise<T> {
   // Sync harness: real github_* against the shared fake remote.
   if (fakeNs() && cmd.startsWith("github_")) return routeGithub<T>(cmd, _args ?? {});
@@ -131,14 +147,27 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
 
     // Real file IO against the virtual filesystem — powers undo/redo snapshots.
     case "read_file": {
+      // The bytes are read NOW, as std::fs::read does at the start of the Rust
+      // command; only their delivery waits, as the JSON marshalling does.
       const bytes = readShimFile(String(_args?.path ?? ""));
-      return Array.from(bytes ?? new Uint8Array()) as unknown as T;
+      await ipcCost(String(_args?.path ?? ""));
+      // A raw IPC response, as lib.rs returns it: an ArrayBuffer, not a number array.
+      return (bytes ?? new Uint8Array()).slice().buffer as unknown as T;
     }
     case "save_file": {
       const contents = (_args?.contents as number[] | undefined) ?? [];
+      await ipcCost(String(_args?.path ?? ""));
       writeShimFile(String(_args?.path ?? ""), Uint8Array.from(contents));
       return undefined as unknown as T;
     }
+
+    // ---- Undo journal (undo_journal.rs), modelled in undoJournalCommands.ts ----
+    case "undo_journal_revert":
+      return withLiveDatabase((db) =>
+        revertJournal(db, Number(_args?.from ?? 0), (_args?.to as number | null | undefined) ?? null),
+      ) as unknown as T;
+    case "undo_journal_install":
+      return withLiveDatabase((db) => executeBatch(db, (_args?.statements as string[]) ?? [])) as unknown as T;
 
     // ---- Backups (backup.rs) against the virtual FS -----------------------
     case "backup_dir_path":

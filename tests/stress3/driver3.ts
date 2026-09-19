@@ -8,21 +8,21 @@ import { sql, type Finding } from "../stress2/driver";
  *
  *  · **A content fingerprint**, so "the database came back exactly as it was"
  *    is a decidable question rather than a spot-check of four columns. Undo
- *    restores a whole SQLite image; the only honest test of that is a whole-image
- *    comparison.
+ *    replays the undo journal back to a mark, which must restore every table;
+ *    the only honest test of that is a whole-database comparison.
  *  · **The real undo stack**, reached the way the app reaches it.
  */
 
 /**
  * Tables excluded from the fingerprint, and why each one has to be.
  *
- * `restoreDbPreservingSession` deliberately re-adds the current users and the
- * signed-in user after swapping the image, and `undo()` writes an audit row
- * AFTER the restore lands. Both are correct behaviour, so counting them would
- * make every undo look like a failure. Everything the workflow actually consists
- * of is still in scope.
+ * Undo never rewinds the session (users, app_settings) or bookkeeping
+ * (schema_meta), `undo()` writes an audit row AFTER the replay lands, and the
+ * replay itself is journaled in `undo_journal` (it is what redo replays). All
+ * correct behaviour, so counting them would make every undo look like a failure.
+ * Everything the workflow actually consists of is still in scope.
  */
-const NOT_RESTORED = new Set(["audit_events", "users", "app_settings", "schema_meta"]);
+const NOT_RESTORED = new Set(["audit_events", "users", "app_settings", "schema_meta", "undo_journal"]);
 
 /**
  * A stable serialisation of the whole workflow state.
@@ -85,23 +85,22 @@ export function fingerprintDiff(
  * The explorer drives `db.ts` directly, so nothing populates the undo stack for
  * it — the stack lives in React and only UI mutations fill it. These two lines
  * are the recording half of `commit()`, reproduced deliberately and named as
- * such: they are `snapshotDb()` plus `useUndoStore.record()`, the same functions
+ * such: they are `journalHead()` plus `useUndoStore.record()`, the same functions
  * from the same modules.
  *
- * What is NOT reproduced is the interesting half. Popping, the whole-image
- * restore, session preservation, query invalidation and the re-render are all
- * reached through the real toolbar button, so the machinery under test is the
- * app's own.
+ * What is NOT reproduced is the interesting half. Popping, the journal replay,
+ * the write lane, query invalidation and the re-render are all reached through
+ * the real toolbar button, so the machinery under test is the app's own.
  */
 export async function recordUndoPoint(page: Page, label: string): Promise<boolean> {
   return (await page.evaluate(async (text) => {
     try {
       const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
       const undo = (await import("/src/lib/undo.ts")) as unknown as {
-        useUndoStore: { getState: () => { record: (s: { label: string; snapshot: unknown }) => void } };
+        useUndoStore: { getState: () => { record: (s: { label: string; mark: number }) => void } };
       };
-      const snapshot = await db.snapshotDb();
-      undo.useUndoStore.getState().record({ label: text as string, snapshot });
+      const mark = (await db.journalHead()) as number;
+      undo.useUndoStore.getState().record({ label: text as string, mark });
       return true;
     } catch {
       return false;
@@ -125,7 +124,7 @@ export async function pressUndo(page: Page, which: "Undo" | "Redo"): Promise<boo
   if ((await button.count()) === 0) return false;
   if (await button.isDisabled().catch(() => true)) return false;
 
-  // The restore is asynchronous — snapshot, swap the image, invalidate, refetch.
+  // The undo is asynchronous: replay the journal, invalidate, refetch.
   // Waiting for the stack depth to actually move (rather than for a fixed delay)
   // means a slow restore is never mistaken for a lost click, and a click that
   // genuinely did nothing is never mistaken for a slow one.

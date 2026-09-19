@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
-import { ensureChecklist, setChecklistItemComplete, snapshotDb } from "../lib/db";
+import { ensureChecklist, journalHead, setChecklistItemComplete } from "../lib/db";
+import { inLane } from "../lib/writeLane";
 import { useActiveUser } from "../hooks/useData";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 import { useUndoStore } from "../lib/undo";
@@ -59,27 +60,30 @@ export function ProtocolChecklist({
     const item = items.find((candidate) => candidate.id === itemId);
     const scopeIds = [...new Set([scopeId, ...batchScopeIds])];
     try {
-      // Snapshot BEFORE the step so Undo peels back one protocol step (and the
-      // staining→imaging scatter it triggers) at a time, instead of jumping to
-      // the last board-level action (#56).
-      const before = await snapshotDb();
-      await setChecklistItemComplete(itemId, value, operator.trim());
-      if (item) {
-        for (const targetScopeId of scopeIds) {
-          if (targetScopeId === scopeId) continue;
-          const targetItems = await ensureChecklist({
-            scopeType,
-            scopeId: targetScopeId,
-            stageKey,
-            protocolName,
-            labels,
-          });
-          const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
-          if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+      // In the write lane like every other undoable action, and marked BEFORE the
+      // step so Undo peels back one protocol step (and the staining→imaging
+      // scatter it triggers) at a time, instead of jumping to the last
+      // board-level action (#56).
+      await inLane(async () => {
+        const before = await journalHead();
+        await setChecklistItemComplete(itemId, value, operator.trim());
+        if (item) {
+          for (const targetScopeId of scopeIds) {
+            if (targetScopeId === scopeId) continue;
+            const targetItems = await ensureChecklist({
+              scopeType,
+              scopeId: targetScopeId,
+              stageKey,
+              protocolName,
+              labels,
+            });
+            const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
+            if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+          }
+          if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
+          record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, mark: before });
         }
-        if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
-        record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, snapshot: before });
-      }
+      });
     } catch (err) {
       // Never fail silently: a step whose stage write throws (e.g. a DB opened
       // on an image missing a stage column) must surface, not look like a dead

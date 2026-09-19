@@ -14,15 +14,17 @@ import { checkViewsAgainstData } from "./views";
 /**
  * Undo and redo, taken seriously.
  *
- * Undo here is not a per-row inverse — it swaps the ENTIRE SQLite image back
- * (`src/lib/undo.ts`). That design is very hard to get subtly wrong and very easy
- * to get catastrophically wrong, so the test that fits it is a whole-image
- * comparison: fingerprint the database, make a move, press the real Undo button,
- * fingerprint again, and insist on byte-identical workflow state.
+ * Undo here is not a per-row closure: every change wrote its own inverse into
+ * the undo journal, and Undo replays the journal back to the action's mark
+ * (`src/lib/undoJournal.ts`), restoring every table at once. That design is very
+ * hard to get subtly wrong and very easy to get catastrophically wrong, so the
+ * test that fits it is a whole-database comparison: fingerprint the database,
+ * make a move, press the real Undo button, fingerprint again, and insist on
+ * identical workflow state.
  *
- * Four tables are excluded and each exclusion is deliberate — `driver3.ts`
- * explains why the session and the audit trail must survive a restore rather
- * than be rolled back with it.
+ * Five tables are excluded and each exclusion is deliberate: `driver3.ts`
+ * explains why the session, the audit trail and the journal itself are not
+ * rolled back with the rest.
  *
  * The button is the real one in the toolbar. Only the RECORDING half is
  * reproduced by the harness, because the explorer drives the data layer and
@@ -54,7 +56,7 @@ test("undo returns the database to exactly what it was, move after move", async 
       findings.push({
         where: "undo",
         severity: "defect",
-        detail: "snapshotDb() failed — the undo point could not be recorded at all",
+        detail: "journalHead() failed: the undo point could not be recorded at all",
         corroboration: "the call returned false rather than throwing into the page",
       });
       continue;
@@ -82,8 +84,8 @@ test("undo returns the database to exactly what it was, move after move", async 
         severity: "defect",
         detail: `undo did not restore the database: ${drift.map((d) => d.detail).join("; ")}`,
         corroboration:
-          "compared table-by-table against the pre-move image, excluding only the four " +
-          "tables a restore is documented to preserve rather than roll back",
+          "compared table-by-table against the pre-move state, excluding only the five " +
+          "tables an undo is documented to preserve rather than roll back",
       });
     }
 

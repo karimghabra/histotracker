@@ -1,53 +1,73 @@
 import { create } from "zustand";
 
 /**
- * A point-in-time snapshot of the ENTIRE database plus a human label for the
- * action that produced it. `snapshot` is an opaque payload (a raw SQLite file
- * image — see db.ts DbImage); the store only shuffles them between the undo/redo
- * stacks. Undo/redo swap one back in wholesale, so the UI just refetches — there
- * is no per-row restore that could drift out of sync.
+ * One undoable step: a human label for the action and the range of the undo
+ * journal its action wrote, `(mark, end]`. Undo replays that range (db.ts
+ * revertJournalRange), so the UI just refetches; the replay returns the range it
+ * wrote, which is the entry the other stack keeps.
+ *
+ * A freshly recorded action's range runs to the journal's head (`end` absent)
+ * until the next action is recorded, which closes it at the next one's mark. So
+ * an undo replays only its own entry's rows, never the rows every earlier undo in
+ * a row wrote back, which would double the journal with each undo.
  */
-export interface Snapshot {
+export interface UndoEntry {
   label: string;
-  snapshot: unknown;
+  mark: number;
+  end?: number;
 }
 
 interface UndoState {
-  undoStack: Snapshot[];
-  redoStack: Snapshot[];
-  /** Record the pre-mutation snapshot for a freshly-performed action; clears redo. */
-  record: (snap: Snapshot) => void;
-  /** Pop the newest undo entry and push the given (current) snapshot onto redo. */
-  commitUndo: (redoSnap: Snapshot) => Snapshot | undefined;
-  /** Pop the newest redo entry and push the given (current) snapshot onto undo. */
-  commitRedo: (undoSnap: Snapshot) => Snapshot | undefined;
+  undoStack: UndoEntry[];
+  redoStack: UndoEntry[];
+  /** Record a freshly-performed action, marked where it began; clears redo. */
+  record: (entry: UndoEntry) => void;
+  /** Pop the newest undo entry and push the given entry (the mark that redoes it) onto redo. */
+  commitUndo: (redoEntry: UndoEntry) => UndoEntry | undefined;
+  /** Pop the newest redo entry and push the given entry (the mark that undoes it) onto undo. */
+  commitRedo: (undoEntry: UndoEntry) => UndoEntry | undefined;
   clear: () => void;
 }
 
 const MAX = 100;
 
+/**
+ * The oldest undo-journal mark any entry on either stack still needs; journal rows
+ * at or before it can be forgotten. With nothing to undo or redo, nothing is needed.
+ */
+export function oldestMark(): number {
+  const { undoStack, redoStack } = useUndoStore.getState();
+  const marks = [...undoStack, ...redoStack].map((e) => e.mark);
+  return marks.length ? Math.min(...marks) : Number.MAX_SAFE_INTEGER;
+}
+
 export const useUndoStore = create<UndoState>((set, get) => ({
   undoStack: [],
   redoStack: [],
-  record: (snap) =>
-    set((s) => ({ undoStack: [...s.undoStack, snap].slice(-MAX), redoStack: [] })),
-  commitUndo: (redoSnap) => {
+  record: (entry) =>
+    set((s) => {
+      const closed = s.undoStack.map((e, i) =>
+        i === s.undoStack.length - 1 && e.end === undefined ? { ...e, end: entry.mark } : e,
+      );
+      return { undoStack: [...closed, entry].slice(-MAX), redoStack: [] };
+    }),
+  commitUndo: (redoEntry) => {
     const { undoStack, redoStack } = get();
     if (undoStack.length === 0) return undefined;
     const entry = undoStack[undoStack.length - 1];
     set({
       undoStack: undoStack.slice(0, -1),
-      redoStack: [...redoStack, redoSnap].slice(-MAX),
+      redoStack: [...redoStack, redoEntry].slice(-MAX),
     });
     return entry;
   },
-  commitRedo: (undoSnap) => {
+  commitRedo: (undoEntry) => {
     const { undoStack, redoStack } = get();
     if (redoStack.length === 0) return undefined;
     const entry = redoStack[redoStack.length - 1];
     set({
       redoStack: redoStack.slice(0, -1),
-      undoStack: [...undoStack, undoSnap].slice(-MAX),
+      undoStack: [...undoStack, undoEntry].slice(-MAX),
     });
     return entry;
   },
