@@ -258,8 +258,9 @@ export function SampleDetailsDrawer({
                   void withdrawStainRequest(sample.id, assayType, assayName)
           }
         />
-        {/* Read at the embedding station, so it sits above the cut notes — the
-            same order the block travels through the bench (#137). */}
+        {/* Headings and order come from `SAMPLE_NOTES` (src/lib/sampleNotes.ts),
+            so the drawer names the four notes exactly as intake and the Logs do
+            and reads them in bench order — embedding before the cut notes (#137). */}
         {SAMPLE_NOTES.map(({ field, label }) =>
           sample[field] ? (
             <Section key={field} title={label}>
