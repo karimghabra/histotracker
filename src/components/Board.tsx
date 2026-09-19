@@ -938,14 +938,19 @@ export function Board({
     } else {
       // Section cards live only in Needs Sectioning now. Their single forward
       // move is "mark sectioned" → Staining, which the data layer splits into
-      // stain racks + extras inventory (issues #34/#38). Dropping elsewhere is
-      // a no-op.
-      if (overId !== "staining") return;
+      // stain racks + extras inventory (issues #34/#38). A drop on Ready for
+      // Imaging is refused out loud (the group must be cut first) rather than
+      // ignored. Dropping elsewhere is a no-op.
+      if (overId !== "staining" && overId !== "analysis_pending") return;
       const ids = selectedSections.has(data.section.id)
         ? [...selectedSections]
         : [data.section.id];
       const selected = sections.filter((section) => ids.includes(section.id));
       if (selected.some((section) => SECTION_STAGE_TO_QUEUE[section.current_stage] !== "needs_sectioning")) {
+        return;
+      }
+      if (overId === "analysis_pending") {
+        onMoveSections(ids, "ready_for_imaging");
         return;
       }
       onMoveSections(ids, "stain_requested");

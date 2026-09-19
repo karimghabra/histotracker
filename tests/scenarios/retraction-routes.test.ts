@@ -35,6 +35,12 @@ async function queuedGroup(l: Lab, description: string, duplicates = 1): Promise
   return { block, group };
 }
 
+// Needs Sectioning to Ready for Imaging is refused (drag-to-imaging.test.ts), so worked glass is reached by way of Staining.
+async function sendToImaging(l: Lab, group: number): Promise<void> {
+  await l.db.updateSectionStage(group, "stain_requested");
+  await l.db.updateSectionStage(group, "ready_for_imaging");
+}
+
 const STAGES_AFTER_CUT = [
   "sectioned",
   "assignment_required",
@@ -50,7 +56,7 @@ const STAGES_AFTER_CUT = [
 ];
 
 describe("retracting a group to Needs Sectioning, from every stage it can reach", () => {
-  // The board lets a group be dragged to any stage from any stage (only Pictures Taken is gated).
+  // The board lets a group be dragged to any stage from any stage (Pictures Taken is gated, and Needs Sectioning straight to Ready for Imaging is refused).
   for (const stage of STAGES_AFTER_CUT) {
     it(`straight from Needs Sectioning to ${stage} and back`, async () => {
       lab = await openLab();
@@ -105,7 +111,7 @@ describe("retracting after the work was recorded on the glass, not the group", (
   it("a worked slide removed, its sibling still waiting to be retracted", async () => {
     lab = await openLab();
     const { group } = await queuedGroup(lab, "one removed", 2);
-    await lab.db.updateSectionStage(group, "ready_for_imaging");
+    await sendToImaging(lab, group);
     const [first] = lab.rows(`SELECT id FROM slides WHERE section_request_id = ? ORDER BY slide_ordinal`, [group]);
     await lab.db.removeSlide(Number(first.id), "broke at the bench");
     straight(lab, await attempt(() => lab!.db.revertSectionToStage(group, "needs_sectioning")));
@@ -115,7 +121,7 @@ describe("retracting after the work was recorded on the glass, not the group", (
     lab = await openLab();
     const { group } = await queuedGroup(lab, "source block");
     const other = await lab.sample("target block");
-    await lab.db.updateSectionStage(group, "ready_for_imaging");
+    await sendToImaging(lab, group);
     const slide = Number(lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [group])[0].id);
     await lab.db.relabelSlideToSample(slide, other, "labelled with the wrong block");
     const landed = Number(lab.rows(`SELECT section_request_id AS g FROM slides WHERE id = ?`, [slide])[0].g);
@@ -126,7 +132,7 @@ describe("retracting after the work was recorded on the glass, not the group", (
     lab = await openLab();
     const { group } = await queuedGroup(lab, "source block");
     const target = await queuedGroup(lab, "queued target block");
-    await lab.db.updateSectionStage(group, "ready_for_imaging");
+    await sendToImaging(lab, group);
     const slide = Number(lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [group])[0].id);
     await lab.db.relabelSlideToSample(slide, target.block, "labelled with the wrong block");
     const landed = Number(lab.rows(`SELECT section_request_id AS g FROM slides WHERE id = ?`, [slide])[0].g);
