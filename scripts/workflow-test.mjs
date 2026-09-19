@@ -389,7 +389,8 @@ function makeApi(db) {
     run(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
   }
   // Port of detachSampleFromRuns() — db.ts. A block being removed leaves every
-  // open run first, with an audit record; a run left empty is dissolved.
+  // open run first, with an audit record; a run left empty is dissolved when it
+  // was only PLANNED, and kept as 'cancelled' once it has actually run.
   function detachSampleFromRuns(sample) {
     for (const r of all(
       `SELECT pb.id, pb.status FROM processing_batch_members pbm
@@ -397,12 +398,16 @@ function makeApi(db) {
         WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready') ORDER BY pb.id`,
       [sample.id])) {
       run(`DELETE FROM processing_batch_members WHERE batch_id = ? AND sample_id = ?`, [r.id, sample.id]);
-      const dissolved = get(`SELECT COUNT(*) AS n FROM processing_batch_members WHERE batch_id = ?`, [r.id]).n === 0;
+      const emptied = get(`SELECT COUNT(*) AS n FROM processing_batch_members WHERE batch_id = ?`, [r.id]).n === 0;
+      const dissolved = emptied && r.status === 'planned';
+      const cancelled = emptied && !dissolved;
       if (dissolved) dissolveEmptyRun(r.id);
+      if (cancelled) run(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [r.id]);
       run(`INSERT INTO audit_events (action, entity_type, entity_id, sample_id, summary, details)
            VALUES ('update', 'processing_batch', ?, ?, ?, ?)`,
           [r.id, sample.id, `Removed ${sample.code} from processing batch ${r.id} (block deleted)`,
-           JSON.stringify({ batch_id: r.id, batch_status: r.status, sample_id: sample.id, run_dissolved: dissolved })]);
+           JSON.stringify({ batch_id: r.id, batch_status: r.status, sample_id: sample.id,
+                           run_dissolved: dissolved, run_cancelled: cancelled })]);
     }
   }
 
@@ -2101,7 +2106,13 @@ issue(159, "removing a sample twice records once, and a block in a run leaves it
   const loneBatch = api.planProcessingBatch({ sampleIds: [lone.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
   api.removeSamples([lone.id], "wrong block");
   eq(api.all(`SELECT id FROM processing_batches WHERE id = ?`, [loneBatch]).length, 0,
-     "a run left empty is dissolved, as emptying it from its drawer does (#135)");
+     "a PLANNED run left empty is dissolved, as emptying it from its drawer does (#135)");
+
+  const onlyRunning = api.addSample(p, "EE", "the only block in a run"); api.completePreprocessing(onlyRunning.id);
+  const ranBatch = api.startProcessingBatch({ sampleIds: [onlyRunning.id], processingType: "Short", startedAt: "2026-08-01 08:00" });
+  api.removeSamples([onlyRunning.id], "wrong block");
+  eq(api.get(`SELECT status FROM processing_batches WHERE id = ?`, [ranBatch])?.status, "cancelled",
+     "a run that RAN keeps its record when its last block is deleted, cancelled rather than erased (#83)");
 });
 
 // #106 — "modifications to project acronym in management tab do not apply to

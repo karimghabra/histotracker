@@ -5525,9 +5525,15 @@ export async function removeSamples(
  * The block's own stage is left alone, since it is about to be 'removed', and
  * so are its timestamps. Each detachment is written to the audit trail with the
  * run and the block, because the run's membership is otherwise a row that
- * simply stops existing. A run left with no members follows the rule emptying
- * it from its drawer already has (#135): it is dissolved, and the audit record
- * says so.
+ * simply stops existing.
+ *
+ * A run left with no members splits on whether it ever ran, the same line #83
+ * draws. A PLANNED run is a plan withdrawn — nothing was cut, nothing was
+ * processed — so it is dissolved exactly as emptying it from its drawer does
+ * (#135). A run that is PROCESSING or READY physically happened: its batch row,
+ * its protocol checklist and the completed items stamped with the operator are
+ * the evidence that it did, so they stay and the run is marked 'cancelled'
+ * instead. Either way the audit record says which.
  */
 async function detachSampleFromRuns(sample: { id: number; sample_code: string }): Promise<void> {
   const db = await getDb();
@@ -5548,8 +5554,13 @@ async function detachSampleFromRuns(sample: { id: number; sample_code: string })
       `SELECT COUNT(*) AS n FROM processing_batch_members WHERE batch_id = ?`,
       [run.id],
     );
-    const dissolved = (left[0]?.n ?? 0) === 0;
+    const emptied = (left[0]?.n ?? 0) === 0;
+    const dissolved = emptied && run.status === "planned";
+    const cancelled = emptied && !dissolved;
     if (dissolved) await dissolveEmptyRun(run.id);
+    if (cancelled) {
+      await db.execute(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [run.id]);
+    }
     await db.execute(
       `INSERT INTO audit_events (user_id, action, entity_type, entity_id, sample_id, summary, details)
        VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
@@ -5558,13 +5569,15 @@ async function detachSampleFromRuns(sample: { id: number; sample_code: string })
         run.id,
         sample.id,
         `Removed ${displayCode(sample.sample_code)} from processing batch ${run.id} (block deleted)` +
-          (dissolved ? "; the run had no members left and was dissolved" : ""),
+          (dissolved ? "; the run had no members left and was dissolved" : "") +
+          (cancelled ? "; the run had no members left and was cancelled, its record kept" : ""),
         JSON.stringify({
           batch_id: run.id,
           batch_status: run.status,
           sample_id: sample.id,
           sample_code: sample.sample_code,
           run_dissolved: dissolved,
+          run_cancelled: cancelled,
         }),
       ],
     );

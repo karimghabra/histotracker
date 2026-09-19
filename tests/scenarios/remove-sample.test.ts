@@ -181,7 +181,7 @@ describe("a deleted block leaves its processing run", () => {
     expect(listed.some((e) => e.summary.includes(`processing batch ${batch}`)), "the Manifest shows it").toBe(true);
   });
 
-  it("dissolves a run left with no members, as emptying it from its drawer does, and says so in the audit record", async () => {
+  it("dissolves a PLANNED run left with no members, as emptying it from its drawer does, and says so in the audit record", async () => {
     lab = await openLab();
     const only = await lab.sample("the only block", "in_ethanol");
     const batch = await planRun(lab, [only]);
@@ -195,6 +195,52 @@ describe("a deleted block leaves its processing run", () => {
     expect(JSON.parse(detachEvents(lab, only)[0].details).run_dissolved).toBe(true);
   });
 
+  // #83/#148: a run that RAN is the evidence that it ran. Emptying it of its last block
+  // cancels it; the batch row, its protocol checklist and the items ticked off on the
+  // machine all stay, because nothing here un-processed the tissue.
+  it("keeps a RUNNING run's record when its last block is deleted, cancelling it instead of erasing it", async () => {
+    lab = await openLab();
+    const only = await lab.sample("the only block in a run", "in_ethanol");
+    const batch = await startRun(lab, [only]);
+    const runsBefore = lab.rows(`SELECT id FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batch]);
+    expect(runsBefore).toHaveLength(1);
+
+    await lab.db.removeSamples([only], "wrong block");
+
+    const batchRow = lab.rows(`SELECT status, operator_name, started_at FROM processing_batches WHERE id = ?`, [batch]);
+    expect(batchRow, "the run that happened keeps its record").toHaveLength(1);
+    expect(batchRow[0].status).toBe("cancelled");
+    expect(batchRow[0].operator_name).toBe("Tech");
+    expect(members(lab, batch)).toEqual([]);
+    expect(
+      lab.rows(`SELECT id FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batch]),
+      "its protocol checklist survives",
+    ).toEqual(runsBefore);
+    expect(
+      lab.rows(`SELECT label, is_complete, completed_by FROM checklist_items WHERE checklist_run_id = ?`, [runsBefore[0].id]),
+      "and so do the steps ticked off on the machine, with who ticked them",
+    ).toEqual([{ label: "Loaded", is_complete: 1, completed_by: "Tech" }]);
+    expect(stageOf(lab, only)).toBe("removed");
+    const details = JSON.parse(detachEvents(lab, only)[0].details);
+    expect(details.run_dissolved).toBe(false);
+    expect(details.run_cancelled).toBe(true);
+  });
+
+  // A cancelled run is out of the lifecycle: the overnight timer must not walk it on.
+  it("leaves a cancelled run alone when the timed advance runs", async () => {
+    lab = await openLab();
+    const only = await lab.sample("the only block in a run", "in_ethanol");
+    const other = await lab.sample("another lab's block", "in_ethanol");
+    const batch = await startRun(lab, [only], "2020-01-01 08:00");
+    const live = await startRun(lab, [other], "2020-01-01 08:00");
+
+    await lab.db.removeSamples([only], "wrong block");
+    await lab.db.autoAdvanceProcessingRuns();
+
+    expect(lab.rows(`SELECT status FROM processing_batches WHERE id = ?`, [batch])[0].status).toBe("cancelled");
+    expect(lab.rows(`SELECT status FROM processing_batches WHERE id = ?`, [live])[0].status).toBe("ready");
+  });
+
   it("takes every block of one Logs removal out of its run, whichever runs they were in", async () => {
     lab = await openLab();
     const a = await lab.sample("run one", "in_ethanol");
@@ -206,7 +252,11 @@ describe("a deleted block leaves its processing run", () => {
     await lab.db.removeSamples([a, b], "cleanup");
 
     expect(members(lab, one)).toEqual([keep]);
-    expect(lab.rows(`SELECT id FROM processing_batches WHERE id = ?`, [two])).toHaveLength(0);
+    expect(members(lab, two)).toEqual([]);
+    expect(
+      lab.rows(`SELECT status FROM processing_batches WHERE id = ?`, [two])[0].status,
+      "the run that had started keeps its record, cancelled",
+    ).toBe("cancelled");
     expect(stageOf(lab, a)).toBe("removed");
     expect(stageOf(lab, b)).toBe("removed");
   });
