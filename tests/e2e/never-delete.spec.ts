@@ -308,3 +308,57 @@ test("#159: a sample is removed from the Logs, stays under Show removed, and Und
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await expect(page.getByText("EE-1", { exact: true }).first()).toBeVisible();
 });
+
+// A block deleted while it is in a processing run leaves the run (the captain's ruling).
+// Advancing the run used to write every member's stage over 'removed', so a deleted block
+// came back as Needs Embedding; the Logs' Remove refused such a block instead.
+test("a block removed while it is in a running processor run leaves it, and does not come back when the run advances", async ({ page }) => {
+  await signInAndProject(page);
+  await addSample(page, "deleted in a run");
+  await addSample(page, "stays in the run");
+  for (const code of ["EE-1", "EE-2"]) {
+    await page.getByText(code, { exact: true }).first().click();
+    await page.getByRole("button", { name: "Placed in fixative" }).click();
+    await page.getByRole("button", { name: "Removed from fixative" }).click();
+    await page.getByRole("button", { name: "Placed in ethanol" }).click();
+    await page.locator("button:has(svg.lucide-x)").first().click();
+  }
+
+  // One run holding both: start it with EE-1, then add EE-2 to the run under way.
+  await dragOnto(page, "EE-1", "Processor");
+  await expect(async () => {
+    const btn = page.getByRole("button", { name: "Start Batch" });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    await expect(page.getByText("Batch 1", { exact: true })).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 25000 });
+  await page.getByText("Batch 1", { exact: true }).click();
+  const runDrawer = page.locator("aside").filter({ hasText: "Processing Batch 1" });
+  await runDrawer.getByRole("button", { name: "Add", exact: true }).click();
+  await runDrawer.getByRole("button", { name: "EE-2 stays in the run", exact: true }).click();
+  await expect(runDrawer.getByText("EE-2", { exact: true })).toBeVisible({ timeout: 15000 });
+
+  // A block inside a run has no card of its own on the board, so the Logs are where it is deleted.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await page.getByRole("button", { name: "Remove EE-1" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove this sample" });
+  await dialog.getByLabel("Reason for removal").fill("wrong block");
+  await dialog.getByRole("button", { name: "Remove sample" }).click();
+  await expect(page.getByText("Block removed")).toBeVisible({ timeout: 15000 });
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+
+  // Advance the run. EE-2 moves on with it; EE-1 must not reappear.
+  await dragOnto(page, "Batch 1", "Needs Embedding");
+  const needsEmbedding = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Needs Embedding", exact: true }) });
+  await expect(needsEmbedding.getByText("EE-2", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("EE-1", { exact: true })).toHaveCount(0);
+
+  // Still removed in the Logs.
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await expect(page.getByText("Block removed")).toBeVisible();
+});

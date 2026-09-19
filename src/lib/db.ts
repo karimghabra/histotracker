@@ -1842,6 +1842,31 @@ export async function getBatchMemberIds(batchId: number): Promise<number[]> {
 }
 
 /**
+ * Delete a run that has no members left, its checklist and all (#135).
+ * Same order as startProcessingBatch's abort unwind: children before parent,
+ * and members explicitly rather than relying on ON DELETE CASCADE, which
+ * needs `PRAGMA foreign_keys` to be on. Shared by emptying a run from its
+ * drawer and by deleting the last block a run held, so the two agree.
+ */
+async function dissolveEmptyRun(batchId: number): Promise<void> {
+  const db = await getDb();
+  await db.execute(
+    `DELETE FROM checklist_items
+      WHERE checklist_run_id IN (
+        SELECT id FROM checklist_runs
+         WHERE scope_type = 'processing_batch' AND scope_id = ?
+      )`,
+    [batchId],
+  );
+  await db.execute(
+    `DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
+    [batchId],
+  );
+  await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+  await db.execute(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
+}
+
+/**
  * Replace a run's member samples (issues #32, #91).
  *
  * Both PLANNED and RUNNING batches are editable. Forgetting a sample, or not
@@ -1913,23 +1938,7 @@ export async function updateBatchMembers(
       );
       return;
     }
-    // Same order as startProcessingBatch's abort unwind: children before parent,
-    // and members explicitly rather than relying on ON DELETE CASCADE, which
-    // needs `PRAGMA foreign_keys` to be on.
-    await db.execute(
-      `DELETE FROM checklist_items
-        WHERE checklist_run_id IN (
-          SELECT id FROM checklist_runs
-           WHERE scope_type = 'processing_batch' AND scope_id = ?
-        )`,
-      [batchId],
-    );
-    await db.execute(
-      `DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`,
-      [batchId],
-    );
-    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
-    await db.execute(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
+    await dissolveEmptyRun(batchId);
     return;
   }
 
@@ -5466,21 +5475,18 @@ export async function removeSample(id: number, reason: string): Promise<void> {
 /**
  * Remove samples from the board and the Logs' working set (#96, #159).
  *
- * Two rules on top of the soft removal, both checked before anything is written
- * so a refusal leaves every sample untouched:
+ * Two rules on top of the soft removal:
  *   - a sample already removed is skipped, so a double click or a stale Logs row
  *     writes no second `sample_removed` event for one removal;
- *   - with `refuseInProcessingRun` (the Logs' Remove), a sample still committed to
- *     a processing run (planned, running or ready to collect) is REFUSED. Moving
- *     that run on updates its members' stage without looking at what they are, so
- *     a removed block would come back to life as Pickup or Needs Embedding. The
- *     board's Delete does not pass it and removes such a block as it always has.
+ *   - a sample still committed to a processing run (planned, running or ready to
+ *     collect) is taken out of that run as it is removed. Moving a run on updates
+ *     its members' stage without looking at what they are, so a removed block that
+ *     stayed a member would come back to life as Pickup or Needs Embedding.
  * Slides are removed at any stage, exactly as `removeSlide` always has.
  */
 export async function removeSamples(
   ids: number[],
   reason: string,
-  { refuseInProcessingRun = false }: { refuseInProcessingRun?: boolean } = {},
 ): Promise<void> {
   if (ids.length === 0) return;
   const db = await getDb();
@@ -5490,8 +5496,8 @@ export async function removeSamples(
     ids,
   );
   if (live.length === 0) return;
-  if (refuseInProcessingRun) await refuseSamplesInProcessingRun(live.map((row) => row.id));
   for (const sample of live) {
+    await detachSampleFromRuns(sample);
     const groups = await db.select<Array<{ id: number }>>(
       `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
       [sample.id],
@@ -5513,25 +5519,54 @@ export async function removeSamples(
   }
 }
 
-async function refuseSamplesInProcessingRun(ids: number[]): Promise<void> {
+/**
+ * Take a block out of every open run it is a member of, as it is removed.
+ *
+ * The block's own stage is left alone, since it is about to be 'removed', and
+ * so are its timestamps. Each detachment is written to the audit trail with the
+ * run and the block, because the run's membership is otherwise a row that
+ * simply stops existing. A run left with no members follows the rule emptying
+ * it from its drawer already has (#135): it is dissolved, and the audit record
+ * says so.
+ */
+async function detachSampleFromRuns(sample: { id: number; sample_code: string }): Promise<void> {
   const db = await getDb();
-  const marks = ids.map(() => "?").join(", ");
-  const committed = await db.select<Array<{ sample_code: string }>>(
-    `SELECT DISTINCT s.sample_code
+  const runs = await db.select<Array<{ id: number; status: string }>>(
+    `SELECT pb.id, pb.status
        FROM processing_batch_members pbm
        JOIN processing_batches pb ON pb.id = pbm.batch_id
-       JOIN samples s ON s.id = pbm.sample_id
-      WHERE pbm.sample_id IN (${marks})
-        AND pb.status IN ('planned', 'processing', 'ready')
-      ORDER BY s.sample_code`,
-    ids,
+      WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready')
+      ORDER BY pb.id`,
+    [sample.id],
   );
-  if (committed.length > 0) {
-    const codes = committed.map((row) => displayCode(row.sample_code)).join(", ");
-    throw new Error(
-      `${codes} ${committed.length === 1 ? "is" : "are"} still in a processing run - ` +
-        `take ${committed.length === 1 ? "it" : "them"} out of the run, or finish the run, ` +
-        `before removing the sample.`,
+  for (const run of runs) {
+    await db.execute(`DELETE FROM processing_batch_members WHERE batch_id = ? AND sample_id = ?`, [
+      run.id,
+      sample.id,
+    ]);
+    const left = await db.select<Array<{ n: number }>>(
+      `SELECT COUNT(*) AS n FROM processing_batch_members WHERE batch_id = ?`,
+      [run.id],
+    );
+    const dissolved = (left[0]?.n ?? 0) === 0;
+    if (dissolved) await dissolveEmptyRun(run.id);
+    await db.execute(
+      `INSERT INTO audit_events (user_id, action, entity_type, entity_id, sample_id, summary, details)
+       VALUES (CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'update', 'processing_batch', ?, ?, ?, ?)`,
+      [
+        run.id,
+        sample.id,
+        `Removed ${displayCode(sample.sample_code)} from processing batch ${run.id} (block deleted)` +
+          (dissolved ? "; the run had no members left and was dissolved" : ""),
+        JSON.stringify({
+          batch_id: run.id,
+          batch_status: run.status,
+          sample_id: sample.id,
+          sample_code: sample.sample_code,
+          run_dissolved: dissolved,
+        }),
+      ],
     );
   }
 }
