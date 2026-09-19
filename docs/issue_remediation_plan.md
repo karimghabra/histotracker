@@ -44,6 +44,15 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #150 — mark many slides imaged at once
+
+- **#150 · ✅ fixed.**
+  At imaging, the rack drawer's slide selection (the tick list that moves, splits and removes) has **Mark N slides imaged**.
+  `markSlidesImaged` in `db.ts` loops over `setSlidePicturesTaken`, so each slide gets its own stamp, audit record and group-state derivation, and every single-slide refusal applies to each.
+  A refused slide stays ticked and is listed with its reason while the rest are marked; a slide already imaged is skipped, not re-stamped; signed out refuses the whole action.
+  One undo step covers the lot.
+  *Test:* `tests/scenarios/mass-imaging.test.ts` on the real `db.ts`, and `tests/e2e/mass-imaging.spec.ts`.
+
 ## #159 — remove a whole sample from the Logs
 
 - **#159 · ✅ fixed.**
