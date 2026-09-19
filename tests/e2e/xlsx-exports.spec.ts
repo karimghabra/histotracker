@@ -147,6 +147,7 @@ test("the Excel workbook export writes every sheet with real rows", async ({ pag
   expect(projects.slice(1).some((r) => r.includes("EE"))).toBe(true);
   const samples = sheets.get("Samples") as string[][];
   const sampleHeader = samples[0];
+  expect(sampleHeader).toContain("Sectioning / Cut Notes");
   const row = samples.slice(1).find((r) => r[sampleHeader.indexOf("Sample ID")] === "EE-1");
   expect(row, "the sample just created is missing from the Samples sheet").toBeDefined();
   expect(row?.[sampleHeader.indexOf("Description")]).toBe("workbook block");

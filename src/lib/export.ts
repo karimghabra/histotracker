@@ -40,7 +40,7 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
     ],
   ),
   ["Embedding Notes", (s) => s.embedding_notes ?? ""],
-  ["Cut Notes", (s) => s.cut_notes],
+  ["Sectioning / Cut Notes", (s) => s.cut_notes],
   ["Slide Notes", (s) => s.slide_notes],
   ["Stains / IHC", (s) => s.stains],
   ["General Notes", (s) => s.overall_notes],
