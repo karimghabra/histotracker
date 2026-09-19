@@ -121,7 +121,12 @@ export default defineConfig({
     include: ["sql.js"],
   },
   server: {
-    port: 5599,
+    // 5599 unless HISTOMETER_PORT says otherwise, which is also what the
+    // Playwright configs read, so one variable gives a whole run a port of its
+    // own. Unset, nothing changes. strictPort stays on: a run that silently
+    // moved to another port would leave the suite talking to somebody else's
+    // dev server.
+    port: Number(process.env.HISTOMETER_PORT ?? 5599),
     strictPort: true,
     watch: {
       // Never watch the Rust build tree. It holds locked .exe files that

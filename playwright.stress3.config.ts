@@ -30,7 +30,8 @@ import { launchOptions } from "./playwright.config";
  *
  * Run:  pnpm exec playwright test --config playwright.stress3.config.ts
  */
-const PORT = 5599;
+// A port of this run's own when HISTOMETER_PORT is set (playwright.config.ts).
+const PORT = Number(process.env.HISTOMETER_PORT ?? 5599);
 
 export default defineConfig({
   testDir: "./tests/stress3",
