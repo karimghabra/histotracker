@@ -130,7 +130,10 @@ Cut, Slide and General) read as plain text, however long they run, and are
 box, correct it, click away to save it, `Ctrl+Z` to take it back. A note nobody
 wrote at intake shows nothing under its heading but that pencil, so you can
 write it later. A read-only viewer reads the notes a block carries and has no
-pencil to open them with.
+pencil to open them with. The CSV and Excel exports of this view carry all four,
+each column named as the note is labelled here, beside each slide's own note in
+**This Slide's Notes** — so a correction made here is in the next file you
+export.
 
 Beside **Archive** in the expanded row, **Remove** takes a whole sample out of
 play, with a reason; its slides go with it. Nothing is deleted: the sample stays
