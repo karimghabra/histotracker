@@ -655,16 +655,23 @@ export default function App() {
       batch={selectedBatch}
       samples={samples.filter((sample) => selectedBatch.member_ids.includes(sample.id))}
       candidates={batchCandidates}
-      onEditMembers={(batchId, sampleIds) =>
+      onEditMembers={(batchId, sampleIds) => {
+        // Say it out loud when the last sample leaves (#135): the drawer closes
+        // under you, which without a word reads as the app having lost the
+        // batch. What it says depends on what happened (#148) — a planned run is
+        // withdrawn and gone, a started one is cancelled and kept.
+        const wasRunning = selectedBatch.status === "processing";
         void editBatchMembers(batchId, sampleIds)
-          // Say it out loud when the last sample leaves (#135): the run is
-          // removed and the drawer closes under you, which without a word reads
-          // as the app having lost the batch.
           .then(() => {
-            if (sampleIds.length === 0) flash("Processing run removed — it had no samples left");
+            if (sampleIds.length === 0)
+              flash(
+                wasRunning
+                  ? "Processing run cancelled - it had no samples left; its record is kept"
+                  : "Processing run removed — it had no samples left",
+              );
           })
-          .catch((error) => flash(String(error)))
-      }
+          .catch((error) => flash(String(error)));
+      }}
       onMove={moveBatchWithConfirmation}
       onEditStart={(batchId, startedAt) =>
         void editBatchStart(batchId, startedAt).catch((error) => flash(String(error)))

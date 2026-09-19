@@ -251,7 +251,19 @@ test("#135, #148: taking the last sample out of a started run cancels it and kee
   // remove button, so a run of one was a dead end.
   const remove = drawer.getByRole("button", { name: "Remove EE-1 from this run" });
   await expect(remove).toBeVisible();
+  // What it says before the click has to match what the click does (#148): the
+  // run happened, so it is cancelled and kept, not removed.
+  await expect(remove).toHaveAttribute(
+    "title",
+    "Take EE-1 out - this cancels the run and keeps its record",
+  );
   await remove.click();
+
+  // And what it says after, since the drawer closes under you and the message
+  // is the only word the technician gets.
+  await expect(
+    page.getByText("Processing run cancelled - it had no samples left; its record is kept"),
+  ).toBeVisible({ timeout: 15_000 });
 
   // The run is gone from the board, and the block is back where it waits.
   await expect(page.getByText("Batch 1", { exact: true })).toHaveCount(0, { timeout: 15_000 });
