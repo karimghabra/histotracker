@@ -329,9 +329,6 @@ export function useActions() {
     [commit],
   );
 
-  // removeSample/removeSamples are GONE (#83) — see the note where
-  // deleteSample() used to live in db.ts. Use setArchived/setArchivedSamples.
-
   /**
    * Create N samples as ONE undo entry. `descriptions[i]` overrides the shared
    * description for sample i; a blank or missing entry keeps the shared one
@@ -818,14 +815,16 @@ export function useActions() {
     [commit],
   );
 
-  // #96 — the board's own removal. Distinct from archiving: archiving hides a
-  // block you still expect to want, this records one that should not be on the
-  // board at all, with the reason. Nothing is deleted either way.
+  // #96 — the board's own removal, and since #159 the Logs' too. Distinct from
+  // archiving: archiving hides a block you still expect to want, this records
+  // one that should not be on the board at all, with the reason. Nothing is
+  // deleted either way. The Logs ask for a block still in a processing run to be
+  // refused, and have to show that message.
   const removeSamples = useCallback(
-    (sampleIds: number[], reason: string) =>
+    (sampleIds: number[], reason: string, options?: { refuseInProcessingRun?: boolean }) =>
       commit(
         sampleIds.length === 1 ? "Remove sample" : `Remove ${sampleIds.length} samples`,
-        () => removeSamplesDb(sampleIds, reason),
+        () => removeSamplesDb(sampleIds, reason, options),
       ),
     [commit],
   );

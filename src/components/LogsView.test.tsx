@@ -483,3 +483,91 @@ describe("LogsView — which blocks are listed", () => {
     expect(has("EE-3")).toBe(false);
   });
 });
+
+// #159 — a whole sample can be removed from the Logs, with a button beside Archive.
+describe("LogsView — removing a sample", () => {
+  const openRow = async (code: string) => userEvent.click(screen.getByText(code));
+
+  it("puts Remove beside Archive, asks for a reason, and removes the sample with it", async () => {
+    const target = sample({ sample_code: "EE-0001" });
+    data.samples = [target];
+    render(<LogsView />);
+    await openRow("EE-1");
+
+    const archive = screen.getByRole("button", { name: "Archive EE-1" });
+    const remove = screen.getByRole("button", { name: "Remove EE-1" });
+    expect(remove.parentElement).toBe(archive.parentElement);
+    expect(remove.compareDocumentPosition(archive) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+
+    await userEvent.click(remove);
+    const dialog = screen.getByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Remove sample" });
+    expect(confirm, "a reason is required before anything is removed").toBeDisabled();
+    expect(data.calls.some(([name]) => name === "removeSamples")).toBe(false);
+
+    await userEvent.type(within(dialog).getByLabelText("Reason for removal"), "wrong animal");
+    await userEvent.click(confirm);
+    expect(data.calls.filter(([name]) => name === "removeSamples")).toEqual([
+      ["removeSamples", [target.id], "wrong animal", { refuseInProcessingRun: true }],
+    ]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("removes nothing when the dialog is cancelled", async () => {
+    data.samples = [sample({ sample_code: "EE-0001" })];
+    render(<LogsView />);
+    await openRow("EE-1");
+    await userEvent.click(screen.getByRole("button", { name: "Remove EE-1" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(data.calls.some(([name]) => name === "removeSamples")).toBe(false);
+  });
+
+  it("offers no Remove for a sample that is already removed", async () => {
+    data.samples = [sample({ sample_code: "EE-0001", current_stage: "removed" })];
+    render(<LogsView />);
+    await openRow("EE-1");
+    expect(screen.getByRole("button", { name: "Archive EE-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove EE-1" })).toBeNull();
+  });
+
+  it("offers no Remove when nobody is signed in, or on a viewer", async () => {
+    data.samples = [sample({ sample_code: "EE-0001" })];
+    for (const reason of ["signed-out", "viewer"] as const) {
+      const { unmount } = render(
+        <ReadOnlyProvider value={{ readOnly: true, reason }}>
+          <LogsView />
+        </ReadOnlyProvider>,
+      );
+      await openRow("EE-1");
+      expect(screen.queryByRole("button", { name: "Remove EE-1" }), reason).toBeNull();
+      unmount();
+    }
+  });
+
+  it("says so when the removal is refused, and keeps the sample listed", async () => {
+    data.samples = [sample({ sample_code: "EE-0001" })];
+    data.failure = new Error("EE-1 is still in a processing run - take it out of the run first.");
+    render(<LogsView />);
+    await openRow("EE-1");
+    await userEvent.click(screen.getByRole("button", { name: "Remove EE-1" }));
+    await userEvent.type(within(screen.getByRole("dialog")).getByLabelText("Reason for removal"), "cleanup");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove sample" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("still in a processing run");
+    expect(screen.getByText("EE-1")).toBeInTheDocument();
+
+    await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("lists a removed sample under Show removed and hides it without", async () => {
+    data.samples = [sample({ sample_code: "EE-0001" }), sample({ sample_code: "EE-0002", current_stage: "removed" })];
+    render(<LogsView />);
+    expect(screen.queryByText("EE-2")).not.toBeNull();
+    await userEvent.click(screen.getByLabelText("Show removed"));
+    expect(screen.queryByText("EE-2")).toBeNull();
+    expect(screen.queryByText("EE-1")).not.toBeNull();
+    await userEvent.click(screen.getByLabelText("Show removed"));
+    expect(screen.queryByText("EE-2")).not.toBeNull();
+  });
+});

@@ -792,22 +792,38 @@ function makeApi(db) {
     }
     run(`UPDATE section_requests SET current_stage = 'removed' WHERE id = ?`, [sectionId]);
   }
-  // Port of removeSample() — db.ts (#96). The board's Delete: every live cut
-  // group goes through removeSectionRequest (and so every slide through
-  // removeSlide), then the block itself is flagged and the reason recorded.
-  function removeSample(sampleId, reason = 'test removal') {
-    const sample = get(`SELECT sample_code AS code FROM samples WHERE id = ?`, [sampleId]);
-    if (!sample) return;
-    for (const row of all(
-      `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
-      [sampleId])) {
-      removeSectionRequest(row.id, reason);
+  // Port of removeSamples() — db.ts (#96, #159). The board's Delete and the Logs'
+  // Remove: every live cut group goes through removeSectionRequest (and so every
+  // slide through removeSlide), then the block itself is flagged and the reason
+  // recorded. An already-removed block is skipped (no second event), and with
+  // refuseInProcessingRun (the Logs) a block still in a planned/running/ready
+  // processing run refuses the whole call.
+  function removeSamples(sampleIds, reason = 'test removal', { refuseInProcessingRun = false } = {}) {
+    const live = sampleIds
+      .map((id) => get(`SELECT id, sample_code AS code, current_stage AS stage FROM samples WHERE id = ?`, [id]))
+      .filter((row) => row && row.stage !== 'removed');
+    const committed = !refuseInProcessingRun ? [] : live.filter((row) => get(
+      `SELECT 1 AS x FROM processing_batch_members pbm
+         JOIN processing_batches pb ON pb.id = pbm.batch_id
+        WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready')`, [row.id]));
+    if (committed.length > 0) {
+      throw new Error(`${committed.map((row) => row.code).join(', ')} still in a processing run`);
     }
-    run(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [sampleId]);
-    run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
-         VALUES (?, 'sample_removed', ?, ?, ?)`,
-        [sampleId, `Removed block ${sample.code}`,
-         JSON.stringify({ sample_id: sampleId, sample_code: sample.code, reason }), now()]);
+    for (const sample of live) {
+      for (const row of all(
+        `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
+        [sample.id])) {
+        removeSectionRequest(row.id, reason);
+      }
+      run(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [sample.id]);
+      run(`INSERT INTO sample_timeline_events (sample_id, event_type, summary, details, created_at)
+           VALUES (?, 'sample_removed', ?, ?, ?)`,
+          [sample.id, `Removed block ${sample.code}`,
+           JSON.stringify({ sample_id: sample.id, sample_code: sample.code, reason }), now()]);
+    }
+  }
+  function removeSample(sampleId, reason = 'test removal') {
+    removeSamples([sampleId], reason);
   }
   // Port of ensureSlidesForSectionRequest() — db.ts. ONLY initialises a section
   // with no slides; it used to top up from a live COUNT, which both resurrected
@@ -1468,7 +1484,7 @@ function makeApi(db) {
     revertSectionToStage, setSlidesDepthTag, rackCapacity,
     splitSlidesIntoNewRack, mergeSlideStacks,
     tickSectionStainedCheckbox,
-    removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample,
+    removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample, removeSamples,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
@@ -2023,6 +2039,35 @@ issue(96, "deleting a block from the board removes it without erasing anything",
 
   // The letters stay burned: a removed block is not a fresh one.
   eq(api.nextSlideLetter(id), 3, "slide letters are not reissued after a removal");
+});
+
+// #159 — "should be able to remove a sample (not remove a slide) in the logs".
+//
+// The Logs' Remove is the board's soft removal, so a second call must not write a
+// second audit event, and the Logs refuse a block still in a processing run: moving
+// that run on would write its members' stage over 'removed' and bring the block
+// back to life. The board's Delete keeps removing it as it always has.
+issue(159, "removing a sample twice records once, and the Logs refuse a block in a run", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "entered in error");
+  api.markEmbedded(id);
+  api.removeSamples([id], "wrong animal");
+  api.removeSamples([id], "wrong animal, again");
+  eq(api.all(`SELECT id FROM sample_timeline_events WHERE sample_id = ? AND event_type = 'sample_removed'`, [id]).length, 1,
+     "one removal, one audit event, however many times it is asked for");
+
+  const batched = api.addSample(p, "EE", "in a run"); api.completePreprocessing(batched.id);
+  const free = api.addSample(p, "EE", "not in a run");
+  api.planProcessingBatch({ sampleIds: [batched.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
+  let threw = null;
+  try { api.removeSamples([free.id, batched.id], "cleanup", { refuseInProcessingRun: true }); } catch (err) { threw = err.message; }
+  assert(threw != null && /processing run/.test(threw), "the Logs refuse a block still in a run");
+  assert(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [free.id]).s !== "removed",
+     "and the refusal is all or nothing: the block that was free is not removed either");
+  api.removeSamples([batched.id], "board delete");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [batched.id]).s, "removed",
+     "the board's Delete still removes a block in a run, as it always has");
 });
 
 // #106 — "modifications to project acronym in management tab do not apply to
