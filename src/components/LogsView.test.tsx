@@ -1,13 +1,16 @@
+import type { ComponentProps } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Sample, Slide } from "../lib/types";
+import type { Project, Sample, Slide } from "../lib/types";
 import { ReadOnlyProvider } from "../lib/readOnly";
 
 // LogsView reads its data through react-query hooks and its mutations through
 // useActions; both are replaced so the real component renders against fixtures.
 const data = vi.hoisted(() => ({
   samples: [] as Sample[],
+  // The active projects App hands the view (#161); every fixture sample is in project 1.
+  projects: [] as Project[],
   slides: [] as Slide[],
   catalog: [] as Array<{ id: number; assay_type: string; name: string; is_active: number }>,
   // Every action the view calls, in order, as [name, ...args].
@@ -44,7 +47,15 @@ vi.mock("../hooks/useActions", () => ({
     ),
 }));
 
-const { LogsView } = await import("./LogsView");
+const { LogsView: LogsViewUnderTest } = await import("./LogsView");
+
+// App passes the active projects and the sidebar's selection; by default a
+// test sees one active project and All projects, as a fresh session does.
+function LogsView(props: Partial<ComponentProps<typeof LogsViewUnderTest>>) {
+  return (
+    <LogsViewUnderTest projects={data.projects} projectFilterId={null} onProjectFilterChange={() => {}} {...props} />
+  );
+}
 
 /**
  * A failed save rejects a promise nobody awaits — that is how the app reports
@@ -73,6 +84,7 @@ const sample = (over: Partial<Sample>): Sample =>
     id: nextId++,
     sample_code: "EE-0001",
     sample_description: "block",
+    project_id: 1,
     project_code: "EE",
     processing_type: "Short",
     current_stage: "embedded",
@@ -84,6 +96,9 @@ const sample = (over: Partial<Sample>): Sample =>
     preselected_stains: "",
     ...over,
   }) as unknown as Sample;
+
+const project = (id: number, code: string): Project =>
+  ({ id, code, name: `${code} project`, is_active: 1 }) as unknown as Project;
 
 const slide = (parent_code: string, assay_type: string, assay_name: string): Slide =>
   ({
@@ -112,6 +127,7 @@ beforeEach(() => {
   localStorage.clear();
   nextId = 1;
   data.samples = [];
+  data.projects = [project(1, "EE")];
   data.slides = [];
   data.calls = [];
   data.catalog = [
@@ -162,7 +178,6 @@ describe("LogsView — a block removed before it was cut", () => {
       sample({ sample_code: "EE-0006", current_stage: "removed", preselected_stains: safO }),
     ];
     render(<LogsView />);
-    await userEvent.click(screen.getByLabelText("Show removed"));
 
     expect(stainsCell("EE-5").textContent).toMatch(/Safranin O.*assigned/);
     const removedCell = stainsCell("EE-6");
@@ -377,5 +392,94 @@ describe("LogsView — correcting a sample's notes", () => {
     data.samples = [{ ...data.samples[0], embedding_notes: "cut face UP" }];
     rerender(<LogsView />);
     expect(screen.getByLabelText("Embedding Notes for EE-1")).toHaveTextContent("cut face UP");
+  });
+});
+
+describe("LogsView — which blocks are listed", () => {
+  const listed = () => screen.queryAllByRole("row").map((r) => r.textContent ?? "");
+  const has = (code: string) => screen.queryByText(code) !== null;
+
+  // #161 — the samples of a deactivated project are kept in the database and
+  // simply not listed. App passes only the ACTIVE projects.
+  it("does not list a deactivated project's blocks, and lists them again when it is reactivated (#161)", () => {
+    data.projects = [project(1, "EE")];
+    data.samples = [
+      sample({ sample_code: "EE-0001", project_id: 1, project_code: "EE" }),
+      sample({ sample_code: "OLD-0001", project_id: 2, project_code: "OLD" }),
+    ];
+    const { rerender } = render(<LogsView />);
+    expect(has("EE-1")).toBe(true);
+    expect(has("OLD-1")).toBe(false);
+
+    rerender(<LogsView projects={[project(1, "EE"), project(2, "OLD")]} />);
+    expect(has("OLD-1")).toBe(true);
+    expect(listed().length).toBeGreaterThan(0);
+  });
+
+  // #160 — the sidebar's selection, handed down by App, is the project filter.
+  it("narrows to the project selected in the sidebar (#160)", () => {
+    data.projects = [project(1, "EE"), project(2, "ZZ")];
+    data.samples = [
+      sample({ sample_code: "EE-0001", project_id: 1, project_code: "EE" }),
+      sample({ sample_code: "ZZ-0001", project_id: 2, project_code: "ZZ" }),
+    ];
+    const { rerender } = render(<LogsView projectFilterId={2} />);
+    expect(has("ZZ-1")).toBe(true);
+    expect(has("EE-1")).toBe(false);
+
+    rerender(<LogsView projectFilterId={null} />);
+    expect(has("EE-1")).toBe(true);
+    expect(has("ZZ-1")).toBe(true);
+  });
+
+  // #160 — the Logs' own dropdown is the sidebar's selection: it shows it, and
+  // setting it sets the sidebar's (App owns the one value).
+  it("shows the sidebar's selection in its project dropdown, and sets it from there (#160)", async () => {
+    data.projects = [project(1, "EE"), project(2, "ZZ")];
+    const onProjectFilterChange = vi.fn();
+    const { rerender } = render(<LogsView projectFilterId={2} onProjectFilterChange={onProjectFilterChange} />);
+    const dropdown = screen.getByLabelText("Filter the Logs by project");
+    expect(dropdown).toHaveDisplayValue("ZZ");
+    expect(within(dropdown).getAllByRole("option").map((o) => o.textContent)).toEqual(["All projects", "EE", "ZZ"]);
+
+    await userEvent.selectOptions(dropdown, "EE");
+    expect(onProjectFilterChange).toHaveBeenLastCalledWith(1);
+    await userEvent.selectOptions(dropdown, "All projects");
+    expect(onProjectFilterChange).toHaveBeenLastCalledWith(null);
+
+    rerender(<LogsView projectFilterId={null} onProjectFilterChange={onProjectFilterChange} />);
+    expect(dropdown).toHaveDisplayValue("All projects");
+  });
+
+  // #158 — both toggles start on; a choice already made is remembered and wins.
+  it("shows archived and removed blocks from the start (#158)", () => {
+    data.samples = [
+      sample({ sample_code: "EE-0001" }),
+      sample({ sample_code: "EE-0002", archived_at: "2026-08-01 09:00" }),
+      sample({ sample_code: "EE-0003", current_stage: "removed" }),
+    ];
+    render(<LogsView />);
+    expect(screen.getByLabelText("Show archived")).toBeChecked();
+    expect(screen.getByLabelText("Show removed")).toBeChecked();
+    expect(has("EE-2")).toBe(true);
+    expect(has("EE-3")).toBe(true);
+  });
+
+  it("keeps a remembered choice over the new default (#158)", () => {
+    localStorage.setItem(
+      "histometer-view-filters",
+      JSON.stringify({ "logs.showArchived": false, "logs.showRemoved": false }),
+    );
+    data.samples = [
+      sample({ sample_code: "EE-0001" }),
+      sample({ sample_code: "EE-0002", archived_at: "2026-08-01 09:00" }),
+      sample({ sample_code: "EE-0003", current_stage: "removed" }),
+    ];
+    render(<LogsView />);
+    expect(screen.getByLabelText("Show archived")).not.toBeChecked();
+    expect(screen.getByLabelText("Show removed")).not.toBeChecked();
+    expect(has("EE-1")).toBe(true);
+    expect(has("EE-2")).toBe(false);
+    expect(has("EE-3")).toBe(false);
   });
 });

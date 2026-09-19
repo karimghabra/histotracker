@@ -104,6 +104,7 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   await showRemoved(page);
   await page.getByRole("cell", { name: "EE-3", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-3" }).click();
+  await page.getByLabel("Show archived").uncheck();
   await expect(page.getByRole("cell", { name: "EE-3", exact: true })).toHaveCount(0, {
     timeout: 15000,
   });

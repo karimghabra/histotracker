@@ -212,40 +212,36 @@ export async function checkViewsAgainstData(
     .locator("tbody tr")
     .filter({ hasNot: page.locator("td[colspan]") })
     .count();
-  // Decomposed rather than asserted against one predicate.
+  // Decomposed rather than asserted against one predicate, so a disagreement
+  // points at a specific rule instead of at a number.
   //
-  // The first version of this check demanded `p.is_active = 1` as well, and
-  // reported a defect the moment a walker deactivated a project. That was the
-  // check being wrong, not the app: the Logs are the permanent record, and
-  // deactivating a project is about board clutter. Naming each candidate and
-  // saying which one the screen matches means a disagreement points at a
-  // specific rule instead of at a number.
+  // The Logs list the blocks of ACTIVE projects (#161), archived and removed
+  // ones included because both toggles start on (#158). An earlier version of
+  // this check expected the opposite on both counts, and it is that policy which
+  // the two issues reversed, not the app that drifted.
   const [tallies] = await sql<{
     total: number;
-    live: number;
-    live_active: number;
-    archived: number;
+    listed: number;
+    hidden_archived_removed: number;
     inactive: number;
   }>(
     page,
     `SELECT
        (SELECT COUNT(*) FROM samples)                                             AS total,
-       -- what the Logs default to: archived and removed hidden (#74 / #105)
-       (SELECT COUNT(*) FROM samples
-         WHERE archived_at IS NULL AND current_stage <> 'removed')                AS live,
+       -- what the Logs default to: every block of an active project
        (SELECT COUNT(*) FROM samples s JOIN projects p ON p.id = s.project_id
-         WHERE s.archived_at IS NULL AND s.current_stage <> 'removed'
-           AND p.is_active = 1)                                                   AS live_active,
-       (SELECT COUNT(*) FROM samples WHERE archived_at IS NOT NULL)               AS archived,
+         WHERE p.is_active = 1)                                                   AS listed,
+       (SELECT COUNT(*) FROM samples
+         WHERE archived_at IS NOT NULL OR current_stage = 'removed')              AS hidden_archived_removed,
        (SELECT COUNT(*) FROM samples s JOIN projects p ON p.id = s.project_id
          WHERE p.is_active = 0)                                                   AS inactive`,
   );
 
-  if (logRows !== Number(tallies?.live ?? -1)) {
+  if (logRows !== Number(tallies?.listed ?? -1)) {
     report(
-      `the Logs draw ${logRows} rows; the two toggles say ${tallies?.live} ` +
-        `(${tallies?.total} blocks, ${tallies?.archived} archived, ${tallies?.inactive} in ` +
-        `deactivated projects; scoping to active projects too would give ${tallies?.live_active})`,
+      `the Logs draw ${logRows} rows; the blocks of active projects number ${tallies?.listed} ` +
+        `(${tallies?.total} blocks, ${tallies?.inactive} in deactivated projects, ` +
+        `${tallies?.hidden_archived_removed} archived or removed and expected to be listed)`,
       "every candidate predicate counted in one statement, so the row count is compared " +
         "against all of them rather than against a single guess",
     );

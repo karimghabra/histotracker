@@ -44,6 +44,24 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #158, #160, #161 — the Logs' project scope and defaults
+
+- **#161 · ✅ fixed.**
+  The Logs list only the blocks of ACTIVE projects.
+  App hands `LogsView` the active project list (`useProjects(true)`), so a deactivated project's blocks drop out and return on reactivation.
+  Nothing is written to the database.
+- **#160 · ✅ fixed.**
+  The sidebar's project selection is the Logs' project filter as well as the Board's, passed to `LogsView` as `projectFilterId`.
+  The Logs' own project dropdown stays, bound to that same selection (`onProjectFilterChange`), so setting either sets both and they cannot disagree.
+  It lists the active projects only.
+  Sign-out clears the selection (#140), so it clears the Logs' scope and resets the dropdown to All projects with it.
+  The CSV and Excel export read the same filtered list, so they follow it.
+- **#158 · ✅ fixed.**
+  "Show archived" and "Show removed" start ON.
+  They are still remembered per signed-in session (`logs.showArchived`, `logs.showRemoved`), and a remembered choice wins over the new default.
+  Sign-out drops the remembered choice, so the next session starts ON.
+- *Landmine:* the stress3 view check and the render tier's Logs surfaces both encoded the old policy (Logs unscoped, archived and removed hidden), so both were updated.
+
 ## 0.16.0 — bench feedback on 0.15, and #134
 
 ### #131 — an empty stage was showing every project

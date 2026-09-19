@@ -246,7 +246,9 @@ test("#96: archiving is done from the Logs and still restores whole", async ({ p
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
   await page.getByRole("button", { name: "Archive EE-1" }).click();
 
-  // Hidden from the log's default view, and off the board.
+  // Archived blocks are listed from the start (#158); hiding them is a choice.
+  // Either way it is off the board.
+  await page.getByLabel("Show archived").uncheck();
   await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0, {
     timeout: 15000,
   });

@@ -900,7 +900,12 @@ export default function App() {
               {/* No onRequestStain: on the workstation the Logs now ADD the
                   stain directly (#114). The sync request dialog is the viewer's
                   route, reached from the header. */}
-              <LogsView key={`logs-${activeUser?.id ?? "none"}`} />
+              <LogsView
+                key={`logs-${activeUser?.id ?? "none"}`}
+                projects={projects}
+                projectFilterId={selectedProjectId}
+                onProjectFilterChange={setSelectedProjectId}
+              />
             </div>
           ) : (
           <>
