@@ -4911,6 +4911,70 @@ export async function setSlidePicturesTaken(slideId: number, complete: boolean):
   );
 }
 
+export interface MarkSlidesImagedResult {
+  /** Marked imaged by this call. */
+  marked: number[];
+  /** Already carried an imaged stamp, so were left exactly as they were. */
+  alreadyImaged: number[];
+  /** Refused by the same rule that refuses marking the slide alone. */
+  refused: Array<{ slideId: number; slideCode: string; message: string }>;
+}
+
+/**
+ * Mark many slides as imaged in one action (#150).
+ *
+ * A loop over `setSlidePicturesTaken`, deliberately not a second write path: each slide gets
+ * its own stamp, its own audit record and its own group-state derivation, and every refusal
+ * that applies to one slide (never cut, removed, not an assay slide) applies to each here.
+ *
+ * A refused slide is collected, not thrown, so the others still go through; the caller says
+ * which were refused. A slide already imaged is skipped rather than re-marked, since marking
+ * it again would replace the time it was really imaged with now.
+ *
+ * Signed out, or a viewer, is a refusal of the whole action, raised before any slide is read:
+ * it is not a fact about one slide, and reporting it once per slide would bury it.
+ */
+export async function markSlidesImaged(slideIds: number[]): Promise<MarkSlidesImagedResult> {
+  assertMayRestore();
+  const result: MarkSlidesImagedResult = { marked: [], alreadyImaged: [], refused: [] };
+  for (const slideId of new Set(slideIds)) {
+    const slide = await getSlide(slideId);
+    if (slide && slide.current_stage !== "removed" && slide.stage_pictures_taken_at) {
+      result.alreadyImaged.push(slideId);
+      continue;
+    }
+    try {
+      await setSlidePicturesTaken(slideId, true);
+      result.marked.push(slideId);
+    } catch (error) {
+      result.refused.push({
+        slideId,
+        slideCode: slide?.slide_code ?? String(slideId),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return result;
+}
+
+/** What a bulk imaging call left out, in words: each refused slide with its own reason. */
+export function describeImagingResult(result: MarkSlidesImagedResult): string {
+  const parts: string[] = [];
+  if (result.marked.length > 0) {
+    parts.push(`Marked ${result.marked.length} slide${result.marked.length === 1 ? "" : "s"} as imaged.`);
+  }
+  if (result.alreadyImaged.length > 0) {
+    parts.push(`${result.alreadyImaged.length} already imaged, left as they were.`);
+  }
+  if (result.refused.length > 0) {
+    parts.push(
+      `${result.refused.length} refused and left untouched: ` +
+        result.refused.map((r) => `${displayCode(r.slideCode)} (${r.message})`).join(" "),
+    );
+  }
+  return parts.join(" ");
+}
+
 /**
  * Retire a physical slide — mis-entered, or lost at the bench (#73/#83).
  *

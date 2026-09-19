@@ -2,7 +2,7 @@ import { CheckCircle2, ListChecks, Layers, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useStackSlides } from "../hooks/useData";
-import { syncAssayStackWorkflowStep } from "../lib/db";
+import { describeImagingResult, syncAssayStackWorkflowStep } from "../lib/db";
 import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
 import { Button } from "./ui";
@@ -37,6 +37,7 @@ export function StackDetailsDrawer({
 }) {
   const {
     setSlidePicturesTaken,
+    markSlidesImaged,
     completeSlideStacksImaging,
     moveSlideStacks,
     removeSlideStacks,
@@ -51,6 +52,8 @@ export function StackDetailsDrawer({
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
   const [error, setError] = useState<string | null>(null);
+  // Set when a bulk action went through for some slides and left others out (#150).
+  const [notice, setNotice] = useState<string | null>(null);
   const [selectingSlides, setSelectingSlides] = useState(false);
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   // Which removal the reason dialog is currently collecting a reason for (#83).
@@ -133,10 +136,12 @@ export function StackDetailsDrawer({
   useEffect(() => {
     setSelectingSlides(false);
     setSelectedSlideIds(new Set());
+    setNotice(null);
   }, [stack.id]);
 
   async function run(action: () => Promise<unknown>) {
     setError(null);
+    setNotice(null);
     try {
       await action();
     } catch (reason) {
@@ -320,6 +325,33 @@ export function StackDetailsDrawer({
                     ))}
                 </optgroup>
               </select>
+              {/* Imaging (#150). The tick list that moves, splits and removes also marks
+                  imaged, where the checkbox on each row did it one slide at a time. Offered
+                  only where that checkbox is, while the rack is at imaging. Slides the
+                  single-slide rule refuses stay ticked and are listed, so what was left
+                  out is on the screen rather than discovered later. */}
+              {["ready_for_imaging", "pictures_taken"].includes(stack.current_stage) && (
+                <Button
+                  variant="subtle"
+                  className="w-full justify-center"
+                  disabled={selectedSlideIds.size === 0}
+                  onClick={() => {
+                    const ids = [...selectedSlideIds];
+                    void run(async () => {
+                      const result = await markSlidesImaged(ids);
+                      const left = new Set(result.refused.map((r) => r.slideId));
+                      setSelectedSlideIds(left);
+                      if (left.size === 0) setSelectingSlides(false);
+                      if (left.size > 0 || result.alreadyImaged.length > 0) setNotice(describeImagingResult(result));
+                    });
+                  }}
+                >
+                  <CheckCircle2 size={14} />
+                  {selectedSlideIds.size > 0
+                    ? `Mark ${selectedSlideIds.size} slide${selectedSlideIds.size === 1 ? "" : "s"} imaged`
+                    : "Tick the slides to mark imaged"}
+                </Button>
+              )}
               {/* Split (#124). A rack is a physical holder, and half of one
                   often needs to go through now while the rest waits. Doing that
                   by reassigning each slide to another agent and back was the
@@ -436,6 +468,7 @@ export function StackDetailsDrawer({
             );
           })}
         </ol>
+        {notice && <p role="status" className="mt-3 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">{notice}</p>}
         {error && <p className="mt-3 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-700">{error}</p>}
       </div>
 

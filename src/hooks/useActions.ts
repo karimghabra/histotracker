@@ -48,6 +48,8 @@ import {
   setSamplePriority,
   setSectionTimestamp,
   setSlidePicturesTaken as setSlidePicturesTakenDb,
+  markSlidesImaged as markSlidesImagedDb,
+  describeImagingResult,
   setStageTimestamp,
   startProcessingBatch as startProcessingBatchDb,
   updateSlideAssignment,
@@ -661,6 +663,26 @@ export function useActions() {
     [commit],
   );
 
+  /**
+   * Mark a whole selection of slides as imaged (#150).
+   *
+   * ONE undo step for the lot, the snapshot taken before the first write. Slides the single-slide
+   * rule refuses are left untouched and come back in the result, so the caller can list them;
+   * the rest are marked. When NOTHING could be marked the call throws, before it records an undo
+   * step for a change that never happened.
+   */
+  const markSlidesImaged = useCallback(
+    (slideIds: number[]) =>
+      commit(`Image ${slideIds.length} slide${slideIds.length === 1 ? "" : "s"}`, async () => {
+        const result = await markSlidesImagedDb(slideIds);
+        if (result.marked.length === 0 && result.refused.length > 0) {
+          throw new Error(describeImagingResult(result));
+        }
+        return result;
+      }),
+    [commit],
+  );
+
   const completeSectionImaging = useCallback(
     (sectionIds: number[]) =>
       commit(`Complete imaging (${sectionIds.length})`, async () => {
@@ -903,6 +925,7 @@ export function useActions() {
     relabelSlideToSample,
     withdrawStainRequest,
     setSlidePicturesTaken,
+    markSlidesImaged,
     completeSectionImaging,
     moveSlideStacks,
     completeSlideStacksImaging,
