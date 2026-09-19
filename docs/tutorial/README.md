@@ -132,6 +132,12 @@ wrote at intake shows nothing under its heading but that pencil, so you can
 write it later. A read-only viewer reads the notes a block carries and has no
 pencil to open them with.
 
+Beside **Archive** in the expanded row, **Remove** takes a whole sample out of
+play, with a reason; its slides go with it. Nothing is deleted: the sample stays
+in the Logs under **Show removed**, and `Ctrl+Z` brings it back. A sample still
+in a processing run is refused until it is taken out of the run or the run is
+finished.
+
 ## 9. Depth tagging (optional)
 
 Depth tags are a **low‑effort, relative** way to group slides — nothing requires
