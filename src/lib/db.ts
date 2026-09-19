@@ -2180,11 +2180,14 @@ export async function updateProcessingBatchStart(
 // called it, so it was a loaded gun with no trigger.
 //
 // One narrow delete replaced it in 0.16.3: `updateBatchMembers(id, [])` removes a
-// run that has been emptied of its samples (#135). That is a plan withdrawn
-// rather than work erased — nothing was cut, nothing was processed — and the
-// Manifest still holds the batch's creation and every stage transition its
-// samples made. The distinction is the whole of it: a run that RAN keeps its
-// record; a run that never had anything in it is not a record of anything.
+// PLANNED run that has been emptied of its samples (#135). That is a plan
+// withdrawn rather than work erased — nothing was cut, nothing was processed —
+// and the Manifest still holds the batch's creation and every stage transition
+// its samples made. Emptying a run that is already RUNNING deletes nothing: it
+// is marked `cancelled` and keeps its members, its checklist and an audit row
+// (#148). The distinction is the whole of it: a run that RAN keeps its record; a
+// run that never had anything in it is not a record of anything. See
+// updateBatchMembers for the reasoning.
 
 export async function listChecklistItems(
   scopeType: string,
