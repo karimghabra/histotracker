@@ -165,6 +165,31 @@ describe("buildLogsXlsxBytes", () => {
     ]);
   });
 
+  it("carries all four notes under their on-screen labels, the same cells as the CSV", async () => {
+    const grid = readSheet(
+      await buildLogsXlsxBytes([
+        {
+          sample: sample({
+            embedding_notes: "EMB",
+            cut_notes: "CUT",
+            slide_notes: "PLAN",
+            overall_notes: "GEN",
+            preselected_stains: assigned(["stain", "Safranin O"]),
+          }),
+          slides: [slide({ notes: "GLASS" })],
+        },
+      ]),
+    );
+
+    expect(grid[0].slice(-5)).toEqual([
+      "This Slide's Notes", "Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes",
+    ]);
+    expect(grid.slice(1).map((cells) => cells.slice(-5))).toEqual([
+      ["GLASS", "EMB", "CUT", "PLAN", "GEN"],
+      ["", "EMB", "CUT", "PLAN", "GEN"],
+    ]);
+  });
+
   it("writes no request row for a block removed before it was cut", async () => {
     const safO = assigned(["stain", "Safranin O"]);
     const grid = readSheet(
