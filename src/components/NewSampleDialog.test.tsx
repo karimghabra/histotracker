@@ -46,6 +46,16 @@ const noteFor = (code: string) => screen.getByLabelText(`Embedding note for ${co
 
 beforeEach(() => createSamples.mockClear());
 
+describe("NewSampleDialog — the four note fields", () => {
+  it("labels them Embedding, Sectioning / Cut, Slide and General Notes", async () => {
+    render(<NewSampleDialog projects={[project]} initialProjectId={project.id} onClose={() => {}} />);
+    await screen.findByDisplayValue("EE-1");
+    for (const label of ["Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes"]) {
+      expect(screen.getByLabelText(label, { exact: true }), label).toBeInstanceOf(HTMLTextAreaElement);
+    }
+  });
+});
+
 describe("NewSampleDialog — embedding notes for a batch", () => {
   it("offers no mode switch for a single sample", async () => {
     render(<NewSampleDialog projects={[project]} initialProjectId={project.id} onClose={() => {}} />);

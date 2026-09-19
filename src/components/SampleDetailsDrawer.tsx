@@ -14,6 +14,7 @@ import { useActions } from "../hooks/useActions";
 import { parsePreselectedStains, pendingStainNames } from "../lib/db";
 import { useAssayCatalog, useSampleSlides, useSampleTimelineEvents } from "../hooks/useData";
 import { cn, displayCode, parseAgent, CATALOG_SEP } from "../lib/utils";
+import { SAMPLE_NOTES } from "../lib/sampleNotes";
 import { readOnlyNotice, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
 export function SampleDetailsDrawer({
@@ -259,12 +260,13 @@ export function SampleDetailsDrawer({
         />
         {/* Read at the embedding station, so it sits above the cut notes — the
             same order the block travels through the bench (#137). */}
-        {sample.embedding_notes && (
-          <Section title="Embedding Notes">{sample.embedding_notes}</Section>
+        {SAMPLE_NOTES.map(({ field, label }) =>
+          sample[field] ? (
+            <Section key={field} title={label}>
+              {sample[field]}
+            </Section>
+          ) : null,
         )}
-        {sample.cut_notes && <Section title="Cut Notes">{sample.cut_notes}</Section>}
-        {sample.slide_notes && <Section title="Slide Notes">{sample.slide_notes}</Section>}
-        {sample.overall_notes && <Section title="General Notes">{sample.overall_notes}</Section>}
 
         {/* Cutting and stain requests are workstation actions. A viewer sees the
             cutting plan and existing tags, but cannot drive the bench (#72). */}
