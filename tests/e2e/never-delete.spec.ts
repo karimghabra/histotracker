@@ -264,3 +264,47 @@ test("#96: archiving is done from the Logs and still restores whole", async ({ p
   const after = await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents();
   expect(after.sort()).toEqual(before.sort());
 });
+
+// #159 — the Logs can remove a whole sample, with a button beside Archive; it is
+// the same never-delete removal, so it stays listed under "Show removed" and Undo
+// brings it back.
+test("#159: a sample is removed from the Logs, stays under Show removed, and Undo restores it", async ({ page }) => {
+  page.on("dialog", (dialog) => void dialog.accept());
+  await signInAndProject(page);
+  await addSample(page, "remove from logs");
+  await embed(page, "EE-1", "Batch 1");
+  await cut(page, "EE-1");
+
+  const before = await slideCodesInLogs(page, "EE-1");
+  expect(before.length).toBeGreaterThan(0);
+
+  await page.locator("nav").getByRole("button", { name: "Logs" }).click();
+  await showRemoved(page);
+  await page.getByRole("cell", { name: "EE-1", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Archive EE-1" })).toBeVisible();
+  await page.getByRole("button", { name: "Remove EE-1" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Remove this sample" });
+  const confirmBtn = dialog.getByRole("button", { name: "Remove sample" });
+  await expect(confirmBtn).toBeDisabled();
+  await dialog.getByLabel("Reason for removal").fill("entered in error");
+  await confirmBtn.click();
+
+  // Flagged and explained in the log, with every slide it had, and nothing left to remove.
+  await expect(page.getByText("Block removed")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("entered in error")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove EE-1" })).toHaveCount(0);
+  expect((await page.locator("text=/^EE-1-[A-Z]+$/").allTextContents()).sort()).toEqual(before.sort());
+
+  // Hidden once removed items are hidden, back under Show removed.
+  await page.getByLabel("Show removed").uncheck();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toHaveCount(0);
+  await page.getByLabel("Show removed").check();
+  await expect(page.getByRole("cell", { name: "EE-1", exact: true })).toBeVisible();
+
+  // Undo puts it back on the board.
+  await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
+  await expect(page.getByText("Block removed")).toHaveCount(0, { timeout: 15000 });
+  await page.locator("nav").getByRole("button", { name: "Board" }).click();
+  await expect(page.getByText("EE-1", { exact: true }).first()).toBeVisible();
+});

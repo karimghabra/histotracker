@@ -415,13 +415,17 @@ export function LogsView({
   // #133 — the Logs get the actions the dashboard has, driven by the selection
   // that was already here for tagging. One ticked list, three things to do with
   // it, exactly as the rack panel works since 0.14.1.
-  const { tagSlidesDepth, removeSlides, reassignSlides } = useActions();
+  const { tagSlidesDepth, removeSlides, removeSamples, reassignSlides } = useActions();
   const readOnly = useReadOnly();
   const reason = useReadOnlyReason();
   const [selectedSlideIds, setSelectedSlideIds] = useState<Set<number>>(new Set());
   const [showDepthDialog, setShowDepthDialog] = useState(false);
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Removing a whole sample (#159). Kept apart from `actionError`, which lives
+  // in the slide selection bar and is only on screen while slides are ticked.
+  const [sampleToRemove, setSampleToRemove] = useState<Sample | null>(null);
+  const [sampleRemoveError, setSampleRemoveError] = useState<string | null>(null);
   const toggleSlideSelect = (id: number) =>
     setSelectedSlideIds((cur) => {
       const next = new Set(cur);
@@ -844,6 +848,11 @@ export function LogsView({
         </span>
         {exportMsg && <span className="ml-auto text-brand">{exportMsg}</span>}
       </div>
+      {sampleRemoveError && (
+        <p role="alert" className="mb-2 px-1 text-xs text-red-700">
+          {sampleRemoveError}
+        </p>
+      )}
 
       {/* Table */}
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-line bg-panel thin-scroll">
@@ -908,6 +917,10 @@ export function LogsView({
                   addableAgents={addableAgents}
                   selectedSlideIds={selectedSlideIds}
                   onToggleSlideSelect={toggleSlideSelect}
+                  onRemoveSample={(target) => {
+                    setSampleRemoveError(null);
+                    setSampleToRemove(target);
+                  }}
                 />
               );
             })}
@@ -1021,6 +1034,21 @@ export function LogsView({
           }}
         />
       )}
+      {sampleToRemove && (
+        <RemovalReasonDialog
+          title="Remove this sample"
+          what={displayCode(sampleToRemove.sample_code)}
+          confirmLabel="Remove sample"
+          onClose={() => setSampleToRemove(null)}
+          onConfirm={(why) => {
+            const target = sampleToRemove;
+            setSampleToRemove(null);
+            void removeSamples([target.id], why).catch((err: unknown) =>
+              setSampleRemoveError(err instanceof Error ? err.message : "Could not remove."),
+            );
+          }}
+        />
+      )}
       {showDepthDialog && (
         <DepthTagDialog
           count={selectedSlideIds.size}
@@ -1100,6 +1128,7 @@ function FragmentRow({
   addableAgents,
   selectedSlideIds,
   onToggleSlideSelect,
+  onRemoveSample,
 }: {
   sample: Sample;
   /** Every agent named on the block — cut glass first, then still-assigned. */
@@ -1128,6 +1157,9 @@ function FragmentRow({
   addableAgents: Array<{ assay_type: string; name: string }>;
   selectedSlideIds: Set<number>;
   onToggleSlideSelect: (id: number) => void;
+  /** Ask the list to remove this whole sample; the reason dialog lives there,
+   *  because a modal cannot sit inside a table body. */
+  onRemoveSample: (sample: Sample) => void;
 }) {
   const {
     editSampleNote,
@@ -1425,6 +1457,21 @@ function FragmentRow({
                   ? `Restore ${displayCode(sample.sample_code)}`
                   : `Archive ${displayCode(sample.sample_code)}`}
               </button>}
+              {/* Remove is not Archive: archive hides a block you still expect
+                  to want, removal records that the sample itself should not be
+                  in play, with a reason (#159). The same soft removal the board's
+                  Delete makes — it stays here under "Show removed". A removed
+                  sample has nothing left to remove. */}
+              {!readOnly && sample.current_stage !== "removed" && (
+                <button
+                  aria-label={`Remove ${displayCode(sample.sample_code)}`}
+                  onClick={() => onRemoveSample(sample)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white px-2.5 py-1.5 text-xs font-medium text-removed hover:border-brand/50"
+                >
+                  <Trash2 size={13} />
+                  {`Remove ${displayCode(sample.sample_code)}`}
+                </button>
+              )}
             </div>
 
             {/* Sample description — editable right here, next to the notes the

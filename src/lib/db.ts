@@ -5397,35 +5397,72 @@ export async function setSectionTimestamp(
  * is the block's own stage and its own event.
  */
 export async function removeSample(id: number, reason: string): Promise<void> {
-  const db = await getDb();
-  const rows = await db.select<Array<{ sample_code: string }>>(
-    `SELECT sample_code FROM samples WHERE id = ?`,
-    [id],
-  );
-  const sample = rows[0];
-  if (!sample) return;
-  const groups = await db.select<Array<{ id: number }>>(
-    `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
-    [id],
-  );
-  for (const group of groups) await removeSectionRequest(group.id, reason);
-  await db.execute(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [id]);
-  await db.execute(
-    `INSERT INTO sample_timeline_events
-      (sample_id, user_id, event_type, summary, details, created_at)
-     VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
-             'sample_removed', ?, ?, ?)`,
-    [
-      id,
-      `Removed block ${displayCode(sample.sample_code)}`,
-      JSON.stringify({ sample_id: id, sample_code: sample.sample_code, reason: reason.trim() }),
-      nowTimestamp(),
-    ],
-  );
+  await removeSamples([id], reason);
 }
 
+/**
+ * Remove samples from the board and the Logs' working set (#96, #159).
+ *
+ * Two rules on top of the soft removal, both checked before anything is written
+ * so a refusal leaves every sample untouched:
+ *   - a sample already removed is skipped, so a double click or a stale Logs row
+ *     writes no second `sample_removed` event for one removal;
+ *   - a sample still committed to a processing run (planned, running or ready to
+ *     collect) is REFUSED. Moving that run on updates its members' stage without
+ *     looking at what they are, so a removed block would come back to life as
+ *     Pickup or Needs Embedding. Taking it out of the run first, or finishing the
+ *     run, is something the app already does; deciding what a run does about a removed member is not
+ *     something this change invents.
+ * Slides are removed at any stage, exactly as `removeSlide` always has.
+ */
 export async function removeSamples(ids: number[], reason: string): Promise<void> {
-  for (const id of ids) await removeSample(id, reason);
+  if (ids.length === 0) return;
+  const db = await getDb();
+  const marks = ids.map(() => "?").join(", ");
+  const live = await db.select<Array<{ id: number; sample_code: string }>>(
+    `SELECT id, sample_code FROM samples WHERE id IN (${marks}) AND current_stage != 'removed'`,
+    ids,
+  );
+  if (live.length === 0) return;
+  const liveMarks = live.map(() => "?").join(", ");
+  const committed = await db.select<Array<{ sample_code: string }>>(
+    `SELECT DISTINCT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${liveMarks})
+        AND pb.status IN ('planned', 'processing', 'ready')
+      ORDER BY s.sample_code`,
+    live.map((row) => row.id),
+  );
+  if (committed.length > 0) {
+    const codes = committed.map((row) => displayCode(row.sample_code)).join(", ");
+    throw new Error(
+      `${codes} ${committed.length === 1 ? "is" : "are"} still in a processing run - ` +
+        `take ${committed.length === 1 ? "it" : "them"} out of the run, or finish the run, ` +
+        `before removing the sample.`,
+    );
+  }
+  for (const sample of live) {
+    const groups = await db.select<Array<{ id: number }>>(
+      `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
+      [sample.id],
+    );
+    for (const group of groups) await removeSectionRequest(group.id, reason);
+    await db.execute(`UPDATE samples SET current_stage = 'removed' WHERE id = ?`, [sample.id]);
+    await db.execute(
+      `INSERT INTO sample_timeline_events
+        (sample_id, user_id, event_type, summary, details, created_at)
+       VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
+               'sample_removed', ?, ?, ?)`,
+      [
+        sample.id,
+        `Removed block ${displayCode(sample.sample_code)}`,
+        JSON.stringify({ sample_id: sample.id, sample_code: sample.sample_code, reason: reason.trim() }),
+        nowTimestamp(),
+      ],
+    );
+  }
 }
 
 export async function removeSectionRequest(id: number, reason: string): Promise<void> {
