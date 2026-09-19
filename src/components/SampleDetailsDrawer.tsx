@@ -638,17 +638,9 @@ export function SampleDetailsDrawer({
           what={removeWhat}
           confirmLabel={removeTargets.length > 1 ? `Remove ${removeTargets.length} blocks` : "Remove block"}
           onConfirm={(reason) => {
-            // A refusal (a block still in a processing run) is reported and
-            // leaves the drawer open, rather than vanishing into a promise.
-            void removeSamples(removeTargets, reason)
-              .then(() => {
-                setShowRemoval(false);
-                onClose();
-              })
-              .catch((error) => {
-                setShowRemoval(false);
-                window.alert(error instanceof Error ? error.message : String(error));
-              });
+            void removeSamples(removeTargets, reason);
+            setShowRemoval(false);
+            onClose();
           }}
           onClose={() => setShowRemoval(false)}
         />

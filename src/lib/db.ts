@@ -5407,15 +5407,18 @@ export async function removeSample(id: number, reason: string): Promise<void> {
  * so a refusal leaves every sample untouched:
  *   - a sample already removed is skipped, so a double click or a stale Logs row
  *     writes no second `sample_removed` event for one removal;
- *   - a sample still committed to a processing run (planned, running or ready to
- *     collect) is REFUSED. Moving that run on updates its members' stage without
- *     looking at what they are, so a removed block would come back to life as
- *     Pickup or Needs Embedding. Taking it out of the run first, or finishing the
- *     run, is something the app already does; deciding what a run does about a removed member is not
- *     something this change invents.
+ *   - with `refuseInProcessingRun` (the Logs' Remove), a sample still committed to
+ *     a processing run (planned, running or ready to collect) is REFUSED. Moving
+ *     that run on updates its members' stage without looking at what they are, so
+ *     a removed block would come back to life as Pickup or Needs Embedding. The
+ *     board's Delete does not pass it and removes such a block as it always has.
  * Slides are removed at any stage, exactly as `removeSlide` always has.
  */
-export async function removeSamples(ids: number[], reason: string): Promise<void> {
+export async function removeSamples(
+  ids: number[],
+  reason: string,
+  { refuseInProcessingRun = false }: { refuseInProcessingRun?: boolean } = {},
+): Promise<void> {
   if (ids.length === 0) return;
   const db = await getDb();
   const marks = ids.map(() => "?").join(", ");
@@ -5424,25 +5427,7 @@ export async function removeSamples(ids: number[], reason: string): Promise<void
     ids,
   );
   if (live.length === 0) return;
-  const liveMarks = live.map(() => "?").join(", ");
-  const committed = await db.select<Array<{ sample_code: string }>>(
-    `SELECT DISTINCT s.sample_code
-       FROM processing_batch_members pbm
-       JOIN processing_batches pb ON pb.id = pbm.batch_id
-       JOIN samples s ON s.id = pbm.sample_id
-      WHERE pbm.sample_id IN (${liveMarks})
-        AND pb.status IN ('planned', 'processing', 'ready')
-      ORDER BY s.sample_code`,
-    live.map((row) => row.id),
-  );
-  if (committed.length > 0) {
-    const codes = committed.map((row) => displayCode(row.sample_code)).join(", ");
-    throw new Error(
-      `${codes} ${committed.length === 1 ? "is" : "are"} still in a processing run - ` +
-        `take ${committed.length === 1 ? "it" : "them"} out of the run, or finish the run, ` +
-        `before removing the sample.`,
-    );
-  }
+  if (refuseInProcessingRun) await refuseSamplesInProcessingRun(live.map((row) => row.id));
   for (const sample of live) {
     const groups = await db.select<Array<{ id: number }>>(
       `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
@@ -5461,6 +5446,29 @@ export async function removeSamples(ids: number[], reason: string): Promise<void
         JSON.stringify({ sample_id: sample.id, sample_code: sample.sample_code, reason: reason.trim() }),
         nowTimestamp(),
       ],
+    );
+  }
+}
+
+async function refuseSamplesInProcessingRun(ids: number[]): Promise<void> {
+  const db = await getDb();
+  const marks = ids.map(() => "?").join(", ");
+  const committed = await db.select<Array<{ sample_code: string }>>(
+    `SELECT DISTINCT s.sample_code
+       FROM processing_batch_members pbm
+       JOIN processing_batches pb ON pb.id = pbm.batch_id
+       JOIN samples s ON s.id = pbm.sample_id
+      WHERE pbm.sample_id IN (${marks})
+        AND pb.status IN ('planned', 'processing', 'ready')
+      ORDER BY s.sample_code`,
+    ids,
+  );
+  if (committed.length > 0) {
+    const codes = committed.map((row) => displayCode(row.sample_code)).join(", ");
+    throw new Error(
+      `${codes} ${committed.length === 1 ? "is" : "are"} still in a processing run - ` +
+        `take ${committed.length === 1 ? "it" : "them"} out of the run, or finish the run, ` +
+        `before removing the sample.`,
     );
   }
 }

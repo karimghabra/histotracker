@@ -507,7 +507,9 @@ describe("LogsView — removing a sample", () => {
 
     await userEvent.type(within(dialog).getByLabelText("Reason for removal"), "wrong animal");
     await userEvent.click(confirm);
-    expect(data.calls.filter(([name]) => name === "removeSamples")).toEqual([["removeSamples", [target.id], "wrong animal"]]);
+    expect(data.calls.filter(([name]) => name === "removeSamples")).toEqual([
+      ["removeSamples", [target.id], "wrong animal", { refuseInProcessingRun: true }],
+    ]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -553,6 +555,9 @@ describe("LogsView — removing a sample", () => {
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove sample" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("still in a processing run");
     expect(screen.getByText("EE-1")).toBeInTheDocument();
+
+    await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("lists a removed sample under Show removed and hides it without", async () => {

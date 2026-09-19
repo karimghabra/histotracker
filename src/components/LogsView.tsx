@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Pencil, Search, Send, Star, Tag, Trash2 } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, Pencil, Search, Send, Star, Tag, Trash2, X } from "lucide-react";
 import type { Project, Sample, Slide } from "../lib/types";
 import type { SampleRemoval, SlideRemoval } from "../lib/db";
 import { Button, Field, Modal, TextArea, TextInput } from "./ui";
@@ -849,9 +849,17 @@ export function LogsView({
         {exportMsg && <span className="ml-auto text-brand">{exportMsg}</span>}
       </div>
       {sampleRemoveError && (
-        <p role="alert" className="mb-2 px-1 text-xs text-red-700">
-          {sampleRemoveError}
-        </p>
+        <div role="alert" className="mb-2 flex items-center gap-2 px-1 text-xs text-red-700">
+          <span>{sampleRemoveError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setSampleRemoveError(null)}
+            className="rounded p-0.5 hover:bg-red-50"
+          >
+            <X size={12} />
+          </button>
+        </div>
       )}
 
       {/* Table */}
@@ -1043,7 +1051,7 @@ export function LogsView({
           onConfirm={(why) => {
             const target = sampleToRemove;
             setSampleToRemove(null);
-            void removeSamples([target.id], why).catch((err: unknown) =>
+            void removeSamples([target.id], why, { refuseInProcessingRun: true }).catch((err: unknown) =>
               setSampleRemoveError(err instanceof Error ? err.message : "Could not remove."),
             );
           }}

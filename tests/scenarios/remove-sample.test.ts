@@ -3,7 +3,8 @@
 // The Logs' Remove is the board's soft removal (#96): the rows stay, the sample is flagged
 // removed, and the reason and the user land on the sample's timeline. These scenarios walk the
 // outcomes a lab depends on: nothing deleted, one audit record per removal, undo brings it back,
-// nobody signed in changes nothing, and a block still in a processing run is refused.
+// nobody signed in changes nothing, and the Logs refuse a block still in a processing run
+// while the board's Delete removes it as before.
 import { afterEach, describe, expect, it } from "vitest";
 import { openLab, type Lab } from "./lab";
 
@@ -97,7 +98,7 @@ describe("#159: removing a sample", () => {
     expect(lab.rows(`SELECT id FROM slides WHERE current_stage = 'removed'`)).toHaveLength(0);
   });
 
-  it("is refused while the sample is in a processing run, and the refusal touches no sample", async () => {
+  it("is refused from the Logs while the sample is in a processing run, and the refusal touches no sample", async () => {
     lab = await openLab();
     const inRun = await lab.sample("in a run", "in_ethanol");
     const free = await lab.sample("not in a run", "in_ethanol");
@@ -108,7 +109,7 @@ describe("#159: removing a sample", () => {
       plannedStartAt: "2030-01-01 08:00",
     });
 
-    await expect(lab.db.removeSamples([free, inRun], "cleanup")).rejects.toThrow(/still in a processing run/);
+    await expect(lab.db.removeSamples([free, inRun], "cleanup", { refuseInProcessingRun: true })).rejects.toThrow(/still in a processing run/);
 
     expect(stageOf(lab, inRun)).toBe("in_ethanol");
     expect(stageOf(lab, free), "all or nothing").toBe("in_ethanol");
@@ -126,7 +127,23 @@ describe("#159: removing a sample", () => {
       plannedStartAt: "2030-01-01 08:00",
     });
     await lab.db.updateBatchMembers(batch, [other]);
-    await lab.db.removeSamples([inRun], "wrong block");
+    await lab.db.removeSamples([inRun], "wrong block", { refuseInProcessingRun: true });
     expect(stageOf(lab, inRun)).toBe("removed");
+  });
+
+  it("from the board's Delete still removes a block in a processing run, as it always has", async () => {
+    lab = await openLab();
+    const inRun = await lab.sample("in a run", "in_ethanol");
+    await lab.db.planProcessingBatch({
+      sampleIds: [inRun],
+      processingType: "Short",
+      operatorName: "Tech",
+      plannedStartAt: "2030-01-01 08:00",
+    });
+
+    await lab.db.removeSamples([inRun], "wrong block");
+
+    expect(stageOf(lab, inRun)).toBe("removed");
+    expect(removalEvents(lab, inRun)).toHaveLength(1);
   });
 });

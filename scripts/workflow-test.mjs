@@ -795,13 +795,14 @@ function makeApi(db) {
   // Port of removeSamples() — db.ts (#96, #159). The board's Delete and the Logs'
   // Remove: every live cut group goes through removeSectionRequest (and so every
   // slide through removeSlide), then the block itself is flagged and the reason
-  // recorded. An already-removed block is skipped (no second event), and a block
-  // still in a planned/running/ready processing run refuses the whole call.
-  function removeSamples(sampleIds, reason = 'test removal') {
+  // recorded. An already-removed block is skipped (no second event), and with
+  // refuseInProcessingRun (the Logs) a block still in a planned/running/ready
+  // processing run refuses the whole call.
+  function removeSamples(sampleIds, reason = 'test removal', { refuseInProcessingRun = false } = {}) {
     const live = sampleIds
       .map((id) => get(`SELECT id, sample_code AS code, current_stage AS stage FROM samples WHERE id = ?`, [id]))
       .filter((row) => row && row.stage !== 'removed');
-    const committed = live.filter((row) => get(
+    const committed = !refuseInProcessingRun ? [] : live.filter((row) => get(
       `SELECT 1 AS x FROM processing_batch_members pbm
          JOIN processing_batches pb ON pb.id = pbm.batch_id
         WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready')`, [row.id]));
@@ -2043,10 +2044,10 @@ issue(96, "deleting a block from the board removes it without erasing anything",
 // #159 — "should be able to remove a sample (not remove a slide) in the logs".
 //
 // The Logs' Remove is the board's soft removal, so a second call must not write a
-// second audit event, and a block still in a processing run is refused: moving
+// second audit event, and the Logs refuse a block still in a processing run: moving
 // that run on would write its members' stage over 'removed' and bring the block
-// back to life.
-issue(159, "removing a sample twice records once, and a block in a run is refused", () => {
+// back to life. The board's Delete keeps removing it as it always has.
+issue(159, "removing a sample twice records once, and the Logs refuse a block in a run", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "entered in error");
@@ -2060,10 +2061,13 @@ issue(159, "removing a sample twice records once, and a block in a run is refuse
   const free = api.addSample(p, "EE", "not in a run");
   api.planProcessingBatch({ sampleIds: [batched.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
   let threw = null;
-  try { api.removeSamples([free.id, batched.id], "cleanup"); } catch (err) { threw = err.message; }
-  assert(threw != null && /processing run/.test(threw), "a block still in a run is refused");
+  try { api.removeSamples([free.id, batched.id], "cleanup", { refuseInProcessingRun: true }); } catch (err) { threw = err.message; }
+  assert(threw != null && /processing run/.test(threw), "the Logs refuse a block still in a run");
   assert(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [free.id]).s !== "removed",
      "and the refusal is all or nothing: the block that was free is not removed either");
+  api.removeSamples([batched.id], "board delete");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [batched.id]).s, "removed",
+     "the board's Delete still removes a block in a run, as it always has");
 });
 
 // #106 — "modifications to project acronym in management tab do not apply to
