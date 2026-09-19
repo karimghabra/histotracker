@@ -5,6 +5,7 @@ import { useAppSettings, useAssayCatalog } from "../hooks/useData";
 import { DEFAULT_SETTINGS, plannedExtras } from "../lib/settings";
 import { FIXATIVE_OPTIONS, PROCESSING_OPTIONS } from "../lib/stages";
 import { nextSampleCode } from "../lib/db";
+import { sampleNoteLabel } from "../lib/sampleNotes";
 import { cn, composeDescription, displayCode, normalizePastedLines } from "../lib/utils";
 import type { Project, ProcessingType } from "../lib/types";
 
@@ -420,7 +421,7 @@ export function NewSampleDialog({
             htmlFor={eachNotes ? undefined : "embedding-notes"}
             className="text-xs font-medium text-ink-soft"
           >
-            Embedding Notes
+            {sampleNoteLabel("embedding_notes")}
           </label>
           {quantity > 1 && (
             <div
@@ -492,13 +493,13 @@ export function NewSampleDialog({
           />
         )}
       </div>
-      <Field label="Sectioning / Cut Notes">
+      <Field label={sampleNoteLabel("cut_notes")}>
         <TextArea rows={2} value={cutNotes} onChange={(e) => setCutNotes(e.target.value)} />
       </Field>
-      <Field label="Slide Notes">
+      <Field label={sampleNoteLabel("slide_notes")}>
         <TextArea rows={2} value={slideNotes} onChange={(e) => setSlideNotes(e.target.value)} />
       </Field>
-      <Field label="General Notes">
+      <Field label={sampleNoteLabel("overall_notes")}>
         <TextArea rows={2} value={overallNotes} onChange={(e) => setOverallNotes(e.target.value)} />
       </Field>
       {/* Name the samples that are still blank rather than just greying the

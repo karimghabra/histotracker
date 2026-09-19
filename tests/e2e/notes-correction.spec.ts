@@ -199,7 +199,7 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   await openDrawerFromBoard(page, "EE-1");
   for (const [heading, text] of [
     ["Embedding Notes", CORRECTED.embedding],
-    ["Cut Notes", CORRECTED.cut],
+    ["Sectioning / Cut Notes", CORRECTED.cut],
     ["Slide Notes", CORRECTED.slide],
     ["General Notes", CORRECTED.sample],
   ]) {
@@ -252,7 +252,7 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
   await expect(noteEditors(page, "EE-1").cut).toHaveValue("");
   await noteEditors(page, "EE-1").cut.blur();
   await openDrawerFromBoard(page, "EE-1");
-  await expect(page.getByRole("heading", { name: "Cut Notes", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sectioning / Cut Notes", exact: true })).toHaveCount(0);
 });
 
 /**

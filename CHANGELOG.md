@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.2 - unreleased
+
+No schema change, and no change to what is stored: the four note columns are read and written exactly as before, only the words above them changed.
+A 0.18.1 instance opens a 0.18.2 database unchanged, and the reverse holds too.
+
+- **A note is called the same thing wherever you read it.**
+  The same four notes were named three ways: intake called them Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes, the Logs were aligned to intake in 0.18.1, and the sample drawer still had its own set.
+  A note typed into "Sectioning / Cut Notes" at intake and read back under a different heading a week later reads as a different field, which is the one thing a correction surface must not do.
+  The drawer now takes its headings from the same list intake does, so all three surfaces name the four notes identically.
+
+  The samples export follows: its **Cut Notes** column header is now **Sectioning / Cut Notes**, in the samples CSV, the Samples sheet of the Excel workbook, and the Sample Status sheet of the workbook a workstation publishes with every sync.
+  A saved spreadsheet or formula that looks up the old "Cut Notes" heading by name needs that one heading updated; the column is in the same place with the same contents.
+  The Logs export headers are untouched by this release.
+
 ## 0.18.1 - 2026-09-12
 
 No schema change. The four note columns already existed and `updateSampleDetails` already wrote them, so the new caller writes through the same columns.
