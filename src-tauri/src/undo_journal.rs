@@ -26,6 +26,7 @@
 
 use std::path::Path;
 
+use sqlx::error::{DatabaseError, ErrorKind};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, SqliteConnection};
 
@@ -73,6 +74,21 @@ async fn finish<T>(mut conn: SqliteConnection, work: Result<T, String>) -> Resul
 pub const CHANGED_SINCE: &str =
     "Cannot undo or redo that step: the records it would put back have changed since. Nothing was changed.";
 
+/// A constraint violation, as against a transient failure or a statement that
+/// cannot run at all.
+///
+/// A unique, foreign-key, not-null or check violation says what the per-row
+/// guards say: something has taken this row's place since the action left it.
+/// That is terminal, so it is reported as [`CHANGED_SINCE`] and the caller drops
+/// the step. A busy or locked database is worth trying again, and a statement
+/// that cannot run is worth reading, so neither is dressed up as a refusal.
+fn is_constraint(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db) => !matches!(db.kind(), ErrorKind::Other),
+        _ => false,
+    }
+}
+
 /// The rows a replay wrote: `(from, to]` of the journal, the range that reverses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Replayed {
@@ -100,8 +116,12 @@ pub struct Replayed {
 /// row's change, guarded by what that change left there, so none touching a row
 /// means something outside the range being replayed has changed it since -- the
 /// sync timer draining a viewer's request between an Undo and its Redo, say --
-/// and restoring the whole row would silently erase that. Refused with
-/// [`CHANGED_SINCE`], rolled back, nothing changed.
+/// and restoring the whole row would silently erase that. A constraint violation
+/// says the same thing from the other side: a row the action created, deleted by
+/// the undo, cannot be put back under a key something else has taken. Both are
+/// refused with [`CHANGED_SINCE`], rolled back, nothing changed. Anything else (a
+/// busy database, a statement that cannot run) is reported as it is, so the
+/// caller keeps the step and the user can try again.
 pub async fn revert(path: &Path, from: i64, to: i64) -> Result<Replayed, String> {
     let mut conn = open(path).await?;
     begin(&mut conn).await?;
@@ -132,10 +152,11 @@ async fn replay(conn: &mut SqliteConnection, from: i64, to: i64) -> Result<Repla
     .await
     .map_err(|e| e.to_string())?;
     for statement in &statements {
-        let done = sqlx::raw_sql(statement)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| e.to_string())?;
+        let done = match sqlx::raw_sql(statement).execute(&mut *conn).await {
+            Ok(done) => done,
+            Err(err) if is_constraint(&err) => return Err(CHANGED_SINCE.to_string()),
+            Err(err) => return Err(err.to_string()),
+        };
         if done.rows_affected() != 1 {
             return Err(CHANGED_SINCE.to_string());
         }
@@ -206,6 +227,13 @@ mod tests {
         CREATE TABLE audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT NOT NULL);
         CREATE TABLE undo_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL);
         CREATE TABLE samples (id INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT '');
+        CREATE TABLE racks (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);
+        CREATE TRIGGER undo_journal_racks_insert AFTER INSERT ON racks BEGIN
+          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM racks WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND code IS ' || quote(new.code));
+        END;
+        CREATE TRIGGER undo_journal_racks_delete AFTER DELETE ON racks BEGIN
+          INSERT INTO undo_journal(stmt) VALUES ('INSERT INTO racks(id,code) VALUES(' || quote(old.id) || ',' || quote(old.code) || ')');
+        END;
         CREATE TRIGGER audit_samples AFTER UPDATE ON samples BEGIN
           INSERT INTO audit_events(summary) VALUES ('sample ' || new.id || ' now ' || new.note);
         END;
@@ -249,6 +277,7 @@ mod tests {
 
     const SAMPLES: &str = "SELECT id || ':' || note FROM samples ORDER BY id";
     const AUDIT: &str = "SELECT id || ':' || summary FROM audit_events ORDER BY id";
+    const RACKS: &str = "SELECT id || ':' || code FROM racks ORDER BY id";
 
     #[test]
     fn a_replay_puts_every_row_back_and_a_second_replay_redoes_it() {
@@ -372,6 +401,33 @@ mod tests {
             assert_eq!(rows(&mut conn, SAMPLES).await, samples, "the drain's write is untouched");
             assert_eq!(rows(&mut conn, AUDIT).await, audit);
             assert_eq!(rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await, journal);
+        });
+    }
+
+    /// A row the action created was deleted by the undo, and something outside the
+    /// stack has since taken its key. Putting it back is impossible, not merely
+    /// awkward, so the redo is refused the way a guard mismatch is.
+    #[test]
+    fn a_replay_a_constraint_stops_is_refused_like_a_guard_mismatch() {
+        block_on(async {
+            let scratch = Scratch::new();
+            let mut conn = lab(&scratch).await;
+            let mark = head(&mut conn).await;
+            run(&mut conn, "INSERT INTO racks(id, code) VALUES (1, 'R1')").await;
+            let end = head(&mut conn).await;
+
+            let redo = revert(&scratch.db(), mark, end).await.expect("the undo replays");
+            assert!(rows(&mut conn, RACKS).await.is_empty(), "the rack is gone");
+
+            // Somebody outside the stack takes the code the rack had.
+            run(&mut conn, "INSERT INTO racks(id, code) VALUES (2, 'R1')").await;
+            let racks = rows(&mut conn, RACKS).await;
+
+            let err = revert(&scratch.db(), redo.from, redo.to)
+                .await
+                .expect_err("the redo is refused");
+            assert_eq!(err, CHANGED_SINCE);
+            assert_eq!(rows(&mut conn, RACKS).await, racks, "and nothing was changed");
         });
     }
 

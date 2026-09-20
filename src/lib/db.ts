@@ -27,7 +27,7 @@ import {
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import { SAMPLE_NOTE_FIELDS } from "./sampleNotes";
-import { CHANGED_SINCE, journalInstallStatements } from "./undoJournal";
+import { CHANGED_SINCE, journalInstallStatements, journalTrimStatements } from "./undoJournal";
 import { useUndoStore } from "./undo";
 import { inLane } from "./writeLane";
 import type { SampleNoteField } from "./sampleNotes";
@@ -180,11 +180,17 @@ export function getDb(): Promise<Database> {
  * the runtime schema and the one-time repairs, so the triggers cover every
  * column this file now has and the repairs are not themselves undoable. The
  * statements run in one transaction in Rust; on an unchanged file there are none.
+ *
+ * Then the journal is trimmed to its bound, which is the one moment nothing can
+ * be relying on a row: the undo stack is empty until the saved history is
+ * hydrated, and that is anchored to the journal's ends.
  */
 async function installUndoJournal(db: Database): Promise<void> {
   const statements = await journalInstallStatements(db);
-  if (statements.length === 0) return;
-  await invoke("undo_journal_install", { path: await filePathOf(db), statements });
+  if (statements.length > 0) {
+    await invoke("undo_journal_install", { path: await filePathOf(db), statements });
+  }
+  for (const statement of journalTrimStatements()) await db.execute(statement);
 }
 
 /**

@@ -968,6 +968,10 @@ export function useActions() {
  * would sit at the top of the stack hiding everything behind it, so it is
  * dropped and the user is told in one sentence. The next Undo then reaches the
  * step before it.
+ *
+ * Every other failure is temporary as far as anyone here knows (a busy database,
+ * most of all), so the step stays exactly where it is and the user is told they
+ * can try it again.
  */
 async function replayOrSkip(
   entry: UndoEntry,
@@ -976,7 +980,12 @@ async function replayOrSkip(
   try {
     return await revertJournalRange(entry.mark, entry.end);
   } catch (err) {
-    if (!(err instanceof ReplayRefusedError)) throw err;
+    if (!(err instanceof ReplayRefusedError)) {
+      const reason = (err instanceof Error ? err.message : String(err)).replace(/\s*\.?\s*$/, "");
+      throw new Error(
+        `Could not ${stack} "${entry.label}" just now: ${reason}. Nothing was changed, so you can try again.`,
+      );
+    }
     useUndoStore.getState().discardBlocked(stack);
     throw new Error(
       `Could not ${stack} "${entry.label}": the records it would put back have changed since, ` +

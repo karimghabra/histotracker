@@ -58,7 +58,34 @@ const ident = (name: string) => `"${name.replace(/"/g, '""')}"`;
 /** A SQL string literal holding `text`, for splicing fixed text into a trigger body. */
 const lit = (text: string) => `'${text.replace(/'/g, "''")}'`;
 
-export const JOURNAL_TABLE_SQL = `CREATE TABLE IF NOT EXISTS undo_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL)`;
+export const JOURNAL_TABLE_SQL =
+  `CREATE TABLE IF NOT EXISTS undo_journal (` +
+  `seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')))`;
+
+/**
+ * How much journal is worth carrying. The undo stack holds a hundred steps
+ * (undo.ts), and a bulk action writes one inverse per row it touches, so a heavy
+ * week can leave tens of thousands of rows behind. They ride inside the database
+ * file, which means inside every backup and every snapshot the workstation
+ * publishes, so there is a bound on both age and count.
+ */
+const KEEP_DAYS = 14;
+const KEEP_ROWS = 20_000;
+
+/**
+ * Forget journal rows older or more numerous than the bound above, oldest first.
+ *
+ * Run at open (db.ts), where nothing is live yet: the undo stack is empty until
+ * the history is hydrated, and that hydration is anchored to the journal's ends,
+ * so a history needing a row this trimmed is dropped rather than half replayed
+ * (undoPersist.ts). A replay is never left with part of its range.
+ */
+export function journalTrimStatements(): string[] {
+  return [
+    `DELETE FROM undo_journal WHERE at < datetime('now', '-${KEEP_DAYS} days')`,
+    `DELETE FROM undo_journal WHERE seq NOT IN (SELECT seq FROM undo_journal ORDER BY seq DESC LIMIT ${KEEP_ROWS})`,
+  ];
+}
 
 /**
  * The three triggers that journal `table`, whose columns are `columns`.
@@ -131,10 +158,15 @@ END`,
  */
 export async function journalInstallStatements(db: Pick<Database, "select">): Promise<string[]> {
   const statements: string[] = [];
-  const hasJournal = await db.select<Array<{ n: number }>>(
-    `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'undo_journal'`,
-  );
-  if (Number(hasJournal[0]?.n ?? 0) === 0) statements.push(JOURNAL_TABLE_SQL);
+  const journal = await db.select<Array<{ name: string }>>(`PRAGMA table_info(undo_journal)`);
+  if (journal.length === 0) statements.push(JOURNAL_TABLE_SQL);
+  else if (!journal.some((c) => c.name === "at")) {
+    // A journal from a build before rows were dated cannot be trimmed by age, and
+    // ALTER TABLE cannot add a column defaulted to the time it is written. It is
+    // bookkeeping, not lab record: start it again, which the history's anchor
+    // notices (undoPersist.ts).
+    statements.push(`DROP TABLE undo_journal`, JOURNAL_TABLE_SQL);
+  }
   const tables = await db.select<Array<{ name: string }>>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
   );

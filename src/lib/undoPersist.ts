@@ -4,12 +4,14 @@ import { useUndoStore, type UndoEntry } from "./undo";
 // Persist the undo/redo history across reloads so reopening the app doesn't
 // silently disable Undo even though the database is fully restored.
 //
-// SAFETY: an undo entry is a mark in the undo journal, valid only against the
-// journal it was taken from. We store the journal's head (its last sequence number
-// and statement) as an anchor next to the history; on load we keep the history only
-// if the live journal still ends exactly there. Any mismatch (fresh install, a
-// swapped-in image, a write since) discards the history, so a stale mark can never
-// be replayed into the wrong database. Worst case: no history.
+// SAFETY: an undo entry is a range of the undo journal, valid only against the
+// journal it was taken from. We store BOTH ENDS of that journal as an anchor next
+// to the history: its oldest sequence number, and its last one with the statement
+// there. On load we keep the history only if the live journal still runs from
+// exactly there to exactly there. Any mismatch (fresh install, a swapped-in image,
+// a write since, or the trim at open having forgotten the oldest rows) discards
+// the history, so a stale range can never be replayed into the wrong database, nor
+// one whose rows are half gone. Worst case: no history.
 const DB_NAME = "histometer-undo";
 const STORE = "kv";
 const KEY = "history";
@@ -71,8 +73,11 @@ function idbClear(): Promise<void> {
 async function journalAnchor(): Promise<string> {
   const head = await journalHead();
   const db = await getDb();
-  const rows = await db.select<Array<{ stmt: string }>>(`SELECT stmt FROM undo_journal WHERE seq = ?`, [head]);
-  return `${head}:${rows[0]?.stmt ?? ""}`;
+  const rows = await db.select<Array<{ floor: number | null; stmt: string | null }>>(
+    `SELECT MIN(seq) AS floor, (SELECT stmt FROM undo_journal WHERE seq = ?) AS stmt FROM undo_journal`,
+    [head],
+  );
+  return `${rows[0]?.floor ?? 0}:${head}:${rows[0]?.stmt ?? ""}`;
 }
 
 async function persist(undoStack: UndoEntry[], redoStack: UndoEntry[]): Promise<void> {

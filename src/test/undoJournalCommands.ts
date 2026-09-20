@@ -38,6 +38,14 @@ const one = (db: SqlHandle, sql: string, params?: Array<number | string>) =>
 const head = (db: SqlHandle) =>
   one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0)");
 
+/**
+ * A constraint violation, as sqlx's `ErrorKind` tells the Rust command apart from
+ * a busy database or a statement that cannot run (`is_constraint`,
+ * src-tauri/src/undo_journal.rs). node:sqlite and sql.js both report these in the
+ * message SQLite itself writes, which is what this stands in for.
+ */
+const CONSTRAINT = /constraint failed/i;
+
 /** The rows a replay wrote: `(from, to]` of the journal, the range that reverses it. */
 export interface Replayed {
   from: number;
@@ -50,7 +58,9 @@ export interface Replayed {
  *
  * Every statement must touch exactly one row: each is one row's guarded inverse,
  * so none matching means something outside the range has changed that row since,
- * and the replay is refused with nothing changed.
+ * and the replay is refused with nothing changed. A constraint violation is the
+ * same refusal, from the other side: the row's key has been taken since. Any
+ * other failure is reported as it is, so the caller can keep the step.
  */
 export function revertJournal(db: SqlHandle, from: number, to: number): Replayed {
   return inTransaction(db, () => {
@@ -58,7 +68,15 @@ export function revertJournal(db: SqlHandle, from: number, to: number): Replayed
     const audit = one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)");
     const rows = db.all("SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC", [from, to]);
     for (const row of rows) {
-      if (db.run(String(row.stmt)) !== 1) throw new Error(CHANGED_SINCE);
+      let changed: number;
+      try {
+        changed = db.run(String(row.stmt));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!CONSTRAINT.test(message)) throw err;
+        throw new Error(CHANGED_SINCE);
+      }
+      if (changed !== 1) throw new Error(CHANGED_SINCE);
     }
     db.all("DELETE FROM audit_events WHERE id > ? RETURNING id", [audit]);
     return { from: start, to: head(db) };

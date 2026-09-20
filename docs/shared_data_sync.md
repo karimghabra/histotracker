@@ -38,6 +38,13 @@ Both swap a DB *file* under the live connection, and `tauri-plugin-sql` only run
 Undo/redo no longer swap files: they replay the undo journal inside the live database (`src/lib/undoJournal.ts`), which rides in the file as the `undo_journal` table and its triggers, created at runtime with no numbered migration.
 A swap therefore clears Undo and Redo: the swapped-in file brings its own journal, so a mark from the old one means nothing in it.
 
+**Compatibility with the release in use, stated plainly.**
+The journal adds no numbered migration and no column to any lab table, so the release in use opens, reads and writes every database this build writes, and a backup or a snapshot moves between them as before.
+The asymmetry is the journal itself.
+Its triggers are persistent and live in the file, so a workstation rolled back to the release in use keeps appending an inverse row on every write, and that build has nothing that trims them: this build bounds the journal by age and count at open (`journalTrimStatements`, `src/lib/undoJournal.ts`), and the older one does not.
+The file therefore grows for as long as the lab stays rolled back, and every backup and published snapshot carries that growth, until a build that trims comes forward again and the next open brings it back inside the bound.
+Nothing is lost or corrupted by it; it costs space.
+
 The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
 `getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
 So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, goes live through one swap-in, `swapInImageFromElsewhere()` (`src/lib/db.ts`), so the two cannot drift apart.

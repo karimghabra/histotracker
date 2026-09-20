@@ -31,6 +31,21 @@ const block = (l: Lab, id?: number): Row =>
 const requests = (l: Lab): Row[] => l.rows(`SELECT uuid, status FROM stain_requests`);
 const assays = (l: Lab): Row[] => l.rows(`SELECT id, assay_type, name FROM assay_catalog ORDER BY id`);
 
+/** What the New Sample dialog hands to createSamples. */
+const newSampleInput = (projectId: number, description: string) => ({
+  project_id: projectId,
+  sample_description: description,
+  processing_type: "Short",
+  fixative_agent: "Z-Fix",
+  needs_decalcification: false,
+  cut_notes: "",
+  slide_notes: "",
+  embedding_notes: "",
+  stains: "",
+  preselected_stains: [],
+  overall_notes: "",
+});
+
 /** A viewer asks for a stain on `id`, which lands in the inbox and nowhere else yet. */
 async function requestAStainOn(l: Lab, id: number): Promise<void> {
   await l.app.sync.submitRequest({
@@ -217,4 +232,49 @@ it("a redo the drain has overtaken is skipped, and is not offered again", async 
 
   expect(await actions.redo(), "the step that cannot run is no longer offered").toBeNull();
   expect(String(refusal)).toMatch(/^Could not redo "Edit EE-1 description": .*has been skipped\.$/);
+});
+
+it("a redo whose row has had its code taken is skipped too, and is not offered again", async () => {
+  lab = await openLab();
+  const l = lab;
+  const actions = await appActions();
+  const project = l.rows(`SELECT id FROM projects WHERE code = 'EE'`)[0].id as number;
+
+  await actions.createSamples(newSampleInput(project, "FIRST"), "EE", 1);
+  const created = block(l);
+  expect(await actions.undo()).toBe("Create sample");
+  expect(l.rows(`SELECT id FROM samples`), "the block is gone").toHaveLength(0);
+
+  // Somebody enters a block by hand, and it takes the code the undone one had.
+  await l.db.addSample(newSampleInput(project, "SECOND"), "EE");
+  const entered = block(l);
+  expect(entered.sample_code).toBe(created.sample_code);
+
+  // Putting the first block back is impossible, not merely awkward: its code is taken.
+  const refusal = await pressed(actions.redo());
+
+  expect(block(l), "nothing was changed").toEqual(entered);
+  expect(await actions.redo(), "the step that cannot run is no longer offered").toBeNull();
+  expect(String(refusal)).toMatch(/^Could not redo "Create sample": .*has been skipped\.$/);
+});
+
+it("a replay that fails for any other reason keeps its step, and says to try again", async () => {
+  lab = await openLab();
+  const l = lab;
+  const id = await l.sample("DESC-0", "embedded");
+  const actions = await appActions();
+
+  const mark: number = await l.db.journalHead();
+  await actions.editSampleDescription(id, "DESC-B");
+  // A journal row that cannot run at all. Nothing has taken anything's place, so
+  // this is not a refusal: it may well work next time.
+  const db = await l.db.getDb();
+  await db.execute(`UPDATE undo_journal SET stmt = 'UPDATE no_such_table SET x = 1' WHERE seq = ?`, [mark + 1]);
+
+  const refusal = await pressed(actions.undo());
+
+  expect(block(l).sample_description, "nothing was changed").toBe("DESC-B");
+  expect(String(refusal)).toMatch(/^Could not undo "Edit EE-1 description" just now: .*you can try again\.$/);
+  // The step is still there, so pressing Undo again meets the same step, not the one before it.
+  expect(String(await pressed(actions.undo()))).toMatch(/^Could not undo "Edit EE-1 description" just now: /);
 });
