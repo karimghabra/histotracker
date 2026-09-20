@@ -73,11 +73,14 @@ export const JOURNAL_TABLE_SQL =
  * row count says little about the payload. Five megabytes is the ceiling: a
  * fraction of a lab-sized database (about 23 MB), and far more journal than the
  * hundred-step stack can reach in ordinary use, where `pruneJournal` keeps it
- * near the live stack anyway. The row count and the age are secondary guards,
- * for a journal that is small in bytes and long in rows or in days.
+ * near the live stack anyway.
+ *
+ * The age bound is the second half of it, and it is a retention window rather
+ * than a size one: a deleted row's contents sit in its own inverse until the
+ * journal forgets it, and the journal travels wherever the file travels
+ * (docs/shared_data_sync.md 1a).
  */
 const KEEP_BYTES = 5 * 1024 * 1024;
-const KEEP_ROWS = 20_000;
 const KEEP_DAYS = 14;
 
 /**
@@ -98,7 +101,6 @@ export function journalTrimStatements(): string[] {
     `DELETE FROM undo_journal WHERE at < datetime('now', '-${KEEP_DAYS} days')`,
     `DELETE FROM undo_journal WHERE seq NOT IN (` +
       `SELECT seq FROM (SELECT seq, ${newer} AS newer FROM undo_journal) WHERE newer < ${KEEP_BYTES})`,
-    `DELETE FROM undo_journal WHERE seq NOT IN (SELECT seq FROM undo_journal ORDER BY seq DESC LIMIT ${KEEP_ROWS})`,
   ];
 }
 

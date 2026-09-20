@@ -1,11 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
-import { ensureChecklist, journalHead, listChecklistItems, setChecklistItemComplete } from "../lib/db";
+import {
+  ensureChecklist,
+  journalHead,
+  listChecklistItems,
+  pruneJournal,
+  setChecklistItemComplete,
+} from "../lib/db";
 import { inLane } from "../lib/writeLane";
 import { useActiveUser } from "../hooks/useData";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
-import { useUndoStore } from "../lib/undo";
+import { oldestMark, useUndoStore } from "../lib/undo";
 import { cn } from "../lib/utils";
 
 export function ProtocolChecklist({
@@ -96,6 +102,10 @@ export function ProtocolChecklist({
             mark: before,
             end: await journalHead(),
           });
+          // Housekeeping, exactly as commit() does it: a step ticked on a bench
+          // shift is the only undoable write outside useActions, and without
+          // this the journal keeps whatever the dropped entries left behind.
+          await pruneJournal(oldestMark()).catch(() => undefined);
         }
       });
     } catch (err) {

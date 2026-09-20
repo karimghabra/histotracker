@@ -3,7 +3,8 @@
 // Every journaled change writes an inverse row, and those rows live inside the database file, so
 // they ride in every backup and in every snapshot the workstation publishes. What that costs is
 // BYTES, and a row can be a hundred bytes or several kilobytes, so the journal is trimmed at open
-// to a five-megabyte ceiling, with a row count and an age as secondary guards. It is trimmed at the
+// to a five-megabyte ceiling. A fortnight is the other bound, and that one is a retention window:
+// a deleted row's contents sit in its inverse until the journal forgets it. It is trimmed at the
 // one moment nothing can be relying on a row: the undo stack is empty until the saved history is
 // hydrated, and that is anchored to the journal's ends. On the real db.ts, a real SQLite file,
 // relaunched the way the app relaunches.
@@ -55,26 +56,6 @@ it("forgets journal rows older than the age bound, and keeps the recent ones", a
   expect(left.length, "and this week's rows are untouched").toBe(recent);
 });
 
-it("keeps only the newest rows once the journal outgrows the count bound", async () => {
-  const lab = await openLab();
-  running = lab.app;
-  await lab.sample("a block", "in_ethanol");
-  const db = await lab.db.getDb();
-  // One heavy week: more rows than the bound keeps, all of them recent.
-  await db.execute(
-    `WITH RECURSIVE counted(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counted WHERE n < 20100)
-     INSERT INTO undo_journal(stmt) SELECT 'bulk ' || n FROM counted`,
-  );
-  expect(journal(lab).length).toBeGreaterThan(20_100);
-
-  await relaunch(lab);
-
-  const left = journal(lab).map((r) => String(r.stmt));
-  expect(left.length, "trimmed to the bound").toBe(20_000);
-  expect(left.at(-1), "the newest row survives").toBe("bulk 20100");
-  expect(left.includes("bulk 1"), "the oldest rows are the ones forgotten").toBe(false);
-});
-
 it("leaves a journal inside the bound exactly as it is", async () => {
   const lab = await openLab();
   running = lab.app;
@@ -87,18 +68,17 @@ it("leaves a journal inside the bound exactly as it is", async () => {
   expect(journal(lab), "every row an undo could still need is still there").toEqual(before);
 });
 
-it("keeps only as much journal as the byte ceiling allows, whatever the row count", async () => {
+it("keeps only as much journal as the byte ceiling allows", async () => {
   const lab = await openLab();
   running = lab.app;
   await lab.sample("a block", "in_ethanol");
   const db = await lab.db.getDb();
-  // Seven megabytes in seven hundred rows: far inside the row guard, far past the ceiling.
+  // Seven megabytes in seven hundred rows, every one of them written today.
   await db.execute(
     `WITH RECURSIVE counted(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counted WHERE n < 700)
      INSERT INTO undo_journal(stmt) SELECT 'heavy ' || n || ' ' || hex(zeroblob(5000)) FROM counted`,
   );
   expect(bytes(lab)).toBeGreaterThan(6 * 1024 * 1024);
-  expect(rows(lab), "the row guard has nothing to say about this journal").toBeLessThan(20_000);
 
   await relaunch(lab);
 
