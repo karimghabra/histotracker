@@ -73,4 +73,22 @@ it("a stain request refuses an uncut extra refiled onto the block", async () => 
     inventory.some((slide) => slide.id === planned.id),
     "the extras inventory does not list an uncut slide",
   ).toBe(false);
+
+  // And the mutation that racks a slide refuses it on its own: the list it is
+  // normally reached from is not the only thing keeping it off a stainer.
+  await lab.db.addAssay({ assay_type: "stain", name: "PAS" }).catch(() => undefined);
+  await expect(
+    lab.db.assignExtraSlideToAssay({
+      slideId: planned.id,
+      assayType: "stain",
+      assayName: "PAS",
+    }),
+  ).rejects.toThrow(/no cut date/);
+  expect(
+    lab.rows(`SELECT stack_id FROM slides WHERE id = ?`, [planned.id])[0].stack_id,
+    "the refused slide is left out of every rack",
+  ).toBeNull();
+  expect(rackedButNeverCut(lab).join("; ") || "none", "the racks still hold only real glass").toBe(
+    "none",
+  );
 });

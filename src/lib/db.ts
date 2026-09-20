@@ -4017,11 +4017,12 @@ export async function requestStainForSample(input: {
     // The stage filter alone is a PROXY for "this glass exists", and a proxy the
     // record can outrun: a slide keeps its own stamps when it moves between
     // groups, so an uncut extra refiled onto another block (relabelSlideToSample)
-    // lands in one of that block's groups, and a cut group retired under the
-    // slide (removeSectionRequest, which #144's exhaust-cancels-the-waiting-cut
-    // now reaches) leaves it in a group at 'removed'. Both read as "past the
-    // queue" while no blade ever touched the block, and this pulled the slide
-    // into a rack with no cut date - a record of glass that does not exist.
+    // lands in one of that block's groups and reads off ITS stage. Any group past
+    // the queue will do, a retired one ('removed') included, so the refile is the
+    // route; removeSectionRequest cannot make one on its own, since it removes
+    // every live slide before marking the group removed. Either way the row reads
+    // "past the queue" while no blade ever touched the block, and this pulled the
+    // slide into a rack with no cut date - a record of glass that does not exist.
     // So the cut stamp is required too, which is the rule addSlideToSection and
     // reassignSlide already state: the stamp is what says a blade touched the
     // block (#95), and the stage filter stays for the rows older builds stamped
@@ -4236,8 +4237,9 @@ export async function assignExtraSlideToAssay(input: {
     sample_id: number;
     slide_code: string;
     section_request_id: number;
+    stage_cut_at: string | null;
   }>>(
-    `SELECT sr.sample_id, sl.slide_code, sl.section_request_id
+    `SELECT sr.sample_id, sl.slide_code, sl.section_request_id, sl.stage_cut_at
        FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`,
     [input.slideId],
@@ -4245,6 +4247,17 @@ export async function assignExtraSlideToAssay(input: {
   const slide = rows[0];
   if (!slide) throw new Error("That extra slide is no longer available.");
   await refuseIfGroupNotCut(db, slide.section_request_id, "stained");
+  // The cut stamp is the slide's own, and it is what says a blade took this
+  // section (#95). The group's stage above is a proxy the slide can outrun by
+  // moving between groups (#182), so the rule is stated here too, at the
+  // mutation that puts the slide in a rack rather than only in the list it is
+  // offered from.
+  if (slide.stage_cut_at === null) {
+    throw new Error(
+      `${slide.slide_code} has no cut date, so there is no glass to stain. ` +
+        `Cut its block first.`,
+    );
+  }
   const catalog = await db.select<Array<{ id: number }>>(
     `SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`,
     [input.assayType, assayName],

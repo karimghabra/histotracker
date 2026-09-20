@@ -1187,8 +1187,8 @@ function makeApi(db) {
       // queue, and the plan is not the cut (#95/#118). Without it this pulled
       // uncut glass straight into a staining rack — found by the v2 fuzzer.
       // The cut stamp is required with it (#182): the group's stage says nothing
-      // about a slide that was refiled into that group, or left in it when the
-      // group was retired underneath it. See db.ts.
+      // about a slide that was refiled into that group, which carries its own
+      // stamps and reads off whatever stage it lands beside. See db.ts.
       `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
           AND sl.stage_cut_at IS NOT NULL
@@ -1238,12 +1238,15 @@ function makeApi(db) {
   function assignExtraSlideToAssay(slideId, assayType, assayName) {
     const ts = now();
     const slide = get(
-      `SELECT sl.section_request_id, sr.sample_id, sl.slide_code, sr.current_stage AS group_stage
+      `SELECT sl.section_request_id, sr.sample_id, sl.slide_code, sl.stage_cut_at,
+              sr.current_stage AS group_stage
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [slideId]);
     if (!slide) throw new Error("That extra slide is no longer available.");
     // refuseIfGroupNotCut(): a group still in Needs Sectioning is a plan, not glass (#139).
     if (slide.group_stage === "needs_sectioning") throw new Error("still waiting to be cut");
+    // The slide's own cut stamp, which the group's stage only proxies (#182).
+    if (slide.stage_cut_at === null) throw new Error("has no cut date, so there is no glass to stain");
     const cat = get(`SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`, [assayType, assayName]);
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
@@ -1884,14 +1887,15 @@ invariant("a requested stain pulls from an extra first, else flags the block (#2
   eq(api.requestStainForSample(id, "stain", "PAS").target, "block", "no extras left → the block is flagged");
 });
 
-// #182 — a stain request must never pull glass that was never cut.
+// #182 — no route may put glass that was never cut into a staining rack.
 //
 // The extras query filtered on the GROUP's stage, which is only a proxy for "a
 // blade touched this block". A slide carries its own stamps between groups, so
 // refiling an uncut extra onto another block drops it into one of that block's
 // groups — and if that group is past the queue, the proxy says cut. The stress
 // fuzzer then found it in a staining rack with no cut date: a record of glass
-// that does not exist. The cut stamp is the fact; the stage is not.
+// that does not exist. The cut stamp is the fact; the stage is not, so both
+// rack entrances read the stamp: the stain request, and assignExtraSlideToAssay.
 issue(182, "a stain request does not pull an uncut extra refiled onto the block", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
@@ -1930,6 +1934,17 @@ issue(182, "a stain request does not pull an uncut extra refiled onto the block"
      "no slide sits in a staining rack before it was cut");
   eq(api.listExtraSlides().some((sl) => sl.id === planned.id), false,
      "nor does it show in the extras inventory as glass on the bench");
+
+  // And the mutation that racks a slide refuses it on its own, so the list it is
+  // normally offered from is not the only thing holding the line.
+  let racked = false;
+  try {
+    api.assignExtraSlideToAssay(planned.id, "stain", "PAS");
+    racked = true;
+  } catch { /* desired: no cut date, no glass */ }
+  eq(racked, false, "assigning the uncut extra to an agent is refused outright");
+  eq(api.get(`SELECT stack_id AS rack FROM slides WHERE id = ?`, [planned.id]).rack, null,
+     "and it is left out of every rack");
 });
 
 // #34/#38 — pre-assigned slides skip a separate assignment step: a section cut
