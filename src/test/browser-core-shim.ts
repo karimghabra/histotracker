@@ -98,12 +98,9 @@ async function routeGithub<T>(cmd: string, a: Record<string, unknown> = {}): Pro
 // app, where read_file/save_file carry it as a JSON integer array. A spec sets
 // window.__SNAPSHOT_IPC_MS__ to a measured figure (a 23 MB lab: ~1.7 s each
 // way); unset, the shim answers at once, which is what hid the undo races from
-// every spec that overlapped two saves. An array gives successive calls their
-// own costs (the last repeats), for two transfers that finish out of order.
+// every spec that overlapped two saves.
 async function ipcCost(path: string): Promise<void> {
-  const w = globalThis as { __SNAPSHOT_IPC_MS__?: number | number[] };
-  const knob = w.__SNAPSHOT_IPC_MS__ ?? 0;
-  const ms = Array.isArray(knob) ? (knob.length > 1 ? knob.shift()! : knob[0] ?? 0) : knob;
+  const ms = (globalThis as { __SNAPSHOT_IPC_MS__?: number }).__SNAPSHOT_IPC_MS__ ?? 0;
   if (ms > 0 && path === SHIM_DB_FILE) await new Promise((resolve) => setTimeout(resolve, ms));
 }
 

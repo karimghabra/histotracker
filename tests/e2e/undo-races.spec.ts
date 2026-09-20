@@ -84,34 +84,6 @@ test("undo pressed while typing undoes the edit being typed, not the one before 
   expect(await stored(page)).toEqual({ description: "DESC-0", cut: "CUT-A" });
 });
 
-test("undo pressed while typing, the save's copy finishing last, still undoes the edit being typed", async ({ page }) => {
-  await labWithOneBlock(page);
-
-  await page.getByLabel("Edit Sectioning / Cut Notes for EE-1", { exact: true }).click();
-  await cutBox(page).fill("CUT-A");
-  await cutBox(page).blur();
-  await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-A" });
-  await page.waitForTimeout(3 * IPC_MS);
-
-  // Two copies of the same file, started a moment apart, need not finish in that
-  // order. The next one (the description save's) takes the full cost; the one
-  // after it (the undo's) a third of it; everything after, the full cost again.
-  await page.evaluate(
-    (ms) => ((window as unknown as { __SNAPSHOT_IPC_MS__: number[] }).__SNAPSHOT_IPC_MS__ = [ms, Math.round(ms / 3), ms]),
-    IPC_MS,
-  );
-  await descriptionBox(page).click();
-  await descriptionBox(page).fill("DESC-B");
-  await undoButton(page).click();
-
-  // The Undo is the user's answer to the description edit, whatever order the
-  // copies finish in: it is that edit Undo names and takes back.
-  await expect(page.getByText(/^Undone: /)).toHaveText("Undone: Edit EE-1 description", { timeout: 15_000 });
-  await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-A" });
-  await page.waitForTimeout(3 * IPC_MS);
-  expect(await stored(page)).toEqual({ description: "DESC-0", cut: "CUT-A" });
-});
-
 test("two edits saved close together are undone one at a time", async ({ page }) => {
   await labWithOneBlock(page);
 

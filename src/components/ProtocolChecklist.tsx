@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
-import { ensureChecklist, journalHead, setChecklistItemComplete } from "../lib/db";
+import { ensureChecklist, journalHead, listChecklistItems, setChecklistItemComplete } from "../lib/db";
 import { inLane } from "../lib/writeLane";
 import { useActiveUser } from "../hooks/useData";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
@@ -30,10 +30,16 @@ export function ProtocolChecklist({
   const { data: items = [] } = useQuery({
     queryKey,
     // Reading it CREATES it the first time a scope is drawn: one checklist_runs
-    // row and one checklist_items row per label, both journaled. So it goes in
-    // the write lane like every other journaled write, or those inserts could
-    // land inside an unrelated action's undo entry and be taken back with it.
-    queryFn: () => inLane(() => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels })),
+    // row and one checklist_items row per label, both journaled. Only that
+    // creation belongs in the write lane, or those inserts could land inside an
+    // unrelated action's undo entry and be taken back with it. Every later read
+    // is a read, and stays out of the lane rather than queueing behind whatever
+    // is being written elsewhere on the board.
+    queryFn: async () => {
+      const drawn = await listChecklistItems(scopeType, scopeId, stageKey);
+      if (drawn.length > 0) return drawn;
+      return inLane(() => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels }));
+    },
   });
   // The operator IS the signed-in user (#127).
   //

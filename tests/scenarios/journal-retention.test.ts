@@ -102,7 +102,10 @@ it("keeps only as much journal as the byte ceiling allows, whatever the row coun
 
   await relaunch(lab);
 
-  expect(bytes(lab), "trimmed to the ceiling").toBeLessThanOrEqual(CEILING);
+  const widest = Number(lab.rows(`SELECT MAX(LENGTH(CAST(stmt AS BLOB))) AS n FROM undo_journal`)[0].n);
+  expect(bytes(lab), "trimmed to the ceiling, give or take the row that straddles it").toBeLessThanOrEqual(
+    CEILING + widest,
+  );
   expect(bytes(lab), "and not past it, so the newest journal is kept").toBeGreaterThan(CEILING / 2);
   expect(
     lab.rows(`SELECT substr(stmt, 1, 10) AS head FROM undo_journal ORDER BY seq DESC LIMIT 1`)[0].head,
@@ -112,4 +115,23 @@ it("keeps only as much journal as the byte ceiling allows, whatever the row coun
     Number(lab.rows(`SELECT COUNT(*) AS n FROM undo_journal WHERE stmt LIKE 'heavy 1 %'`)[0].n),
     "and the oldest are the ones forgotten",
   ).toBe(0);
+});
+
+it("keeps the newest row even when it alone is past the ceiling, rather than emptying the journal", async () => {
+  const lab = await openLab();
+  running = lab.app;
+  await lab.sample("a block", "in_ethanol");
+  expect(rows(lab)).toBeGreaterThan(0);
+  const db = await lab.db.getDb();
+  // One row of six megabytes: nothing at the bench writes this, but the bound
+  // must give way one row at a time rather than all at once.
+  await db.execute(`INSERT INTO undo_journal(stmt) VALUES ('giant ' || hex(zeroblob(3000000)))`);
+
+  await relaunch(lab);
+
+  expect(rows(lab), "the journal is not emptied").toBe(1);
+  expect(
+    lab.rows(`SELECT substr(stmt, 1, 6) AS head FROM undo_journal`)[0].head,
+    "and what survives is the newest row",
+  ).toBe("giant ");
 });

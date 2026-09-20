@@ -89,11 +89,15 @@ const KEEP_DAYS = 14;
  * (undoPersist.ts). A replay is never left with part of its range.
  */
 export function journalTrimStatements(): string[] {
-  const running = `SUM(LENGTH(CAST(stmt AS BLOB))) OVER (ORDER BY seq DESC)`;
+  const size = `LENGTH(CAST(stmt AS BLOB))`;
+  // What lies NEWER than each row, the row itself excluded, so the newest row is
+  // always kept: a single row past the ceiling then costs the rest of the journal,
+  // not the journal and itself with it.
+  const newer = `SUM(${size}) OVER (ORDER BY seq DESC) - ${size}`;
   return [
     `DELETE FROM undo_journal WHERE at < datetime('now', '-${KEEP_DAYS} days')`,
     `DELETE FROM undo_journal WHERE seq NOT IN (` +
-      `SELECT seq FROM (SELECT seq, ${running} AS bytes FROM undo_journal) WHERE bytes <= ${KEEP_BYTES})`,
+      `SELECT seq FROM (SELECT seq, ${newer} AS newer FROM undo_journal) WHERE newer < ${KEEP_BYTES})`,
     `DELETE FROM undo_journal WHERE seq NOT IN (SELECT seq FROM undo_journal ORDER BY seq DESC LIMIT ${KEEP_ROWS})`,
   ];
 }
