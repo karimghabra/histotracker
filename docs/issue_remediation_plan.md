@@ -661,11 +661,10 @@ it is no longer read-back but an editor: all four of a sample's notes are
 correctable there, through `SAMPLE_NOTES` (`src/lib/sampleNotes.ts`) and the
 single-column `setSampleNote`, which is the same shape #79 settled on for the
 description.
-Undo replays the undo journal (`src/lib/undoJournal.ts`), which journals every
-column of every lab table, so undoing an edit takes the note back with
-everything else the action wrote. (On master before the 0.18.0 reconciliation
-it was also listed in `RESTORE_COLUMNS`, which the release line had already
-deleted as unused; see `docs/release_line_reconciliation.md`.)
+Undo restores whole database images, so undoing an edit restores the note with
+everything else. (On master before the 0.18.0 reconciliation it was also listed
+in `RESTORE_COLUMNS`, which the release line had already deleted as unused;
+see `docs/release_line_reconciliation.md`.)
 
 **Coverage:** `npm run test:legacy` asserts the column DIRECTLY on the populated
 pre-0023 fixture, by every route an update arrives — launch, a swapped-in image,
@@ -1146,9 +1145,8 @@ observed failing with the fix removed (`node scripts/revert-verify.mjs <case>`).
   *Root cause:* `createSectionRequests` stamped `stage_cut_at` at INSERT, which
   is when the group is *created* and dropped into Needs Sectioning. This is also
   the whole of the original report ("sectioned, undone, redone — it still shows
-  as cut"): undo/redo (a whole-DB-image swap then, a journal replay today) was
-  never broken, but the stamp predated the action being undone, so no amount of
-  rewinding could clear it.
+  as cut"): undo/redo swaps whole DB images and was never broken, but the stamp
+  predated the action being undone, so no amount of rewinding could clear it.
   *Fix:* three parts. The INSERT no longer stamps. `updateSectionStage` stamps
   once, for **any** stage past `needs_sectioning` — two specific destinations
   used to stamp it individually and a group dragged straight to Ready for
@@ -1318,8 +1316,8 @@ Second pass — the remaining eight, all now fixed:
   not "never initialised" — legacy rows still carry the column's
   `NOT NULL DEFAULT 1` and initialise as before. Recomputed rather than
   decremented so a database that already drifted self-corrects. Undo is
-  unaffected: the removal's own journal range is replayed, so `duplicates`
-  returns with the slides. Gate: `issue #83`, observed failing without the fix.
+  unaffected: it restores a whole DB image, so `duplicates` returns with the
+  slides. Gate: `issue #83`, observed failing without the fix.
 
   That fix on its own traded a resurrecting group for a dead one — an emptied
   group has no `HAVING` clause hiding it, so it sat in Needs Sectioning as "×0".

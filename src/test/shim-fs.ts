@@ -1,8 +1,8 @@
 // A tiny virtual filesystem for the browser test shims. It maps a path to raw
 // bytes, persisted in localStorage so state survives reloads.
 //
-// This is what makes the real image code paths (backups, revert, sync) testable
-// in a plain browser: the SQL shim persists the sql.js database under a fixed file
+// This is what makes the real image-based undo/redo code path testable in a
+// plain browser: the SQL shim persists the sql.js database under a fixed file
 // path here, and the core shim's `read_file`/`save_file` operate on that SAME
 // path — so db.ts's snapshotDb()/restoreDb() (checkpoint → read_file → bytes;
 // resetDb → save_file → reopen) run completely unmodified in Chromium, against

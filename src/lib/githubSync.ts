@@ -14,7 +14,6 @@ import {
 import { buildStatusWorkbookBytes } from "./export";
 import { getSyncConfig, setLastSyncedVersion } from "./syncConfig";
 import { nowTimestamp } from "./utils";
-import { inLane } from "./writeLane";
 
 // Fixed layout in the shared private data repo.
 export const RELEASE_TAG = "snapshot-latest";
@@ -390,12 +389,6 @@ export interface DrainResult {
  * whoever is signed in, so done signed out it would put "Unsigned" into the
  * record for good (#128). The files stay in the inbox as their own pending
  * marker and are drained by the first cycle after someone signs in.
- *
- * This runs on the workstation's sync timer, while a technician is working, so
- * ingesting one request takes its place in the write lane (writeLane.ts) like an
- * action: a write that went around the lane could land between an action and the
- * journal mark it is recorded under, and be undone as part of it. The GitHub
- * calls stay outside the lane, which holds no one up for the network.
  */
 export async function drainRequests(): Promise<DrainResult> {
   const entries = (await githubListDir(REQUESTS_DIR)).filter((e) => e.name.endsWith(".json"));
@@ -413,17 +406,17 @@ export async function drainRequests(): Promise<DrainResult> {
       // Skip a malformed file rather than deleting data we couldn't read.
       continue;
     }
-    const isNew = await inLane(async () => {
-      const fresh = await insertStainRequest({
-        uuid: payload.uuid || entry.name.replace(/\.json$/, ""),
-        sample_code: payload.sample_code ?? "",
-        slide_code: payload.slide_code ?? "",
-        requested_assay: payload.requested_assay ?? "",
-        requester_name: payload.requester_name ?? "",
-        note: payload.note ?? "",
-        created_at: payload.created_at || nowTimestamp(),
-      });
-      if (!fresh) return false;
+    const isNew = await insertStainRequest({
+      uuid: payload.uuid || entry.name.replace(/\.json$/, ""),
+      sample_code: payload.sample_code ?? "",
+      slide_code: payload.slide_code ?? "",
+      requested_assay: payload.requested_assay ?? "",
+      requester_name: payload.requester_name ?? "",
+      note: payload.note ?? "",
+      created_at: payload.created_at || nowTimestamp(),
+    });
+    if (isNew) {
+      ingested += 1;
       // Raise the SAME formal stain request the workstation's own bench UI does:
       // add it to the block's preselected stains (⚑ needs stain, prefilled cut)
       // or pull an available extra into staining.
@@ -441,9 +434,7 @@ export async function drainRequests(): Promise<DrainResult> {
         await rejectStainRequestByUuid(payload.uuid || entry.name.replace(/\.json$/, ""), reason)
           .catch(() => undefined);
       }
-      return true;
-    });
-    if (isNew) ingested += 1;
+    }
     await githubDeleteFile(entry.path, file.sha, `Ingest request ${payload.uuid ?? entry.name}`);
   }
   return { ingested, waiting: 0 };

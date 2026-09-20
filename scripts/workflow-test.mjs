@@ -29,8 +29,6 @@ import { DatabaseSync } from "node:sqlite";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { journalInstallStatements } from "../src/lib/undoJournal.ts";
-import { executeBatch, revertJournal as revertJournalCommand } from "../src/test/undoJournalCommands.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(HERE, "..", "src-tauri", "migrations");
@@ -161,16 +159,6 @@ function freshDb() {
   convergeRuntimeColumns(db);
   return db;
 }
-
-/**
- * The statements getDb() runs to journal a fresh database for undo, from the
- * app's own generator (src/lib/undoJournal.ts), worked out once: every fresh
- * database here has the same schema.
- */
-const JOURNAL_INSTALL = await (() => {
-  const probe = freshDb();
-  return journalInstallStatements({ select: async (sql, params = []) => probe.prepare(sql).all(...params) });
-})();
 
 // A thin wrapper so the ported helpers read like db.ts.
 function makeApi(db) {
@@ -1282,35 +1270,53 @@ function makeApi(db) {
         ORDER BY sl.id`);
   }
 
-  // Port of the undo journal: the triggers getDb() installs (src/lib/undoJournal.ts,
-  // imported, not retyped) and the two Rust commands (src-tauri/src/undo_journal.rs,
-  // through their harness model src/test/undoJournalCommands.ts). An undo entry is
-  // journalHead() either side of the action; undo is revertJournal of that range,
-  // which returns the range { from, to } it wrote: the redo.
-  const journal = {
-    exec: (sql) => db.exec(sql),
-    run: (sql) => Number(run(sql).changes),
-    all: (sql, params = []) => all(sql, params),
-  };
-  function installJournal() {
-    executeBatch(journal, JOURNAL_INSTALL);
+  // Ports of snapshotDb()/restoreDb() — src/lib/db.ts. Logical whole-DB undo:
+  // capture every workflow table through the connection (WAL-safe) and restore
+  // in FK-dependency order.
+  const SNAPSHOT_EXCLUDE = new Set(["_sqlx_migrations", "sqlite_sequence", "app_settings", "audit_events"]);
+  function snapshotTableOrder() {
+    const names = all(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+      .map((r) => r.name).filter((n) => !SNAPSHOT_EXCLUDE.has(n));
+    const nameSet = new Set(names);
+    const parents = new Map();
+    for (const name of names) {
+      const set = new Set();
+      for (const fk of all(`PRAGMA foreign_key_list("${name}")`)) {
+        if (fk.table !== name && nameSet.has(fk.table)) set.add(fk.table);
+      }
+      parents.set(name, set);
+    }
+    const order = [], seen = new Set(), visiting = new Set();
+    const visit = (n) => {
+      if (seen.has(n) || visiting.has(n)) return;
+      visiting.add(n);
+      for (const p of parents.get(n) ?? []) visit(p);
+      visiting.delete(n);
+      seen.add(n);
+      order.push(n);
+    };
+    for (const n of names) visit(n);
+    return order;
   }
-  function journalHead() {
-    // The AUTOINCREMENT high-water mark, not MAX(seq), exactly as db.ts reads it:
-    // after a prune has emptied the journal, MAX(seq) is 0 and every later row
-    // would look like it lay after a mark taken before them.
-    return get(`SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0) AS head`).head;
+  function snapshotDb() {
+    const order = snapshotTableOrder();
+    const tables = {};
+    for (const name of order) {
+      const columns = all(`PRAGMA table_info("${name}")`).map((c) => c.name);
+      const rows = all(`SELECT * FROM "${name}"`);
+      tables[name] = { columns, rows: rows.map((r) => columns.map((c) => r[c] ?? null)) };
+    }
+    return { order, tables };
   }
-  function revertJournal(from, to) {
-    return revertJournalCommand(journal, from, to);
-  }
-  /** Every table undo restores, row for row: all but the session, bookkeeping and journal. */
-  function dumpUndoable() {
-    const skip = new Set(["undo_journal", "sqlite_sequence", "users", "app_settings", "_sqlx_migrations", "schema_meta"]);
-    const names = all(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).map((r) => r.name);
-    return JSON.stringify(
-      names.filter((n) => !skip.has(n)).map((n) => [n, all(`SELECT rowid AS __rowid, * FROM "${n}" ORDER BY rowid`)]),
-    );
+  function restoreDb(snap) {
+    for (const name of [...snap.order].reverse()) run(`DELETE FROM "${name}"`);
+    for (const name of snap.order) {
+      const t = snap.tables[name];
+      if (!t || !t.rows.length) continue;
+      const cols = t.columns.map((c) => `"${c}"`).join(", ");
+      const ph = t.columns.map(() => "?").join(", ");
+      for (const row of t.rows) run(`INSERT INTO "${name}" (${cols}) VALUES (${ph})`, row);
+    }
   }
 
   // Port of syncAssayWorkflowStep() step 0 — src/lib/db.ts. This is the SECOND
@@ -1531,7 +1537,7 @@ function makeApi(db) {
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
-    requestStainForSample, installJournal, journalHead, revertJournal, dumpUndoable,
+    requestStainForSample, snapshotDb, restoreDb,
     setSampleNote,
   };
 }
@@ -2016,8 +2022,8 @@ issue(91, "a block that is already embedded cannot be added to a run", () => {
 // sectioned!"
 //
 // This is also the whole of the original report ("sectioned, undone, redone —
-// the slide shows as cut"): undo/redo replays the action's journal range and was
-// never broken, but the cut stamp was written when the group was CREATED, so it
+// the slide shows as cut"): undo/redo swaps whole DB images and was never
+// broken, but the cut stamp was written when the group was CREATED, so it
 // predated the thing being undone and no amount of rewinding could clear it.
 issue(95, "a slide is stamped cut when its group leaves Needs Sectioning, not before", () => {
   const api = makeApi(freshDb());
@@ -2298,34 +2304,13 @@ issue(115, "a slide can be moved to another agent, or back to extras", () => {
 // #31 — undoing a move into Ready for Imaging must remove the scattered per-sample
 // stack. The fix captures the resulting stacks from the moved slides' current
 // stack_id (a scattered rack is deleted, so its id can't be relied on).
-issue(31, "undo/redo of an imaging move leave no ghost or duplicate tile", () => {
-  // A stain rack moving on to imaging scatters into fresh per-sample stacks and is
-  // itself deleted. The old per-row undo could not track the minted stacks and
-  // stranded a tile. Undo replays the journal, which recorded every one of those
-  // rows as it changed, so the racks come back exactly and the minted ones go.
-  const api = makeApi(freshDb());
-  api.installJournal();
-  const p = api.seedProject();
-  const s1 = api.addSample(p, "EE", "one", { preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }] });
-  const s2 = api.addSample(p, "EE", "two", { preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }] });
-  for (const s of [s1, s2]) {
-    api.markEmbedded(s.id);
-    const plan = JSON.parse(api.get(`SELECT sectioning_plan FROM samples WHERE id = ?`, [s.id]).sectioning_plan);
-    for (const id of api.createSectionRequests(s.id, plan)) api.startAssayWork(id);
-  }
-  const rack = api.get(`SELECT id FROM slide_stacks WHERE kind = 'stain' ORDER BY id LIMIT 1`).id;
-  const beforeMove = api.dumpUndoable();
-  const mark = api.journalHead();
-
-  api.moveSlideStack(rack, "ready_for_imaging");
-  const afterMove = api.dumpUndoable();
-  assert(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE id = ?`, [rack]).c === 0, "the move deletes the rack");
-  assert(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE kind = 'sample'`).c >= 2, "and mints per-sample stacks");
-
-  const redo = api.revertJournal(mark, api.journalHead());
-  eq(api.dumpUndoable(), beforeMove, "undo puts the rack back and removes every stack the move minted");
-  api.revertJournal(redo.from, redo.to);
-  eq(api.dumpUndoable(), afterMove, "redo re-applies the move exactly, with no duplicate tile");
+issue(31, "undo/redo of an imaging move is a whole-DB swap (no ghost tile)", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  // A rack scattering into Ready-for-Imaging mints fresh per-sample stacks; the
+  // old per-row undo couldn't track them and stranded the tile. Restoring the
+  // whole DB puts the pre-move state back exactly, so no tile can linger.
+  assert(actions.includes("restoreDbPreservingSession(entry.snapshot") && actions.includes("commitUndo("),
+    "undo swaps the entire DB back, so scattered imaging stacks are never stranded");
 });
 
 invariant("the needs-staining flag clears once the requested stain is CUT (#1/#2)", () => {
@@ -3304,12 +3289,11 @@ issue(27, "Mark Sectioned advances the selected batch", () => {
     "Mark Sectioned must use the selected section IDs and go straight to staining");
 });
 
-// The real proof of undo: a journal replay must round-trip EXACTLY through a
-// destructive churn (cascade delete + inserts + updates across many tables), with
-// foreign keys enforced (freshDb sets foreign_keys = ON), audit trail included.
-invariant("an undo-journal replay round-trips exactly across every table", () => {
+// The real proof of the undo rework: a logical whole-DB snapshot must round-trip
+// EXACTLY through a destructive churn (cascade delete + inserts + updates across
+// many tables), with foreign keys enforced (freshDb sets foreign_keys = ON).
+invariant("whole-DB snapshot/restore round-trips exactly across every table", () => {
   const api = makeApi(freshDb());
-  api.installJournal();
   const p = api.seedProject();
   const s1 = api.addSample(p, "EE", "one", { preselectedStains: [{ assay_type: "stain", assay_name: "H&E" }] });
   const s2 = api.addSample(p, "EE", "two");
@@ -3321,121 +3305,43 @@ invariant("an undo-journal replay round-trips exactly across every table", () =>
   api.completePreprocessing(s2.id);
   api.startProcessingBatch({ sampleIds: [s2.id], processingType: "Short", startedAt: now() });
 
-  const original = api.dumpUndoable();
-  const mark = api.journalHead();
+  const before = api.snapshotDb();
+  const dump = () => JSON.stringify(
+    before.order.map((t) => api.all(`SELECT * FROM "${t}"`).map((r) => JSON.stringify(r)).sort()),
+  );
+  const original = dump();
 
   // Churn hard: cascade-delete a whole sample tree, mutate another, add a new one.
   api.run(`DELETE FROM samples WHERE id = ?`, [s1.id]); // cascades to sections/slides/stacks
   api.run(`UPDATE samples SET current_stage = 'analyzed' WHERE id = ?`, [s2.id]);
   api.addSample(p, "EE", "three");
-  assert(api.dumpUndoable() !== original, "the churn actually changed the database");
+  assert(dump() !== original, "the churn actually changed the database");
 
-  api.revertJournal(mark, api.journalHead());
-  eq(api.dumpUndoable(), original, "the replay reproduces the exact pre-churn contents of every table");
+  api.restoreDb(before);
+  eq(dump(), original, "restore reproduces the exact pre-churn contents of every table");
 });
 
-issue(28, "undo and redo each restore every table exactly, in one transaction", () => {
-  // Undo is not a per-row closure and not a copy of the file: every change wrote
-  // its inverse into the journal, and a replay undoes all of them together or
-  // none. A replay that fails part way changes nothing.
-  const api = makeApi(freshDb());
-  api.installJournal();
-  const p = api.seedProject();
-  const a = api.addSample(p, "EE", "one");
-  api.markEmbedded(a.id);
-  const before = api.dumpUndoable();
-  const mark = api.journalHead();
-  const [section] = api.createSectionRequests(a.id, [{ depth_um: 100, duplicates: 2 }]);
-  api.sectionToAssignment(section);
-  api.setSampleNote(a.id, "cut_notes", "8 um");
-  const after = api.dumpUndoable();
-
-  const redo = api.revertJournal(mark, api.journalHead());
-  eq(api.dumpUndoable(), before, "undo restores every table");
-  api.revertJournal(redo.from, redo.to);
-  eq(api.dumpUndoable(), after, "redo restores every table");
-
-  // A journal row that cannot run, oldest after the mark so good rows replay first.
-  const undoMark = api.journalHead();
-  api.run(`UPDATE samples SET cut_notes = '10 um' WHERE id = ?`, [a.id]);
-  const edited = api.dumpUndoable();
-  api.run(`UPDATE undo_journal SET stmt = 'UPDATE no_such_table SET x = 1' WHERE seq = ?`, [undoMark + 1]);
-  let refused = false;
-  try {
-    api.revertJournal(undoMark, api.journalHead());
-  } catch {
-    refused = true;
-  }
-  assert(refused, "a replay that meets a bad row is refused");
-  eq(api.dumpUndoable(), edited, "and changes nothing");
-});
-
-// Undo replays one entry's own range of the journal. Replaying everything after
-// its mark instead also replays the rows every earlier undo in a row wrote back:
-// each pair cancels, so the database comes out right, but the journal doubles with
-// every undo and a deep undo storm ran the browser out of memory (stress3's
-// "deep undo storm"). An entry here is the range its action wrote, journalHead()
-// either side of it, as useActions records it; the stack arithmetic itself is the
-// store's, covered in src/lib/undo.test.ts.
-invariant("undoing a dozen actions in a row and redoing them grows the journal linearly", () => {
-  const api = makeApi(freshDb());
-  api.installJournal();
-  const p = api.seedProject();
-  const { id } = api.addSample(p, "EE", "storm");
-  const start = api.dumpUndoable();
-  const undoStack = [];
-  for (let n = 1; n <= 12; n += 1) {
-    const mark = api.journalHead();
-    api.setSampleNote(id, "cut_notes", `${n} um`);
-    undoStack.push({ mark, end: api.journalHead() });
-  }
-  const end = api.dumpUndoable();
-  const written = api.journalHead();
-  // Each action wrote 3 journal rows; each replay of one writes a few. Checked
-  // after every replay, so a doubling journal fails in a handful of steps rather
-  // than running for minutes.
-  let replays = 0;
-  const bounded = () => {
-    replays += 1;
-    const grown = api.journalHead() - written;
-    assert(grown <= replays * 3 * 4, `${replays} replays grew the journal by ${grown} rows, not a few per replay`);
-  };
-  const redoStack = [];
-  while (undoStack.length > 0) {
-    const entry = undoStack.pop();
-    const replayed = api.revertJournal(entry.mark, entry.end);
-    redoStack.push({ mark: replayed.from, end: replayed.to });
-    bounded();
-  }
-  eq(api.dumpUndoable(), start, "every action is undone");
-  while (redoStack.length > 0) {
-    const entry = redoStack.pop();
-    const replayed = api.revertJournal(entry.mark, entry.end);
-    undoStack.push({ mark: replayed.from, end: replayed.to });
-    bounded();
-  }
-  eq(api.dumpUndoable(), end, "every action is redone");
+issue(28, "undo/redo restore the whole database snapshot", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  const db = readFileSync(join(HERE, "..", "src", "lib", "db.ts"), "utf8");
+  assert(db.includes("export async function snapshotDb") && db.includes("export async function restoreDb"),
+    "the DB layer exposes whole-database snapshot + restore");
+  assert(actions.includes("await snapshotDb()") && actions.includes("record({ label, snapshot: before })"),
+    "every mutation captures the pre-state DB snapshot for undo");
+  assert(actions.includes("restoreDbPreservingSession(entry.snapshot") && db.includes("await restoreDb(image)"),
+    "undo and redo restore a whole-DB snapshot (via restoreDbPreservingSession) rather than replaying per-row closures");
 });
 
 // #29 — Undoing "start assay workflow" used to leave the minted slide stack
-// behind as an empty tile. Undo replays the journal, which recorded the stack's
-// insert, so the stack goes with no bespoke reconciliation.
-issue(29, "undo removes any stack a move minted, with no bespoke reconciliation", () => {
-  const api = makeApi(freshDb());
-  api.installJournal();
-  const p = api.seedProject();
-  const { id } = api.addSample(p, "EE", "minted");
-  api.markEmbedded(id);
-  const [section] = api.createSectionRequests(id, [{ depth_um: 100, duplicates: 1 }]);
-  api.sectionToAssignment(section);
-  const slide = api.get(`SELECT id FROM slides WHERE section_request_id = ?`, [section]);
-  api.assignSlide(slide.id, "stain", "stain", "H&E");
-  const before = api.dumpUndoable();
-  const mark = api.journalHead();
-  api.startAssayWork(section);
-  assert(api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id != null, "start assay mints a stack");
-  api.revertJournal(mark, api.journalHead());
-  eq(api.dumpUndoable(), before, "undo removes the minted stack and detaches the slide");
+// behind as an empty tile. With whole-DB snapshot undo there is nothing to
+// reconcile: restoring the entire pre-assay database removes the stack (and any
+// scattered per-sample stacks, #31) automatically — the UI simply refetches.
+issue(29, "whole-DB undo removes any stack a move minted, with no bespoke reconciliation", () => {
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
+  assert(actions.includes("const commit = useCallback") && actions.includes("await snapshotDb()"),
+    "mutations snapshot the whole DB, so undo restores every table at once");
+  assert(!actions.includes("snapshotStacksForSlides") && !actions.includes("pruneStacks("),
+    "the fragile per-stack reconciliation is gone");
 });
 
 // The stack-pruning primitive itself: a stack with no slides is removed, one
@@ -3645,12 +3551,15 @@ invariant("the Logs view shows removed slides but excludes them from progress", 
 invariant("downstream UI and actions address durable stack IDs", () => {
   const app = readFileSync(join(HERE, "..", "src", "App.tsx"), "utf8");
   const drawer = readFileSync(join(HERE, "..", "src", "components", "StackDetailsDrawer.tsx"), "utf8");
+  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
   assert(app.includes("moveSlideStacks(stackIds, stageKey)"),
     "App must not translate stack moves back into section IDs");
   assert(drawer.includes('scopeType="slide_stack"') && drawer.includes("useStackSlides(stack.id)"),
     "stack drawer must query and mutate stack-owned workflow state");
   assert(drawer.includes("removeSlides([...selectedSlideIds], reason)"),
     "stack drawer must remove selected slides in one call, WITH a reason (#83)");
+  assert(actions.includes("await snapshotDb()"),
+    "stack moves are undoable via the whole-DB snapshot");
 });
 
 issue(58, "opening a pre-0020 image converges slides.stage_deparaffinized_at so the step doesn't die", () => {

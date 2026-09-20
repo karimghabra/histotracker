@@ -27,9 +27,6 @@ import {
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import { SAMPLE_NOTE_FIELDS } from "./sampleNotes";
-import { CHANGED_SINCE, journalInstallStatements, journalTrimStatements } from "./undoJournal";
-import { useUndoStore } from "./undo";
-import { inLane } from "./writeLane";
 import type { SampleNoteField } from "./sampleNotes";
 import {
   type AppSettings,
@@ -107,7 +104,7 @@ export function assertMayRestore(): void {
  *
  * Signing in is itself a write, so the session writes below have to reach past
  * the signed-out gate or nobody could ever get through it. Keyed per connection
- * because the file is swapped and reopened at runtime (a backup revert, sync).
+ * because the file is swapped and reopened at runtime (undo, restore, sync).
  */
 const rawExecutes = new WeakMap<Database, Database["execute"]>();
 
@@ -167,7 +164,6 @@ export function getDb(): Promise<Database> {
         await splitContaminatedStainRacks(db);
         await backfillSlideLetterMarks(db);
         await retireDryingChecklistStep(db);
-        await installUndoJournal(db);
         return db;
       })
       .then(guardWrites);
@@ -176,36 +172,17 @@ export function getDb(): Promise<Database> {
 }
 
 /**
- * Journal every change to the lab record for undo (undoJournal.ts). Last, after
- * the runtime schema and the one-time repairs, so the triggers cover every
- * column this file now has and the repairs are not themselves undoable. The
- * statements run in one transaction in Rust; on an unchanged file there are none.
- *
- * Then the journal is trimmed to its bound, which is the one moment nothing can
- * be relying on a row: the undo stack is empty until the saved history is
- * hydrated, and that is anchored to the journal's ends.
- */
-async function installUndoJournal(db: Database): Promise<void> {
-  const statements = await journalInstallStatements(db);
-  if (statements.length > 0) {
-    await invoke("undo_journal_install", { path: await filePathOf(db), statements });
-  }
-  for (const statement of journalTrimStatements()) await db.execute(statement);
-}
-
-/**
  * Additively converge the few late-added columns the frontend depends on.
  *
  * tauri-plugin-sql runs the numbered migrations exactly once — at plugin build
  * time, against whatever file exists then. But this app swaps the live SQLite
- * file out from under the connection at runtime: a backup revert puts a whole
- * file image back ({@link restoreDb}) and the sync viewer swaps in a downloaded
- * snapshot, both via close → overwrite → `Database.load()`. That reopen does
- * NOT re-run migrations, so a file that predates a column can end up live with
- * the current frontend. Concretely, this is what made clicking the
- * "Deparaffinized" protocol step silently do nothing: the step-0 UPDATE hit
- * `slides.stage_deparaffinized_at` on a pre-0020 image and threw, aborting the
- * toggle before it refreshed (#58).
+ * file out from under the connection at runtime: undo/redo restore a whole-file
+ * image ({@link restoreDb}) and the sync viewer swaps in a downloaded snapshot,
+ * both via close → overwrite → `Database.load()`. That reopen does NOT re-run
+ * migrations, so a file that predates a column can end up live with the current
+ * frontend. Concretely, this is what made clicking the "Deparaffinized" protocol
+ * step silently do nothing: the step-0 UPDATE hit `slides.stage_deparaffinized_at`
+ * on a pre-0020 image and threw, aborting the toggle before it refreshed (#58).
  *
  * Each check is a cheap PRAGMA; the ALTER fires only on a file missing the
  * column. Additive only — never destructive — so it is safe on any image and
@@ -520,10 +497,7 @@ async function ensureColumn(
  * to publish a snapshot; the viewer overwrites it when swapping one in.
  */
 export async function getDbFilePath(): Promise<string> {
-  return filePathOf(await getDb());
-}
-
-async function filePathOf(db: Database): Promise<string> {
+  const db = await getDb();
   const rows = await db.select<Array<{ file: string }>>(
     `SELECT file FROM pragma_database_list WHERE name = 'main'`,
   );
@@ -548,20 +522,22 @@ export async function resetDb(): Promise<void> {
   dbPromise = null;
 }
 
-// ---- Whole-database images (backups, sync) ----------------------------------
+// ---- Whole-database snapshots (undo/redo) -----------------------------------
 
 /**
- * An image is the raw bytes of the entire SQLite database file: a complete,
- * point-in-time copy of every table. A backup is one, and so is the snapshot the
- * workstation publishes to its viewers. Undo does NOT use them: copying the file
- * costs time in proportion to its size, which on a lab's database is seconds, and
- * every undo race lived in that window. Undo uses the journal below instead.
+ * A snapshot is the raw bytes of the entire SQLite database file — a complete,
+ * point-in-time IMAGE of every table. Undo/redo simply swap one of these images
+ * back in wholesale: there is nothing to keep in sync — no per-row dump, no
+ * topological ordering, no trigger re-firing on restore, no exclude list to
+ * drift. The database is the single source of truth and the UI is a pure
+ * reflection of it (React Query refetches after a restore), so "undo" is exactly
+ * "revert to a previous instance of the database" and nothing more.
  */
 export type DbImage = Uint8Array;
 
 /**
  * Capture the current database as a byte image. We checkpoint the WAL into the
- * main file first so the on-disk image is complete: the -wal sidecar holding
+ * main file first so the on-disk image is complete — the -wal sidecar holding
  * un-checkpointed writes is exactly what made naive file copies lossy before.
  * Databases not in WAL mode simply no-op the checkpoint.
  */
@@ -573,91 +549,30 @@ export async function snapshotDb(): Promise<DbImage> {
     // Not in WAL mode (or checkpoint unsupported): the main file is already current.
   }
   const path = await getDbFilePath();
-  return Uint8Array.from(await invoke<number[]>("read_file", { path }));
+  const bytes = await invoke<number[]>("read_file", { path });
+  return Uint8Array.from(bytes);
 }
 
 /**
  * Restore a database image: close the live connection, overwrite the SQLite file
- * with the image, then reopen against it. WAL-safe (the closed connection has no
- * dirty -wal). Callers refetch afterwards.
+ * with the snapshot bytes, then reopen against them. These are the exact
+ * mechanics the sync viewer already uses to swap in a downloaded snapshot —
+ * proven, WAL-safe (the closed connection has no dirty -wal), and atomic from
+ * the app's point of view. Callers refetch afterwards.
  *
  * The reopen does not run the numbered migrations, and the record of which ones
  * a file has had lives inside it, so an image goes live with whatever record it
- * brings. So an image from elsewhere (a backup, a snapshot pulled from the
- * workstation) goes live only through {@link swapInImageFromElsewhere}, which
- * migrates it first; otherwise the next launch re-runs the migrations it lacks on
- * top of the columns getDb() converged and cannot open the database.
+ * brings. That is right for undo images, which this build took in this session.
+ * Any other image (a backup, a snapshot pulled from the workstation) goes live
+ * through {@link swapInImageFromElsewhere} instead, or the next launch re-runs
+ * the migrations it lacks on top of the columns getDb() converged and cannot
+ * open the database.
  */
 export async function restoreDb(image: DbImage): Promise<void> {
   const path = await getDbFilePath(); // resolve while the connection is still open
   await resetDb(); // close + drop the pooled handle so the file is unlocked
   await invoke("save_file", { path, contents: Array.from(image) });
   await getDb(); // reopen eagerly so callers see a ready connection
-}
-
-// ---- Undo journal (see undoJournal.ts) --------------------------------------
-
-/**
- * Where the undo journal ends now: an undo entry's mark, taken as its action
- * begins. Its AUTOINCREMENT high-water mark, so every row the action writes lies
- * after it even when pruning has emptied the journal.
- */
-export async function journalHead(): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<Array<{ head: number }>>(
-    `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0) AS head`,
-  );
-  return Number(rows[0]?.head ?? 0);
-}
-
-/**
- * Replay one undo entry's range of the journal, `(from, to]` newest first, which
- * puts every journaled table back as it stood at `from`. Returns the range the
- * replay itself wrote: the entry that reverses it.
- *
- * Both ends are given. A range running to the live head would take in whatever
- * landed after the action from outside it, which is the whole defect the guards
- * below exist to catch, so there is no way to ask for one.
- *
- * One transaction, in Rust (`undo_journal_revert`, src-tauri/src/undo_journal.rs):
- * the replay is many statements, and statements sent through the plugin's pool
- * cannot share a transaction, so a replay done here could be seen half done or
- * be left half done. Session tables are not journaled, so the signed-in user and
- * the settings are never rewound. Gated like every restore (#146).
- */
-export async function revertJournalRange(from: number, to: number): Promise<{ from: number; to: number }> {
-  assertMayRestore();
-  const path = await getDbFilePath();
-  try {
-    const replayed = await invoke<{ from: number; to: number }>("undo_journal_revert", { path, from, to });
-    return { from: Number(replayed.from), to: Number(replayed.to) };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message === CHANGED_SINCE) throw new ReplayRefusedError();
-    throw err;
-  }
-}
-
-/**
- * A replay the command refused whole, with nothing changed (`CHANGED_SINCE`):
- * something outside the entry's range is in its way - a row it would put back is
- * no longer as the action left it, a key it needs has been taken since, or a
- * delete of its own row would cascade past it. Which of the three, and why each
- * is terminal rather than worth retrying, is in `src-tauri/src/undo_journal.rs`.
- * The caller drops the entry it blocked rather than offering a step that can
- * never run again.
- */
-export class ReplayRefusedError extends Error {
-  constructor() {
-    super(CHANGED_SINCE);
-    this.name = "ReplayRefusedError";
-  }
-}
-
-/** Forget journal rows no undo or redo entry can reach: those at or before the oldest mark kept. */
-export async function pruneJournal(oldestMark: number): Promise<void> {
-  const db = await getDb();
-  await db.execute(`DELETE FROM undo_journal WHERE seq <= ?`, [oldestMark]);
 }
 
 /**
@@ -685,27 +600,18 @@ export class ImageRefusedError extends Error {
  * migrations on a copy of the image; one it cannot bring up to date throws
  * {@link ImageRefusedError}. Then `beforeSwap` runs, still before anything
  * changes (a revert takes its safety backup there, so a refused revert leaves
- * none behind). Then Undo and Redo are cleared, and the migrated image goes
- * live through {@link restoreDb}, keeping the signed-in session and settings
- * when `keepSession` is set.
+ * none behind). Then the migrated image goes live through {@link restoreDb},
+ * keeping the signed-in session and settings when `keepSession` is set.
  */
-export function swapInImageFromElsewhere(
+export async function swapInImageFromElsewhere(
   image: DbImage,
   options: { keepSession: boolean; beforeSwap?: () => Promise<unknown> },
 ): Promise<void> {
-  // In the write lane (writeLane.ts), so the file is never swapped under an
-  // action or an undo that is still writing to it.
-  return inLane(async () => {
-    if (options.keepSession) assertMayRestore();
-    const migrated = await bringImageUpToDate(image);
-    await options.beforeSwap?.();
-    // The swapped-in file brings its own undo journal, so a mark taken from the
-    // old one would replay the wrong rows. Undo and Redo start again from here;
-    // the way back from a revert is the safety backup `beforeSwap` just took.
-    useUndoStore.getState().clear();
-    if (options.keepSession) await restoreDbPreservingSession(migrated);
-    else await restoreDb(migrated);
-  });
+  if (options.keepSession) assertMayRestore();
+  const migrated = await bringImageUpToDate(image);
+  await options.beforeSwap?.();
+  if (options.keepSession) await restoreDbPreservingSession(migrated);
+  else await restoreDb(migrated);
 }
 
 /**
@@ -5794,58 +5700,51 @@ export async function removeSectionRequestIfEmpty(id: number): Promise<boolean> 
 /**
  * Move samples whose timed processing run has elapsed from `processing_started`
  * to `processed`. Short runs are 18h, long runs 52h. Returns how many moved.
- *
- * On a minute timer (App.tsx) while a technician works, so it takes its place in
- * the write lane (writeLane.ts) like an action: a write that went around the lane
- * could land between an action and the journal mark it is recorded under, and be
- * undone as part of it.
  */
-export function autoAdvanceProcessingRuns(): Promise<number> {
-  return inLane(async () => {
-    const db = await getDb();
-    const rows = await db.select<
-      Array<{ id: number; processing_type: string; processing_started_at: string | null }>
-    >(
-      `SELECT id, processing_type, processing_started_at
-         FROM samples WHERE current_stage = 'processing_started'`,
+export async function autoAdvanceProcessingRuns(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.select<
+    Array<{ id: number; processing_type: string; processing_started_at: string | null }>
+  >(
+    `SELECT id, processing_type, processing_started_at
+       FROM samples WHERE current_stage = 'processing_started'`,
+  );
+
+  const now = new Date();
+  let moved = 0;
+  for (const row of rows) {
+    const started = parseTimestamp(row.processing_started_at);
+    if (!started) continue;
+    const readyAt = new Date(
+      started.getTime() + processingDurationHours(row.processing_type) * 3600_000,
     );
+    if (now < readyAt) continue;
 
-    const now = new Date();
-    let moved = 0;
-    for (const row of rows) {
-      const started = parseTimestamp(row.processing_started_at);
-      if (!started) continue;
-      const readyAt = new Date(
-        started.getTime() + processingDurationHours(row.processing_type) * 3600_000,
-      );
-      if (now < readyAt) continue;
+    const readyStr = formatLocalTimestamp(readyAt);
 
-      const readyStr = formatLocalTimestamp(readyAt);
-
-      await db.execute(
-        `UPDATE samples
-            SET current_stage = 'processed', stage_processed_at = COALESCE(stage_processed_at, ?)
-          WHERE id = ?`,
-        [readyStr, row.id],
-      );
-      moved += 1;
-    }
-    if (moved > 0) {
-      await db.execute(
-        `UPDATE processing_batches
-            SET status = 'ready'
-          WHERE status = 'processing'
-            AND NOT EXISTS (
-              SELECT 1
-                FROM processing_batch_members pbm
-                JOIN samples s ON s.id = pbm.sample_id
-               WHERE pbm.batch_id = processing_batches.id
-                 AND s.current_stage = 'processing_started'
-            )`,
-      );
-    }
-    return moved;
-  });
+    await db.execute(
+      `UPDATE samples
+          SET current_stage = 'processed', stage_processed_at = COALESCE(stage_processed_at, ?)
+        WHERE id = ?`,
+      [readyStr, row.id],
+    );
+    moved += 1;
+  }
+  if (moved > 0) {
+    await db.execute(
+      `UPDATE processing_batches
+          SET status = 'ready'
+        WHERE status = 'processing'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM processing_batch_members pbm
+              JOIN samples s ON s.id = pbm.sample_id
+             WHERE pbm.batch_id = processing_batches.id
+               AND s.current_stage = 'processing_started'
+          )`,
+    );
+  }
+  return moved;
 }
 
 // ---- Stain requests (viewer -> workstation, via the shared repo inbox) -------

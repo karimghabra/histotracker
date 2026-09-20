@@ -68,11 +68,8 @@ pnpm test:suites           # every suite is accounted for in tests/suites.json (
 cd src-tauri && cargo check && cargo test --lib
 ```
 
-`pnpm test` needs **Node 22.18+**: it uses the built-in `node:sqlite`, and it
-imports `src/lib/*.ts` directly (the undo journal's triggers and the two Rust
-commands' model), which needs unflagged type stripping. On 22.0 to 22.17 it dies
-with `ERR_UNKNOWN_FILE_EXTENSION` before a single gate runs. All of the above
-should pass before pushing.
+`pnpm test` needs **Node 22+** (it uses the built-in `node:sqlite`). All of the
+above should pass before pushing.
 
 `test:scenarios` is where a data-layer behaviour goes when it must be tested on the real `src/lib/db.ts` rather than a port of it (`tests/scenarios/lab.ts` opens a lab the way the app does).
 An open issue is a scenario marked `it.fails` (vitest) or `test.fail()` (Playwright, `tests/e2e/open-issues.spec.ts`) with a comment naming it; CI stays green until the fix lands, then goes red until the marker is removed, so **the pull request that fixes an issue deletes its marker**.
@@ -131,10 +128,7 @@ server hot-reloads mid-test and the failures look like real defects.
 Conventions in the specs, worth following rather than re-deriving:
 
 - `page.goto("/?freshdb=1")` starts from a clean DB, honoured once per load, so a
-  restore's reopen does not wipe itself (`src/test/browser-sql-shim.ts`).
-- The shim copies the database file instantly, which hides any race that lives in a
-  copy's duration. `window.__SNAPSHOT_IPC_MS__` gives `read_file`/`save_file` of the
-  database the time they take on a lab-sized one (`tests/e2e/undo-races.spec.ts`).
+  restore or an undo reopen does not wipe itself (`src/test/browser-sql-shim.ts`).
 - **Address inputs by label or role, never by position.** `getByRole("textbox").nth(1)`
   silently retargets when a panel gains a field, and a wrong guess edits the wrong
   column while a loose text assertion still passes; `Field` (`src/components/ui.tsx`)
@@ -191,17 +185,13 @@ breaks at runtime. Update all of these in the same change:
 - `src/lib/db.ts` — all SQLite access (blocks/samples, `section_requests` = cut
   groups, `slides` = physical slides, processing batches, checklists, requests).
 - `src/hooks/useActions.ts` — the mutation layer; every action does its write,
-  invalidates queries, and records an **undo/redo** entry (`src/lib/undo.ts`).
-  Undo is a journal, not a copy of the file: persistent triggers that `getDb()` installs write each change's inverse SQL into `undo_journal` (`src/lib/undoJournal.ts`), and undo replays one entry's range of it in a single Rust transaction (`src-tauri/src/undo_journal.rs`, modelled for the browser and compat harnesses by `src/test/undoJournalCommands.ts`; change the two together).
-  Every action, undo and redo enters the write lane (`src/lib/writeLane.ts`) at the moment it is called, before any await, so they take effect in gesture order; a new undoable write goes through `useActions` (or `inLane` plus `journalHead()`, as `ProtocolChecklist` does), never around it - the timer-driven writes (the sync drain, the processing auto-advance) too.
-  An entry is the range its own action wrote, closed when it is recorded (`journalHead()` either side of the action), so nothing that lands around it is ever inside it; every inverse must change exactly one row, its own, guarded by what its change left there, so a replay something outside the entry is in the way of - the row written to since, its key taken, or a delete that would cascade past it - is refused whole, with nothing changed, rather than restoring a full row over it, and the step it blocked is then dropped from the stack (it can only ever be refused again) so a refusal cannot wedge Undo.
-  A new table or column is journaled automatically; a table undo must not rewind (session state) is listed in `NOT_JOURNALED`.
+  invalidates queries, and records an **undo/redo** command (`src/lib/undo.ts`).
 - `src/components/Board.tsx` — the drag-and-drop board.
 - `src-tauri/migrations/NNNN_*.sql` — schema; **append-only, numbered**. Never
   edit an applied migration; add a new one. Register it in `src-tauri/src/lib.rs`
   (the migration list is explicit, not auto-discovered). **Additive only** — new
   migrations `ADD COLUMN`/`CREATE TABLE`; never drop/rename a column a shipped
-  build still reads (backups and sync restore raw DB *images*, so an
+  build still reads (backups, sync, and undo all restore raw DB *images*, so an
   older image must stay openable). If the new column is read/written at runtime,
   also add it to `ensureRuntimeSchema()` in `src/lib/db.ts`.
   `getDb()` converges it on every DB (re)open, so an image swapped in at runtime has every column, one with no numbered migration included.

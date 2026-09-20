@@ -74,11 +74,11 @@ describe("#159: removing a sample", () => {
   it("is brought back by undo, which restores the sample and its glass exactly", async () => {
     lab = await openLab();
     const { block, group } = await cutBlock(lab, "undo me");
-    const mark: number = await lab.db.journalHead();
+    const before = await lab.db.snapshotDb();
     await lab.db.removeSamples([block], "oops");
     expect(stageOf(lab, block)).toBe("removed");
 
-    await lab.db.revertJournalRange(mark, await lab.db.journalHead());
+    await lab.db.restoreDbPreservingSession(before);
 
     expect(stageOf(lab, block)).toBe("embedded");
     expect(removalEvents(lab, block)).toHaveLength(0);
@@ -266,10 +266,10 @@ describe("a deleted block leaves its processing run", () => {
     const gone = await lab.sample("undo me", "in_ethanol");
     const stays = await lab.sample("bystander", "in_ethanol");
     const batch = await planRun(lab, [gone, stays]);
-    const mark: number = await lab.db.journalHead();
+    const before = await lab.db.snapshotDb();
 
     await lab.db.removeSamples([gone], "oops");
-    await lab.db.revertJournalRange(mark, await lab.db.journalHead());
+    await lab.db.restoreDbPreservingSession(before);
 
     expect(members(lab, batch)).toEqual([gone, stays]);
     expect(stageOf(lab, gone)).toBe("in_ethanol");

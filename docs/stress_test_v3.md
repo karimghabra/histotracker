@@ -37,11 +37,10 @@ So v3 keeps v2's method and adds three things.
    while its slides are downstream, exhausting a live block, editing descriptions
    with hostile text. Bugs live where one module's change invalidates another
    module's assumption, and no per-module test looks there.
-3. **Undo and redo, through the real button.** Undo replays the undo journal
-   back to the action's mark (`src/lib/undoJournal.ts`), restoring every table at
-   once, so the honest test is a whole-database comparison: fingerprint the
-   database, make a move, press Undo, fingerprint again, insist on identical
-   workflow state.
+3. **Undo and redo, through the real button.** Undo swaps the entire SQLite image
+   (`src/lib/undo.ts`), so the honest test is a whole-image comparison:
+   fingerprint the database, make a move, press Undo, fingerprint again, insist on
+   byte-identical workflow state.
 
 ## What it does
 
@@ -59,19 +58,20 @@ actually have.
 ### The fingerprint
 
 `driver3.ts` serialises every table in rowid order and diffs table-by-table, so
-"undo didn't restore" becomes "`slides`: 104 rows before, 103 after". Five
+"undo didn't restore" becomes "`slides`: 104 rows before, 103 after". Four
 tables are excluded and each exclusion is deliberate: `users`, `app_settings`,
-`audit_events`, `schema_meta` and `undo_journal`. Undo never rewinds the session,
-`undo()` writes its audit row *after* the replay lands, and the replay's own
-journal rows are what redo replays. Rolling those back would be the bug.
+`audit_events` and `schema_meta`. `restoreDbPreservingSession` re-adds the
+session on purpose, and `undo()` writes its audit row *after* the restore lands.
+Rolling those back would be the bug.
 
 ### What the harness reproduces, and what it doesn't
 
-`recordUndoPoint()` is the recording half of `useActions.commit()`, `journalHead()`
-plus `useUndoStore.record()`, reproduced because the explorer drives the data
+`recordUndoPoint()` is the recording half of `useActions.commit()` — `snapshotDb()`
+plus `useUndoStore.record()` — reproduced because the explorer drives the data
 layer and nothing else would fill the stack. The interesting half is not
-reproduced: popping, the journal replay, the write lane, invalidation and the
-re-render all run the app's own code, reached by clicking the toolbar button.
+reproduced: popping, the whole-image restore, session preservation, invalidation
+and the re-render all run the app's own code, reached by clicking the toolbar
+button.
 
 ## Findings
 
@@ -173,8 +173,8 @@ app was flawless. `reuseExistingServer: true` had kept a Vite server that had
 hot-reloaded since it started, so Vite was serving both `db.ts` and `db.ts?t=…`.
 The SQL shim holds its sql.js connection in module scope, so two module instances
 meant **two databases over one virtual file**: the walk wrote through one, the
-app's Undo through the other, and Undo - a whole-image swap then, a journal
-replay today - clobbered the file with a schema-only image.
+app's Undo through the other, and Undo's snapshot clobbered the file with a
+schema-only image.
 
 It bit twice more before the day was out — the v1 suite failed its stack-merge
 spec on the batch run and passed on a clean server with nothing changed. All

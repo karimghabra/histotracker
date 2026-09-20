@@ -8,24 +8,21 @@ import {
   pressUndo,
   recordUndoPoint,
   undoDepths,
-  undoMark,
 } from "./driver3";
 import { checkViewsAgainstData } from "./views";
 
 /**
  * Undo and redo, taken seriously.
  *
- * Undo here is not a per-row closure: every change wrote its own inverse into
- * the undo journal, and Undo replays the journal back to the action's mark
- * (`src/lib/undoJournal.ts`), restoring every table at once. That design is very
- * hard to get subtly wrong and very easy to get catastrophically wrong, so the
- * test that fits it is a whole-database comparison: fingerprint the database,
- * make a move, press the real Undo button, fingerprint again, and insist on
- * identical workflow state.
+ * Undo here is not a per-row inverse — it swaps the ENTIRE SQLite image back
+ * (`src/lib/undo.ts`). That design is very hard to get subtly wrong and very easy
+ * to get catastrophically wrong, so the test that fits it is a whole-image
+ * comparison: fingerprint the database, make a move, press the real Undo button,
+ * fingerprint again, and insist on byte-identical workflow state.
  *
- * Five tables are excluded and each exclusion is deliberate: `driver3.ts`
- * explains why the session, the audit trail and the journal itself are not
- * rolled back with the rest.
+ * Four tables are excluded and each exclusion is deliberate — `driver3.ts`
+ * explains why the session and the audit trail must survive a restore rather
+ * than be rolled back with it.
  *
  * The button is the real one in the toolbar. Only the RECORDING half is
  * reproduced by the harness, because the explorer drives the data layer and
@@ -52,20 +49,19 @@ test("undo returns the database to exactly what it was, move after move", async 
     if (!planned || planned === "ui") continue;
 
     const before = await fingerprint(page);
-    const mark = await undoMark(page);
-    if (mark === null) {
+    const recorded = await recordUndoPoint(page, move.label);
+    if (!recorded) {
       findings.push({
         where: "undo",
         severity: "defect",
-        detail: "journalHead() failed: the undo point could not be recorded at all",
-        corroboration: "the call returned null rather than throwing into the page",
+        detail: "snapshotDb() failed — the undo point could not be recorded at all",
+        corroboration: "the call returned false rather than throwing into the page",
       });
       continue;
     }
 
     const outcome = await callMove(page, planned);
     if (outcome !== "ok") continue;
-    await recordUndoPoint(page, move.label, mark);
 
     const after = await fingerprint(page);
     if (fingerprintDiff(before, after).length === 0) {
@@ -86,8 +82,8 @@ test("undo returns the database to exactly what it was, move after move", async 
         severity: "defect",
         detail: `undo did not restore the database: ${drift.map((d) => d.detail).join("; ")}`,
         corroboration:
-          "compared table-by-table against the pre-move state, excluding only the five " +
-          "tables an undo is documented to preserve rather than roll back",
+          "compared table-by-table against the pre-move image, excluding only the four " +
+          "tables a restore is documented to preserve rather than roll back",
       });
     }
 
@@ -142,13 +138,13 @@ test("a deep undo storm walks all the way back, and all the way forward", async 
     const move = MOVES[Math.floor(random() * MOVES.length)];
     const planned = await move.plan(page, random);
     if (!planned || planned === "ui") continue;
-    const label = `${labels.length}:${move.label}`;
-    const mark = await undoMark(page);
+    await recordUndoPoint(page, `${labels.length}:${move.label}`);
     if ((await callMove(page, planned)) === "ok") labels.push(move.label);
-    // A refused move leaves an entry whose range is empty. Recorded anyway: an
-    // undo entry for a no-op is exactly the situation a user creates by
-    // cancelling out of something, and it must be harmless.
-    await recordUndoPoint(page, label, mark);
+    else {
+      // The move was refused, so the undo point we just pushed corresponds to no
+      // change. Leave it: an undo entry for a no-op is exactly the situation a
+      // user creates by cancelling out of something, and it must be harmless.
+    }
   }
 
   const peak = await fingerprint(page);
@@ -223,11 +219,8 @@ test("a new action after an undo discards the redo branch", async ({ page, findi
       const move = MOVES[Math.floor(random() * MOVES.length)];
       const planned = await move.plan(page, random);
       if (!planned || planned === "ui") continue;
-      const mark = await undoMark(page);
-      if ((await callMove(page, planned)) === "ok") {
-        await recordUndoPoint(page, move.label, mark);
-        return true;
-      }
+      await recordUndoPoint(page, move.label);
+      if ((await callMove(page, planned)) === "ok") return true;
     }
     return false;
   };
@@ -281,9 +274,8 @@ test("undo restores a removed slide, record and all", async ({ page, findings })
   expect(target, "the seed produced a slide to remove").toBeTruthy();
 
   const before = await fingerprint(page);
-  const mark = await undoMark(page);
+  await recordUndoPoint(page, `Remove ${target.slide_code}`);
   expect(await callMove(page, { fn: "removeSlide", args: [target.id, "dropped it"] })).toBe("ok");
-  await recordUndoPoint(page, `Remove ${target.slide_code}`, mark);
 
   const removedNow = await page.evaluate(
     (id) =>

@@ -4,7 +4,6 @@ mod backup;
 mod backup_fs;
 mod migrate;
 mod sync;
-mod undo_journal;
 
 /// Write raw bytes to an absolute path chosen by the user via the save dialog.
 /// Used for CSV / XLSX export; keeps file I/O out of the scoped fs plugin.
@@ -14,31 +13,12 @@ fn save_file(path: String, contents: Vec<u8>) -> Result<(), String> {
 }
 
 /// Read raw bytes from an absolute path. Used by the workstation to read the
-/// live SQLite file for publishing and for a backup. The path is discovered at
-/// runtime via `PRAGMA database_list`, so we never hardcode the plugin's storage
-/// dir.
+/// live SQLite file for publishing, and by the viewer when swapping in a
+/// downloaded snapshot. The path is discovered at runtime via
+/// `PRAGMA database_list`, so we never hardcode the plugin's storage dir.
 #[tauri::command]
 fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| e.to_string())
-}
-
-/// Undo or redo: replay one range of the undo journal, `(from, to]`, in one
-/// transaction (`undo_journal::revert`), returning the range the replay wrote,
-/// which is the entry that reverses it.
-#[tauri::command]
-async fn undo_journal_revert(
-    path: String,
-    from: i64,
-    to: i64,
-) -> Result<undo_journal::Replayed, String> {
-    undo_journal::revert(std::path::Path::new(&path), from, to).await
-}
-
-/// Install or refresh the undo journal's triggers, all together or not at all
-/// (`undo_journal::execute_batch`).
-#[tauri::command]
-async fn undo_journal_install(path: String, statements: Vec<String>) -> Result<(), String> {
-    undo_journal::execute_batch(std::path::Path::new(&path), &statements).await
 }
 
 /// The numbered migrations, in order. tauri-plugin-sql runs them on the first
@@ -214,8 +194,6 @@ pub fn run() {
             backup::backup_delete,
             backup::backup_prune,
             migrate::db_migrate_image,
-            undo_journal_revert,
-            undo_journal_install,
             sync::sync_config_get,
             sync::sync_config_set,
             sync::sync_set_last_version,

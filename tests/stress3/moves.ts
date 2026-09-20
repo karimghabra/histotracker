@@ -503,7 +503,7 @@ export const UI_MOVES = ["undo", "redo"] as const;
 export async function runUiMove(page: Page, which: (typeof UI_MOVES)[number]): Promise<string> {
   // Undo lives in React state, not in the data layer, so there is no function to
   // call — and that is the point: this exercises the button a user presses, and
-  // the undo-journal replay behind it.
+  // the whole-database-image restore behind it.
   const title = which === "undo" ? "Undo (Ctrl+Z)" : "Redo (Ctrl+Y)";
   const button = page.getByTitle(title);
   if ((await button.count()) === 0) return "no control";

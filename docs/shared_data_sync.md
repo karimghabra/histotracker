@@ -33,34 +33,15 @@ which "deploy everywhere together" eliminates.
 
 ### 1a. Additive migrations + runtime convergence (backward compatibility)
 
-The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot).
-Both swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
-Undo/redo no longer swap files: they replay the undo journal inside the live database (`src/lib/undoJournal.ts`), which rides in the file as the `undo_journal` table and its triggers, created at runtime with no numbered migration.
-A swap therefore clears Undo and Redo: the swapped-in file brings its own journal, so a mark from the old one means nothing in it.
-
-**Compatibility with the release in use, stated plainly.**
-The journal adds no numbered migration and no column to any lab table, so the release in use opens, reads and writes every database this build writes, and a backup or a snapshot moves between them as before.
-The asymmetry is the journal itself.
-Its triggers are persistent and live in the file, so a workstation rolled back to the release in use keeps appending an inverse row on every write, and that build has nothing that trims them: this build bounds the journal at open (`journalTrimStatements`, `src/lib/undoJournal.ts`), and the older one does not.
-The bound is five megabytes of statement text, and a fortnight.
-The size is expressed in bytes because bytes are what the payload costs: the journal is copied into every backup and uploaded whole in every published snapshot, and one inverse row is anything from a hundred bytes to several kilobytes.
-Five megabytes is a fraction of a lab-sized database (about 23 MB) and far more journal than a hundred-step undo stack reaches in ordinary use.
-
-The file therefore grows for as long as the lab stays rolled back, and every backup and published snapshot carries that growth, until a build that trims comes forward again and the next open brings it back inside the bound.
-Nothing is lost or corrupted by it; it costs space.
-
-**A published snapshot can hold rows the workstation has deleted. The captain ruled on 2026-09-19 that this is acceptable**, having been given this exact consequence: deletion in this app is a workflow correction, not a redaction.
-The inverse of a delete is the row written back out in full, so deleting a project or emptying a processing run leaves that row's contents inside `undo_journal` - and the journal goes wherever the file goes, into every backup and into the snapshot every viewer downloads.
-A delete cascades, so what is reconstructible is not only the row the technician picked: deleting a project takes its samples, cut groups, slides and timeline events with it, and every one of those rows is in the journal in full - sample descriptions, all four note fields, and the operator names stamped on the work.
-Any viewer's copy of the snapshot, and any backup taken in the window, can be read back with a SQLite tool for as long as the journal keeps those rows.
-That is what makes the deletion something the technician can take back, which is the whole point of the journal, and it is why the age bound is a retention window and not only a size one: fourteen days, after which the next open forgets those rows and the snapshot published after it no longer carries them.
-Nothing here is a way to remove a record from the lab's own private data repo, and nothing should be deleted on the understanding that it is.
+The same "the schema is the wire format" rule governs **backups** (a backup is a raw DB image, exactly like a synced snapshot) and **undo/redo** (whole-file image restore).
+All three swap a DB *file* under the live connection, and `tauri-plugin-sql` only runs migrations **once at startup**: a reopened file is never re-migrated by the plugin.
 
 The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
 `getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.
 So every image that comes from elsewhere, a backup being reverted to or a snapshot a viewer pulls from the workstation, goes live through one swap-in, `swapInImageFromElsewhere()` (`src/lib/db.ts`), so the two cannot drift apart.
 It first runs `db_migrate_image` (`src-tauri/src/migrate.rs`), which puts the image through this build's migrations on a copy, with the same sqlx migrator the launch uses.
 The image goes live fully migrated, with a record sqlx itself wrote.
+Undo images need none of this: this build took them, in this session, after its own migrations had run.
 
 An image that cannot be brought up to date is refused before anything changes, the live database and its connection included.
 That is one that is not a database or that the migrator cannot read, one made by a newer build, one whose record does not match this build's migrations, and one a migration fails on.
