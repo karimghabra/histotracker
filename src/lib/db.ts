@@ -1845,8 +1845,10 @@ export async function getBatchMemberIds(batchId: number): Promise<number[]> {
  * Delete a run that has no members left, its checklist and all (#135).
  * Same order as startProcessingBatch's abort unwind: children before parent,
  * and members explicitly rather than relying on ON DELETE CASCADE, which
- * needs `PRAGMA foreign_keys` to be on. Shared by emptying a run from its
- * drawer and by deleting the last block a run held, so the two agree.
+ * needs `PRAGMA foreign_keys` to be on. Shared by emptying a PLANNED run from
+ * its drawer and by deleting the last block one held, so the two agree. A run
+ * that already ran is never dissolved: both callers mark it `cancelled` and
+ * keep its record instead (#148, #178).
  */
 async function dissolveEmptyRun(batchId: number): Promise<void> {
   const db = await getDb();
