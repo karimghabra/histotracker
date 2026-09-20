@@ -106,15 +106,17 @@ export function useActions() {
     qc.invalidateQueries({ queryKey: ["slide-removals"] });
     qc.invalidateQueries({ queryKey: ["sample-removals"] });
     qc.invalidateQueries({ queryKey: ["audit-events"] });
-    // Undo/redo swap the whole DB image; the session-preserving restore re-adds
-    // the current users + signed-in user, so refetch those too (#1).
+    // A whole DB image swapped in (a backup revert, a sync pull) brings its own
+    // users, and the session-preserving restore re-adds the current ones + the
+    // signed-in user, so refetch those too (#1). Undo never rewinds them: the
+    // session tables are not journaled (undoJournal.ts NOT_JOURNALED).
     qc.invalidateQueries({ queryKey: ["users"] });
     qc.invalidateQueries({ queryKey: ["active-user"] });
   }, [qc]);
 
-  // Run a mutation as a single undoable step: capture the DB before the writes,
-  // perform them, refetch, and record the pre-state under `label`. The returned
-  // value is passed through so callers can still get ids/results.
+  // Run a mutation as a single undoable step: mark the journal before the writes,
+  // perform them, refetch, and record the range they wrote under `label`. The
+  // returned value is passed through so callers can still get ids/results.
   const commit = useCallback(
     async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
       // ONE read-only refusal for every mutation in the app (#72).

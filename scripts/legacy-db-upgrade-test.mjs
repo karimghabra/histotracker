@@ -361,8 +361,8 @@ const IN_USE_LAST_MIGRATION = 24;
  * The plugin hands the registered list to sqlx's Migrator (0.8, ignore_missing
  * = false), which keeps the versions it has applied INSIDE the database file,
  * in `_sqlx_migrations`. That record is the whole point of modelling it: a
- * backup, a sync pull and an undo image all carry it with them, so a file can
- * come back into a build holding a record that disagrees with its columns.
+ * backup and a sync pull both carry it with them, so a file can come back into
+ * a build holding a record that disagrees with its columns.
  * sqlx then (1) refuses a file recording a version it does not know, and
  * (2) runs every known version it has no record of — whatever the columns say.
  */

@@ -191,6 +191,7 @@ configurable), and you can **Back up now** or **Revert** to any snapshot at any
 time.
 A revert first brings the backup up to this version of Histometer, then takes a safety backup, so it's itself reversible.
 A backup it cannot bring up to date, such as one made by a newer version, is refused with the reason, and nothing changes.
+A revert also empties Undo and Redo — the steps on them belong to the database you just replaced — so the way back from a revert is that safety backup, not Ctrl+Z.
 
 ![Backups](img/20-backups.png)
 
@@ -200,6 +201,10 @@ A backup it cannot bring up to date, such as one made by a newer version, is ref
 
 - **Undo / redo** (Ctrl+Z / Ctrl+Y, or the toolbar arrows) revert whole actions —
   moves, cuts, protocol steps, tags — one step at a time.
+  A step whose records have changed since you did it (a viewer's request that
+  synced in on top of them, say) is not forced back over that change: Histometer
+  says so, changes nothing, and skips that step, so the next Undo reaches the one
+  before it.
 - **Themes** live under **Settings**: many light and dark ones, and **Customize
   colours…** to build your own while the board repaints behind it.
 - **Sync** — a workstation can publish its database to a private repo that

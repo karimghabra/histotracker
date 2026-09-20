@@ -104,13 +104,13 @@ revert-verified.
 
 `docs/shared_data_sync.md` §1: **the synced payload is the raw SQLite file.** The
 workstation uploads `histometer.db` byte-for-byte and each viewer overwrites its
-own with those bytes. Backups are the same thing, and so is undo — every mutation
-snapshots the entire database image.
+own with those bytes. Backups are the same thing: a copy of the whole file, taken
+every few hours.
 
 That rules out the obvious approach immediately. **Photos cannot live inside the
-database.** Undo images the whole DB on every single mutation, so a few hundred
-microscope images would mean every click copying gigabytes, and every sync
-uploading them again. This is not a tuning problem; it is the wrong shape.
+database.** A few hundred microscope images would mean every backup copying
+gigabytes and every sync uploading them again. This is not a tuning problem; it
+is the wrong shape.
 
 So: **files on disk, and the database holds only the record of them.**
 

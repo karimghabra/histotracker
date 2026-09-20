@@ -142,7 +142,7 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
     case "github_validate":
       return { ok: true } as unknown as T;
 
-    // Real file IO against the virtual filesystem — powers undo/redo snapshots.
+    // Real file IO against the virtual filesystem — powers backups and sync images.
     case "read_file": {
       // The bytes are read NOW, as std::fs::read does at the start of the Rust
       // command; only their delivery waits, as the JSON marshalling does.
