@@ -18,6 +18,14 @@ import type Database from "@tauri-apps/plugin-sql";
  * transaction in Rust (src-tauri/src/undo_journal.rs), because statements sent
  * through tauri-plugin-sql's pool cannot share one.
  *
+ * Each inverse CARRIES ITS OWN PRECONDITION: it matches the row only while the row
+ * still holds exactly what the change left there. A replay is one entry's range of
+ * the journal, not everything after it, so a write that landed outside that range
+ * -- the sync timer draining a viewer's request between an Undo and the Redo of
+ * it -- would otherwise be half-erased by a full-row restore. Guarded, that
+ * statement matches no row, and the replay refuses with nothing changed
+ * (`undo_journal.rs` requires every statement to touch exactly one row).
+ *
  * The triggers are persistent, not TEMP: the pool has several connections, and a
  * TEMP trigger exists on one connection only. They are created at runtime by
  * getDb(), with no numbered migration, like `samples.embedding_notes` (AGENTS.md):
@@ -48,6 +56,11 @@ export const JOURNAL_TABLE_SQL = `CREATE TABLE IF NOT EXISTS undo_journal (seq I
  * `rowidAlias` says a column already IS the rowid (an INTEGER PRIMARY KEY), which
  * then carries the row's identity; otherwise the rowid is written out beside the
  * columns, so a re-inserted row comes back under the id everything else refers to.
+ *
+ * The inverse of an INSERT and of an UPDATE is guarded by the row's post-change
+ * values, so it applies only while nothing else has touched that row since; the
+ * inverse of a DELETE needs no guard, because it re-inserts under the same rowid
+ * and SQLite refuses that outright if anything has taken the row's place.
  */
 export function journalTriggers(
   table: string,
@@ -64,6 +77,9 @@ export function journalTriggers(
         `${lit(`${i === 0 ? "" : ","}${ident(c)}=`)} || quote(old.${ident(c)})`,
     )
     .join(" || ");
+  const untouched = columns
+    .map((c) => `${lit(` AND ${ident(c)} IS `)} || quote(new.${ident(c)})`)
+    .join(" || ");
   const colList = (rowidAlias ? columns : ["rowid", ...columns])
     .map((c) => (c === "rowid" ? c : ident(c)))
     .join(",");
@@ -74,13 +90,13 @@ export function journalTriggers(
     {
       name: name("insert"),
       sql: `CREATE TRIGGER ${ident(name("insert"))} AFTER INSERT ON ${t} BEGIN
-  INSERT INTO undo_journal(stmt) VALUES (${lit(`DELETE FROM ${t} WHERE rowid=`)} || new.rowid);
+  INSERT INTO undo_journal(stmt) VALUES (${lit(`DELETE FROM ${t} WHERE rowid=`)} || new.rowid || ${untouched});
 END`,
     },
     {
       name: name("update"),
       sql: `CREATE TRIGGER ${ident(name("update"))} AFTER UPDATE ON ${t} BEGIN
-  INSERT INTO undo_journal(stmt) VALUES (${lit(`UPDATE ${t} SET `)} || ${assignments} || ' WHERE rowid=' || new.rowid);
+  INSERT INTO undo_journal(stmt) VALUES (${lit(`UPDATE ${t} SET `)} || ${assignments} || ' WHERE rowid=' || new.rowid || ${untouched});
 END`,
     },
     {

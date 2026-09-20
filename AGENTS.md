@@ -190,7 +190,8 @@ breaks at runtime. Update all of these in the same change:
 - `src/hooks/useActions.ts` — the mutation layer; every action does its write,
   invalidates queries, and records an **undo/redo** entry (`src/lib/undo.ts`).
   Undo is a journal, not a copy of the file: persistent triggers that `getDb()` installs write each change's inverse SQL into `undo_journal` (`src/lib/undoJournal.ts`), and undo replays one entry's range of it in a single Rust transaction (`src-tauri/src/undo_journal.rs`, modelled for the browser and compat harnesses by `src/test/undoJournalCommands.ts`; change the two together).
-  Every action, undo and redo enters the write lane (`src/lib/writeLane.ts`) at the moment it is called, before any await, so they take effect in gesture order; a new undoable write goes through `useActions` (or `inLane` plus `journalHead()`, as `ProtocolChecklist` does), never around it.
+  Every action, undo and redo enters the write lane (`src/lib/writeLane.ts`) at the moment it is called, before any await, so they take effect in gesture order; a new undoable write goes through `useActions` (or `inLane` plus `journalHead()`, as `ProtocolChecklist` does), never around it - the timer-driven writes (the sync drain, the processing auto-advance) too.
+  Each inverse is guarded by what its change left in the row, so a replay whose range no longer matches the file - a write landed outside it - is refused whole, with nothing changed, rather than restoring a full row over that write.
   A new table or column is journaled automatically; a table undo must not rewind (session state) is listed in `NOT_JOURNALED`.
 - `src/components/Board.tsx` — the drag-and-drop board.
 - `src-tauri/migrations/NNNN_*.sql` — schema; **append-only, numbered**. Never

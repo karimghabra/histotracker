@@ -154,6 +154,7 @@ export function withLiveDatabase<T>(work: (db: SqlHandle) => T): T {
   const db = live.db;
   const handle: SqlHandle = {
     exec: (sql) => db.exec(sql),
+    run: (sql) => (db.run(sql), db.getRowsModified()),
     all: (sql, params) => {
       const stmt = db.prepare(sql);
       try {

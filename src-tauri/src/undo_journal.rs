@@ -4,7 +4,10 @@
 //! `undo_journal` through triggers the frontend installs (`src/lib/undoJournal.ts`).
 //! An undo entry is a range of that journal: the rows its action wrote. Undo
 //! replays the range, newest first, and the replay's own rows are the range
-//! that redoes it.
+//! that redoes it. Each inverse carries its own precondition, so it matches its
+//! row only while that row still holds what the change left there; a statement
+//! that matches no row means something outside the range has touched it since,
+//! and the whole replay is refused rather than half applied.
 //! A replay is many statements, and the frontend's writes go through
 //! tauri-plugin-sql's connection POOL, where a BEGIN in one call and a COMMIT in
 //! the next can land on different connections. So the two things that must be
@@ -49,7 +52,7 @@ async fn begin(conn: &mut SqliteConnection) -> Result<(), String> {
 
 /// Commit what `work` did if it succeeded, roll all of it back if it failed, and
 /// close the connection either way.
-async fn finish<T>(mut conn: SqliteConnection, work: Result<T, sqlx::Error>) -> Result<T, String> {
+async fn finish<T>(mut conn: SqliteConnection, work: Result<T, String>) -> Result<T, String> {
     let result = match work {
         Ok(value) => sqlx::raw_sql("COMMIT")
             .execute(&mut conn)
@@ -58,12 +61,17 @@ async fn finish<T>(mut conn: SqliteConnection, work: Result<T, sqlx::Error>) -> 
             .map_err(|e| e.to_string()),
         Err(err) => {
             let _ = sqlx::raw_sql("ROLLBACK").execute(&mut conn).await;
-            Err(err.to_string())
+            Err(err)
         }
     };
     let _ = conn.close().await;
     result
 }
+
+/// What a replay refuses with when a row it would put back is no longer as the
+/// action left it, so restoring the whole row would erase whatever changed it.
+pub const CHANGED_SINCE: &str =
+    "Cannot undo or redo that step: the records it would put back have changed since. Nothing was changed.";
 
 /// The rows a replay wrote: `(from, to]` of the journal, the range that reverses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -87,6 +95,13 @@ pub struct Replayed {
 /// before the replay is swept out. The high-water mark, not `MAX(id)`: after an
 /// undo, the rows a redo puts back sit below it. The sweep is journaled too, so
 /// a redo restores the undone action's own audit rows exactly.
+///
+/// Every journal statement must touch EXACTLY ONE row. Each is an inverse of one
+/// row's change, guarded by what that change left there, so none touching a row
+/// means something outside the range being replayed has changed it since -- the
+/// sync timer draining a viewer's request between an Undo and its Redo, say --
+/// and restoring the whole row would silently erase that. Refused with
+/// [`CHANGED_SINCE`], rolled back, nothing changed.
 pub async fn revert(path: &Path, from: i64, to: Option<i64>) -> Result<Replayed, String> {
     let mut conn = open(path).await?;
     begin(&mut conn).await?;
@@ -100,28 +115,37 @@ async fn head(conn: &mut SqliteConnection) -> Result<i64, sqlx::Error> {
         .await
 }
 
-async fn replay(conn: &mut SqliteConnection, from: i64, to: Option<i64>) -> Result<Replayed, sqlx::Error> {
-    let start = head(conn).await?;
+async fn replay(conn: &mut SqliteConnection, from: i64, to: Option<i64>) -> Result<Replayed, String> {
+    let start = head(conn).await.map_err(|e| e.to_string())?;
     let audit: i64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)",
     )
     .fetch_one(&mut *conn)
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
     let statements: Vec<String> = sqlx::query_scalar(
         "SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC",
     )
     .bind(from)
     .bind(to.unwrap_or(start))
     .fetch_all(&mut *conn)
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
     for statement in &statements {
-        sqlx::raw_sql(statement).execute(&mut *conn).await?;
+        let done = sqlx::raw_sql(statement)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        if done.rows_affected() != 1 {
+            return Err(CHANGED_SINCE.to_string());
+        }
     }
     sqlx::query("DELETE FROM audit_events WHERE id > ?")
         .bind(audit)
         .execute(&mut *conn)
-        .await?;
-    Ok(Replayed { from: start, to: head(conn).await? })
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Replayed { from: start, to: head(conn).await.map_err(|e| e.to_string())? })
 }
 
 /// Run `statements` in order as one transaction: all of them, or none.
@@ -131,7 +155,7 @@ pub async fn execute_batch(path: &Path, statements: &[String]) -> Result<(), Str
     let mut work = Ok(());
     for statement in statements {
         if let Err(err) = sqlx::raw_sql(statement).execute(&mut conn).await {
-            work = Err(err);
+            work = Err(err.to_string());
             break;
         }
     }
@@ -176,7 +200,8 @@ mod tests {
     }
 
     /// A small lab: one table journaled the way the frontend journals every
-    /// table, and an audit trigger like the app's own.
+    /// table -- every inverse guarded by what the change left in the row, as
+    /// `journalTriggers` writes them -- and an audit trigger like the app's own.
     const SCHEMA: &str = "
         CREATE TABLE audit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT NOT NULL);
         CREATE TABLE undo_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL);
@@ -185,16 +210,16 @@ mod tests {
           INSERT INTO audit_events(summary) VALUES ('sample ' || new.id || ' now ' || new.note);
         END;
         CREATE TRIGGER undo_journal_samples_insert AFTER INSERT ON samples BEGIN
-          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM samples WHERE rowid=' || new.rowid);
+          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM samples WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND note IS ' || quote(new.note));
         END;
         CREATE TRIGGER undo_journal_samples_update AFTER UPDATE ON samples BEGIN
-          INSERT INTO undo_journal(stmt) VALUES ('UPDATE samples SET id=' || quote(old.id) || ',note=' || quote(old.note) || ' WHERE rowid=' || new.rowid);
+          INSERT INTO undo_journal(stmt) VALUES ('UPDATE samples SET id=' || quote(old.id) || ',note=' || quote(old.note) || ' WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND note IS ' || quote(new.note));
         END;
         CREATE TRIGGER undo_journal_samples_delete AFTER DELETE ON samples BEGIN
           INSERT INTO undo_journal(stmt) VALUES ('INSERT INTO samples(id,note) VALUES(' || quote(old.id) || ',' || quote(old.note) || ')');
         END;
         CREATE TRIGGER undo_journal_audit_events_insert AFTER INSERT ON audit_events BEGIN
-          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM audit_events WHERE rowid=' || new.rowid);
+          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM audit_events WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND summary IS ' || quote(new.summary));
         END;
         CREATE TRIGGER undo_journal_audit_events_delete AFTER DELETE ON audit_events BEGIN
           INSERT INTO undo_journal(stmt) VALUES ('INSERT INTO audit_events(id,summary) VALUES(' || quote(old.id) || ',' || quote(old.summary) || ')');
@@ -313,6 +338,39 @@ mod tests {
             assert!(err.contains("no_such_table"), "{err}");
             assert_eq!(rows(&mut conn, SAMPLES).await, samples, "no row was reverted");
             assert_eq!(rows(&mut conn, AUDIT).await, audit, "no audit row was swept");
+            assert_eq!(rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await, journal);
+        });
+    }
+
+    /// The sync timer drains a viewer's request between an Undo and the Redo of it,
+    /// touching a row the action touched. The redo would restore that whole row,
+    /// erasing the drain's change to it while the rest of the drain's work stayed.
+    #[test]
+    fn a_replay_is_refused_when_a_row_it_would_put_back_changed_since() {
+        block_on(async {
+            let scratch = Scratch::new();
+            let mut conn = lab(&scratch).await;
+            run(&mut conn, "INSERT INTO samples(id, note) VALUES (1, 'a')").await;
+            let mark = head(&mut conn).await;
+            run(&mut conn, "UPDATE samples SET note = 'b' WHERE id = 1").await;
+
+            let redo = revert(&scratch.db(), mark, None).await.expect("the undo replays");
+            assert_eq!(rows(&mut conn, SAMPLES).await, vec!["1:a"]);
+
+            // The drain, outside the range the redo would replay.
+            run(&mut conn, "UPDATE samples SET note = 'drained' WHERE id = 1").await;
+            let (samples, audit, journal) = (
+                rows(&mut conn, SAMPLES).await,
+                rows(&mut conn, AUDIT).await,
+                rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await,
+            );
+
+            let err = revert(&scratch.db(), redo.from, Some(redo.to))
+                .await
+                .expect_err("the redo is refused");
+            assert_eq!(err, CHANGED_SINCE);
+            assert_eq!(rows(&mut conn, SAMPLES).await, samples, "the drain's write is untouched");
+            assert_eq!(rows(&mut conn, AUDIT).await, audit);
             assert_eq!(rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await, journal);
         });
     }

@@ -59,6 +59,7 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       const db = new DatabaseSync(String(args.path));
       const handle: SqlHandle = {
         exec: (sql) => db.exec(sql),
+        run: (sql) => Number(db.prepare(sql).run().changes),
         all: (sql, params = []) => db.prepare(sql).all(...params) as Array<Record<string, unknown>>,
       };
       try {

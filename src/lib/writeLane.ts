@@ -23,7 +23,3 @@ export function inLane<T>(work: () => Promise<T>): Promise<T> {
   return slot;
 }
 
-/** Resolves once everything queued so far has run. For tests. */
-export function laneIdle(): Promise<unknown> {
-  return tail;
-}

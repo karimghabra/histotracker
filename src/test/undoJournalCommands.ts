@@ -7,6 +7,8 @@
 /** The little of a SQLite handle the commands need. */
 export interface SqlHandle {
   exec(sql: string): void;
+  /** Run one statement and report the rows IT changed (sqlite3_changes, as `rows_affected`). */
+  run(sql: string): number;
   all(sql: string, params?: Array<number | string>): Array<Record<string, unknown>>;
 }
 
@@ -33,6 +35,13 @@ const one = (db: SqlHandle, sql: string, params?: Array<number | string>) =>
 const head = (db: SqlHandle) =>
   one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0)");
 
+/**
+ * What a replay refuses with when a row it would put back is no longer as the
+ * action left it (`CHANGED_SINCE`, src-tauri/src/undo_journal.rs).
+ */
+export const CHANGED_SINCE =
+  "Cannot undo or redo that step: the records it would put back have changed since. Nothing was changed.";
+
 /** The rows a replay wrote: `(from, to]` of the journal, the range that reverses it. */
 export interface Replayed {
   from: number;
@@ -43,13 +52,19 @@ export interface Replayed {
  * `undo_journal_revert`: replay the journal rows in `(from, to]` (`to` absent: up
  * to the head), newest first, sweep the replay's audit rows, and return the range
  * the replay wrote.
+ *
+ * Every statement must touch exactly one row: each is one row's guarded inverse,
+ * so none matching means something outside the range has changed that row since,
+ * and the replay is refused with nothing changed.
  */
 export function revertJournal(db: SqlHandle, from: number, to?: number | null): Replayed {
   return inTransaction(db, () => {
     const start = head(db);
     const audit = one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)");
     const rows = db.all("SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC", [from, to ?? start]);
-    for (const row of rows) db.exec(String(row.stmt));
+    for (const row of rows) {
+      if (db.run(String(row.stmt)) !== 1) throw new Error(CHANGED_SINCE);
+    }
     db.all("DELETE FROM audit_events WHERE id > ? RETURNING id", [audit]);
     return { from: start, to: head(db) };
   });

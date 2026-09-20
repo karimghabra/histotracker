@@ -5783,51 +5783,58 @@ export async function removeSectionRequestIfEmpty(id: number): Promise<boolean> 
 /**
  * Move samples whose timed processing run has elapsed from `processing_started`
  * to `processed`. Short runs are 18h, long runs 52h. Returns how many moved.
+ *
+ * On a minute timer (App.tsx) while a technician works, so it takes its place in
+ * the write lane (writeLane.ts) like an action: a write that went around the lane
+ * could land between an action and the journal mark it is recorded under, and be
+ * undone as part of it.
  */
-export async function autoAdvanceProcessingRuns(): Promise<number> {
-  const db = await getDb();
-  const rows = await db.select<
-    Array<{ id: number; processing_type: string; processing_started_at: string | null }>
-  >(
-    `SELECT id, processing_type, processing_started_at
-       FROM samples WHERE current_stage = 'processing_started'`,
-  );
-
-  const now = new Date();
-  let moved = 0;
-  for (const row of rows) {
-    const started = parseTimestamp(row.processing_started_at);
-    if (!started) continue;
-    const readyAt = new Date(
-      started.getTime() + processingDurationHours(row.processing_type) * 3600_000,
+export function autoAdvanceProcessingRuns(): Promise<number> {
+  return inLane(async () => {
+    const db = await getDb();
+    const rows = await db.select<
+      Array<{ id: number; processing_type: string; processing_started_at: string | null }>
+    >(
+      `SELECT id, processing_type, processing_started_at
+         FROM samples WHERE current_stage = 'processing_started'`,
     );
-    if (now < readyAt) continue;
 
-    const readyStr = formatLocalTimestamp(readyAt);
+    const now = new Date();
+    let moved = 0;
+    for (const row of rows) {
+      const started = parseTimestamp(row.processing_started_at);
+      if (!started) continue;
+      const readyAt = new Date(
+        started.getTime() + processingDurationHours(row.processing_type) * 3600_000,
+      );
+      if (now < readyAt) continue;
 
-    await db.execute(
-      `UPDATE samples
-          SET current_stage = 'processed', stage_processed_at = COALESCE(stage_processed_at, ?)
-        WHERE id = ?`,
-      [readyStr, row.id],
-    );
-    moved += 1;
-  }
-  if (moved > 0) {
-    await db.execute(
-      `UPDATE processing_batches
-          SET status = 'ready'
-        WHERE status = 'processing'
-          AND NOT EXISTS (
-            SELECT 1
-              FROM processing_batch_members pbm
-              JOIN samples s ON s.id = pbm.sample_id
-             WHERE pbm.batch_id = processing_batches.id
-               AND s.current_stage = 'processing_started'
-          )`,
-    );
-  }
-  return moved;
+      const readyStr = formatLocalTimestamp(readyAt);
+
+      await db.execute(
+        `UPDATE samples
+            SET current_stage = 'processed', stage_processed_at = COALESCE(stage_processed_at, ?)
+          WHERE id = ?`,
+        [readyStr, row.id],
+      );
+      moved += 1;
+    }
+    if (moved > 0) {
+      await db.execute(
+        `UPDATE processing_batches
+            SET status = 'ready'
+          WHERE status = 'processing'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM processing_batch_members pbm
+                JOIN samples s ON s.id = pbm.sample_id
+               WHERE pbm.batch_id = processing_batches.id
+                 AND s.current_stage = 'processing_started'
+            )`,
+      );
+    }
+    return moved;
+  });
 }
 
 // ---- Stain requests (viewer -> workstation, via the shared repo inbox) -------

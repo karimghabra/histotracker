@@ -1288,7 +1288,11 @@ function makeApi(db) {
   // through their harness model src/test/undoJournalCommands.ts). An undo entry is
   // journalHead() before the action; undo is revertJournal(mark) (the range up to
   // the head), which returns the range { from, to } it wrote: the redo.
-  const journal = { exec: (sql) => db.exec(sql), all: (sql, params = []) => all(sql, params) };
+  const journal = {
+    exec: (sql) => db.exec(sql),
+    run: (sql) => Number(run(sql).changes),
+    all: (sql, params = []) => all(sql, params),
+  };
   function installJournal() {
     executeBatch(journal, JOURNAL_INSTALL);
   }
