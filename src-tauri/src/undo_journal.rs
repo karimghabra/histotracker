@@ -26,7 +26,7 @@
 
 use std::path::Path;
 
-use sqlx::error::{DatabaseError, ErrorKind};
+use sqlx::error::ErrorKind;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, SqliteConnection};
 
@@ -41,10 +41,26 @@ async fn open(path: &Path) -> Result<SqliteConnection, String> {
         .map_err(|e| format!("Could not open the database: {e}"))
 }
 
+/// One statement, run without preparing it.
+///
+/// `sqlx::raw_sql` reads as the natural fit -- every statement here is a
+/// statement rather than a query, and none is run twice -- but its `execute`
+/// gives the executor the SQL's own lifetime (`E: Executor<'e>, 'q: 'e`), which
+/// pins `&mut SqliteConnection` to it. A future holding that borrow across an
+/// await then cannot be seen as `Send`, and a Tauri command's future must be:
+/// the build fails with "implementation of `Executor` is not general enough".
+/// `query` takes the two lifetimes separately (`E: Executor<'c>, 'c: 'e`), and
+/// `persistent(false)` keeps `raw_sql`'s behaviour of caching no prepared
+/// statement -- a replay's statements are each seen once. Every caller passes a
+/// single statement, which is all `query` will run.
+fn stmt(sql: &str) -> sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'_>> {
+    sqlx::query(sql).persistent(false)
+}
+
 /// Take the write lock up front: IMMEDIATE, so a replay that starts by reading
 /// the journal cannot be refused the lock halfway through.
 async fn begin(conn: &mut SqliteConnection) -> Result<(), String> {
-    sqlx::raw_sql("BEGIN IMMEDIATE")
+    stmt("BEGIN IMMEDIATE")
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -55,13 +71,13 @@ async fn begin(conn: &mut SqliteConnection) -> Result<(), String> {
 /// close the connection either way.
 async fn finish<T>(mut conn: SqliteConnection, work: Result<T, String>) -> Result<T, String> {
     let result = match work {
-        Ok(value) => sqlx::raw_sql("COMMIT")
+        Ok(value) => stmt("COMMIT")
             .execute(&mut conn)
             .await
             .map(|_| value)
             .map_err(|e| e.to_string()),
         Err(err) => {
-            let _ = sqlx::raw_sql("ROLLBACK").execute(&mut conn).await;
+            let _ = stmt("ROLLBACK").execute(&mut conn).await;
             Err(err)
         }
     };
@@ -152,7 +168,7 @@ async fn replay(conn: &mut SqliteConnection, from: i64, to: i64) -> Result<Repla
     .await
     .map_err(|e| e.to_string())?;
     for statement in &statements {
-        let done = match sqlx::raw_sql(statement).execute(&mut *conn).await {
+        let done = match stmt(statement).execute(&mut *conn).await {
             Ok(done) => done,
             Err(err) if is_constraint(&err) => return Err(CHANGED_SINCE.to_string()),
             Err(err) => return Err(err.to_string()),
@@ -175,7 +191,7 @@ pub async fn execute_batch(path: &Path, statements: &[String]) -> Result<(), Str
     begin(&mut conn).await?;
     let mut work = Ok(());
     for statement in statements {
-        if let Err(err) = sqlx::raw_sql(statement).execute(&mut conn).await {
+        if let Err(err) = stmt(statement).execute(&mut conn).await {
             work = Err(err.to_string());
             break;
         }

@@ -31,7 +31,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { journalInstallStatements } from "../src/lib/undoJournal.ts";
 import { executeBatch, revertJournal as revertJournalCommand } from "../src/test/undoJournalCommands.ts";
-import { useUndoStore } from "../src/lib/undo.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(HERE, "..", "src-tauri", "migrations");
@@ -3375,19 +3374,20 @@ issue(28, "undo and redo each restore every table exactly, in one transaction", 
 // its mark instead also replays the rows every earlier undo in a row wrote back:
 // each pair cancels, so the database comes out right, but the journal doubles with
 // every undo and a deep undo storm ran the browser out of memory (stress3's
-// "deep undo storm"). Driven through the real undo store, as useActions drives it.
+// "deep undo storm"). An entry here is the range its action wrote, journalHead()
+// either side of it, as useActions records it; the stack arithmetic itself is the
+// store's, covered in src/lib/undo.test.ts.
 invariant("undoing a dozen actions in a row and redoing them grows the journal linearly", () => {
   const api = makeApi(freshDb());
   api.installJournal();
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "storm");
-  const store = useUndoStore.getState;
-  store().clear();
   const start = api.dumpUndoable();
+  const undoStack = [];
   for (let n = 1; n <= 12; n += 1) {
     const mark = api.journalHead();
     api.setSampleNote(id, "cut_notes", `${n} um`);
-    store().record({ label: `note ${n}`, mark, end: api.journalHead() });
+    undoStack.push({ mark, end: api.journalHead() });
   }
   const end = api.dumpUndoable();
   const written = api.journalHead();
@@ -3400,21 +3400,21 @@ invariant("undoing a dozen actions in a row and redoing them grows the journal l
     const grown = api.journalHead() - written;
     assert(grown <= replays * 3 * 4, `${replays} replays grew the journal by ${grown} rows, not a few per replay`);
   };
-  while (store().undoStack.length > 0) {
-    const entry = store().undoStack.at(-1);
+  const redoStack = [];
+  while (undoStack.length > 0) {
+    const entry = undoStack.pop();
     const replayed = api.revertJournal(entry.mark, entry.end);
-    store().commitUndo({ label: entry.label, mark: replayed.from, end: replayed.to });
+    redoStack.push({ mark: replayed.from, end: replayed.to });
     bounded();
   }
   eq(api.dumpUndoable(), start, "every action is undone");
-  while (store().redoStack.length > 0) {
-    const entry = store().redoStack.at(-1);
+  while (redoStack.length > 0) {
+    const entry = redoStack.pop();
     const replayed = api.revertJournal(entry.mark, entry.end);
-    store().commitRedo({ label: entry.label, mark: replayed.from, end: replayed.to });
+    undoStack.push({ mark: replayed.from, end: replayed.to });
     bounded();
   }
   eq(api.dumpUndoable(), end, "every action is redone");
-  store().clear();
 });
 
 // #29 — Undoing "start assay workflow" used to leave the minted slide stack
