@@ -81,7 +81,11 @@ export function ProtocolChecklist({
             if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
           }
           if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
-          record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, mark: before });
+          record({
+            label: `${value ? "Complete" : "Undo"} · ${item.label}`,
+            mark: before,
+            end: await journalHead(),
+          });
         }
       });
     } catch (err) {

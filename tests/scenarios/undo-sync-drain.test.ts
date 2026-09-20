@@ -1,14 +1,20 @@
-// The sync timer writes while the technician is undoing (ht-undo-snapshot-on-write-path).
+// A write the technician did not make, landing while they undo (ht-undo-snapshot-on-write-path).
 //
-// A workstation drains a viewer's stain request on a timer, so that write can land at any
-// moment — including between an Undo and the Redo of it. A redo replays one closed range of
-// the journal, and every inverse in it restores a WHOLE row, so a drain that touched the same
-// block would be half erased: the block's request flag gone, the stain_requests row it belongs
-// to left behind, and the inbox file already deleted from GitHub. On the real db.ts and
-// githubSync.ts, a real SQLite file and the shared fake remote.
+// A workstation drains a viewer's stain request on a timer, and Settings writes the assay
+// catalogue; neither is an action and neither is on the undo stack. An undo entry is one closed
+// range of the journal, its own action's rows and nothing else, so such a write is outside every
+// entry: an Undo that does not touch its rows leaves it alone, and one that would restore a whole
+// row over it is refused with nothing changed. Through the real useActions, on the real db.ts and
+// githubSync.ts, against a real SQLite file and the shared fake remote.
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it } from "vitest";
 import { openLab, type Lab } from "./lab";
 import { world } from "../compat/world";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Any = any;
 
 let lab: Lab | null = null;
 afterEach(async () => {
@@ -20,18 +26,38 @@ afterEach(async () => {
 
 type Row = Record<string, unknown>;
 
-const block = (l: Lab): Row => l.rows(`SELECT * FROM samples`)[0];
+const block = (l: Lab, id?: number): Row =>
+  id === undefined ? l.rows(`SELECT * FROM samples`)[0] : l.rows(`SELECT * FROM samples WHERE id = ?`, [id])[0];
 const requests = (l: Lab): Row[] => l.rows(`SELECT uuid, status FROM stain_requests`);
+const assays = (l: Lab): Row[] => l.rows(`SELECT id, assay_type, name FROM assay_catalog ORDER BY id`);
 
-async function blockWithARequestWaiting(l: Lab): Promise<number> {
-  const id = await l.sample("DESC-0", "embedded");
+/** A viewer asks for a stain on `id`, which lands in the inbox and nowhere else yet. */
+async function requestAStainOn(l: Lab, id: number): Promise<void> {
   await l.app.sync.submitRequest({
     sampleCode: l.rows(`SELECT sample_code FROM samples WHERE id = ?`, [id])[0].sample_code as string,
     requestedAssay: "H&E",
     assayType: "stain",
     requesterName: "Viewer V",
   });
+}
+
+async function blockWithARequestWaiting(l: Lab): Promise<number> {
+  const id = await l.sample("DESC-0", "embedded");
+  await requestAStainOn(l, id);
   return id;
+}
+
+/**
+ * The app's own actions, bound to the db.ts this lab opened: one render is enough to take them
+ * out, and they are closures over the real data layer. Imported after the launch, as undo-lane
+ * does, so the hook binds to that instance.
+ */
+async function appActions(): Promise<Any> {
+  const { useActions } = await import("../../src/hooks/useActions");
+  let actions: Any;
+  const Probe = () => ((actions = useActions()), null);
+  renderToString(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe)));
+  return actions;
 }
 
 /** The message a replay is refused with, or null if it was applied. */
@@ -47,10 +73,12 @@ it("a request drained between an undo and its redo is refused by the redo, not h
   const l = lab;
   const id = await blockWithARequestWaiting(l);
 
-  // The technician renames the block, then takes it back.
+  // The technician renames the block, then takes it back. The entry is the range
+  // the rename wrote, closed at its own end, as commit() records it.
   const mark: number = await l.db.journalHead();
   await l.db.setSampleDescription(id, "DESC-B");
-  const redo: { from: number; to: number } = await l.db.revertJournalRange(mark);
+  const end: number = await l.db.journalHead();
+  const redo: { from: number; to: number } = await l.db.revertJournalRange(mark, end);
   expect(block(l).sample_description).toBe("DESC-0");
 
   // The sync timer drains the waiting request, which flags the SAME block.
@@ -76,7 +104,7 @@ it("an undo of an action taken before the drain still reverts, and leaves the dr
 
   const mark: number = await l.db.journalHead();
   await l.db.setSampleDescription(id, "DESC-B");
-  await l.db.revertJournalRange(mark);
+  await l.db.revertJournalRange(mark, await l.db.journalHead());
 
   expect(block(l).sample_description).toBe("DESC-0");
   expect(block(l).preselected_stains, "the drain came first, so it is not part of this undo").toBe(flagged);
@@ -101,4 +129,42 @@ it("ingesting a request waits for the write lane instead of writing inside someb
   await held;
   expect((await draining).ingested).toBe(1);
   expect(requests(l)).toHaveLength(1);
+});
+
+it("an undo leaves a request the sync timer drained alongside it alone", async () => {
+  lab = await openLab();
+  const l = lab;
+  const edited = await l.sample("DESC-0", "embedded");
+  const requested = await l.sample("OTHER", "embedded");
+  await requestAStainOn(l, requested);
+  const actions = await appActions();
+
+  // The technician edits one block; the timer then drains a request for the other.
+  await actions.editSampleDescription(edited, "DESC-B");
+  expect((await l.app.sync.drainRequests()).ingested).toBe(1);
+  const flagged = block(l, requested);
+  expect(flagged.preselected_stains).toContain("H&E");
+
+  expect(await actions.undo()).toBe("Edit EE-1 description");
+
+  expect(block(l, edited).sample_description, "the edit is taken back").toBe("DESC-0");
+  expect(block(l, requested), "the drained request's block is untouched").toEqual(flagged);
+  expect(requests(l), "and the request is still on the record").toHaveLength(1);
+});
+
+it("an undo leaves an assay added in Settings meanwhile alone", async () => {
+  lab = await openLab();
+  const l = lab;
+  const id = await l.sample("DESC-0", "embedded");
+  const actions = await appActions();
+
+  await actions.editSampleDescription(id, "DESC-B");
+  await l.db.addAssay({ assay_type: "stain", name: "Trichrome" }); // what the Settings dialog writes
+  const catalogue = assays(l);
+  expect(catalogue.map((a) => a.name)).toContain("Trichrome");
+
+  expect(await actions.undo()).toBe("Edit EE-1 description");
+
+  expect(block(l, id).sample_description, "the edit is taken back").toBe("DESC-0");
+  expect(assays(l), "the assay Settings added survives the undo").toEqual(catalogue);
 });

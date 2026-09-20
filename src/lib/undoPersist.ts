@@ -96,9 +96,12 @@ export async function hydrateUndoHistory(): Promise<void> {
     const saved = await idbGet();
     if (!saved?.undoStack) return;
     // A history persisted by a build before the journal holds whole database
-    // images (up to 100 of them) and a byte-image anchor, never a mark: drop it,
-    // which also frees the space those images took.
-    const marked = [...saved.undoStack, ...(saved.redoStack ?? [])].every((e) => typeof e?.mark === "number");
+    // images (up to 100 of them) and a byte-image anchor, never a range: drop it,
+    // which also frees the space those images took. An entry without an `end` came
+    // from a build whose ranges ran to the head, which would replay far too much.
+    const marked = [...saved.undoStack, ...(saved.redoStack ?? [])].every(
+      (e) => typeof e?.mark === "number" && typeof e?.end === "number",
+    );
     if (!marked || typeof saved.anchor !== "string" || (await journalAnchor()) !== saved.anchor) {
       await idbClear(); // history belongs to a different database, or an older build
       return;

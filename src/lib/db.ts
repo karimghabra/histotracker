@@ -158,23 +158,21 @@ function guardWrites(db: Database): Database {
 }
 
 export function getDb(): Promise<Database> {
-  if (!dbPromise) dbPromise = openDb();
+  if (!dbPromise) {
+    dbPromise = Database.load(DB_URL)
+      .then(async (db) => {
+        await ensureRuntimeSchema(db);
+        await reconcileStainRequests(db);
+        await reconcileFulfilledRequests(db);
+        await splitContaminatedStainRacks(db);
+        await backfillSlideLetterMarks(db);
+        await retireDryingChecklistStep(db);
+        await installUndoJournal(db);
+        return db;
+      })
+      .then(guardWrites);
+  }
   return dbPromise;
-}
-
-function openDb(): Promise<Database> {
-  return Database.load(DB_URL)
-    .then(async (db) => {
-      await ensureRuntimeSchema(db);
-      await reconcileStainRequests(db);
-      await reconcileFulfilledRequests(db);
-      await splitContaminatedStainRacks(db);
-      await backfillSlideLetterMarks(db);
-      await retireDryingChecklistStep(db);
-      await installUndoJournal(db);
-      return db;
-    })
-    .then(guardWrites);
 }
 
 /**
@@ -576,14 +574,6 @@ export async function snapshotDb(): Promise<DbImage> {
  * with the image, then reopen against it. WAL-safe (the closed connection has no
  * dirty -wal). Callers refetch afterwards.
  *
- * The overwrite takes time, and while the file is closed, anything that asks for
- * the database must wait for the NEW file rather than reopen the old one. Before
- * this gate, a getDb() from anywhere in that window (a refetch, a persisted-undo
- * snapshot) reopened the old file, restoreDb's own reopen handed that stale
- * connection back, and the next write put the old state over the restored file:
- * the restore was silently lost. So the memoized connection is replaced, before
- * the old one closes, by one that opens only once the overwrite is done.
- *
  * The reopen does not run the numbered migrations, and the record of which ones
  * a file has had lives inside it, so an image goes live with whatever record it
  * brings. So an image from elsewhere (a backup, a snapshot pulled from the
@@ -593,20 +583,8 @@ export async function snapshotDb(): Promise<DbImage> {
  */
 export async function restoreDb(image: DbImage): Promise<void> {
   const path = await getDbFilePath(); // resolve while the connection is still open
-  const previous = dbPromise;
-  let overwritten!: () => void;
-  const gate = new Promise<void>((resolve) => (overwritten = resolve));
-  dbPromise = gate.then(openDb);
-  try {
-    try {
-      await (await previous)?.close();
-    } catch {
-      // Best-effort: even if close fails, the file is overwritten and reopened.
-    }
-    await invoke("save_file", { path, contents: Array.from(image) });
-  } finally {
-    overwritten(); // a failed overwrite reopens the file as it was
-  }
+  await resetDb(); // close + drop the pooled handle so the file is unlocked
+  await invoke("save_file", { path, contents: Array.from(image) });
   await getDb(); // reopen eagerly so callers see a ready connection
 }
 

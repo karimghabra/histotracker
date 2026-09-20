@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useUndoStore, type UndoEntry } from "./undo";
 
-const undoEntry = (label: string, n: number): UndoEntry => ({ label, mark: n });
+const undoEntry = (label: string, n: number): UndoEntry => ({ label, mark: n, end: n + 1 });
 
 describe("undo store: undo-journal mark bookkeeping", () => {
   beforeEach(() => useUndoStore.getState().clear());
@@ -43,21 +43,15 @@ describe("undo store: undo-journal mark bookkeeping", () => {
     expect(useUndoStore.getState().redoStack).toHaveLength(0);
   });
 
-  it("recording an action closes the previous entry's range at the new mark", () => {
+  it("keeps each entry at the range its own action wrote, whatever is recorded after it", () => {
     const s = useUndoStore.getState();
-    s.record(undoEntry("A", 1));
-    expect(useUndoStore.getState().undoStack[0].end).toBeUndefined(); // runs to the head for now
-    useUndoStore.getState().record(undoEntry("B", 5));
-    const [a, b] = useUndoStore.getState().undoStack;
-    expect(a).toEqual({ label: "A", mark: 1, end: 5 }); // A is exactly the rows before B began
-    expect(b.end).toBeUndefined();
-  });
-
-  it("an entry that came back from an undo or redo keeps the range its replay wrote", () => {
-    const s = useUndoStore.getState();
-    s.record({ label: "A", mark: 1, end: 9 });
-    useUndoStore.getState().record(undoEntry("B", 12));
-    expect(useUndoStore.getState().undoStack[0]).toEqual({ label: "A", mark: 1, end: 9 });
+    // A wrote (1, 3]; rows 4 and 5 came from somewhere that is not an action.
+    s.record({ label: "A", mark: 1, end: 3 });
+    useUndoStore.getState().record({ label: "B", mark: 5, end: 9 });
+    expect(useUndoStore.getState().undoStack).toEqual([
+      { label: "A", mark: 1, end: 3 },
+      { label: "B", mark: 5, end: 9 },
+    ]);
   });
 
   it("returns undefined when there is nothing to undo/redo", () => {

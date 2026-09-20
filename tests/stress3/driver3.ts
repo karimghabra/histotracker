@@ -83,29 +83,42 @@ export function fingerprintDiff(
  * Push an undo point, the way `useActions.commit()` does.
  *
  * The explorer drives `db.ts` directly, so nothing populates the undo stack for
- * it — the stack lives in React and only UI mutations fill it. These two lines
- * are the recording half of `commit()`, reproduced deliberately and named as
- * such: they are `journalHead()` plus `useUndoStore.record()`, the same functions
- * from the same modules.
+ * it — the stack lives in React and only UI mutations fill it. These lines are
+ * the recording half of `commit()`, reproduced deliberately and named as such:
+ * they are `journalHead()` either side of the move plus `useUndoStore.record()`,
+ * the same functions from the same modules. Taking the head again afterwards is
+ * what closes the entry at the move's own end, as `commit()` does.
  *
  * What is NOT reproduced is the interesting half. Popping, the journal replay,
  * the write lane, query invalidation and the re-render are all reached through
  * the real toolbar button, so the machinery under test is the app's own.
  */
-export async function recordUndoPoint(page: Page, label: string): Promise<boolean> {
-  return (await page.evaluate(async (text) => {
+export async function undoMark(page: Page): Promise<number | null> {
+  return (await page.evaluate(async () => {
+    try {
+      const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
+      return (await db.journalHead()) as number;
+    } catch {
+      return null;
+    }
+  })) as number | null;
+}
+
+export async function recordUndoPoint(page: Page, label: string, mark: number | null): Promise<boolean> {
+  if (mark === null) return false;
+  return (await page.evaluate(async ([text, from]) => {
     try {
       const db = (await import("/src/lib/db.ts")) as unknown as Record<string, Function>;
       const undo = (await import("/src/lib/undo.ts")) as unknown as {
-        useUndoStore: { getState: () => { record: (s: { label: string; mark: number }) => void } };
+        useUndoStore: { getState: () => { record: (s: { label: string; mark: number; end: number }) => void } };
       };
-      const mark = (await db.journalHead()) as number;
-      undo.useUndoStore.getState().record({ label: text as string, mark });
+      const end = (await db.journalHead()) as number;
+      undo.useUndoStore.getState().record({ label: text as string, mark: from as number, end });
       return true;
     } catch {
       return false;
     }
-  }, label)) as boolean;
+  }, [label, mark] as [string, number])) as boolean;
 }
 
 export async function undoDepths(page: Page): Promise<{ undo: number; redo: number }> {

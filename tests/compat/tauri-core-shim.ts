@@ -71,7 +71,6 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       }
     }
     case "save_file":
-      await world().beforeSaveFile?.();
       writeFileSync(String(args.path), Uint8Array.from((args.contents as number[]) ?? []));
       return out(undefined);
 

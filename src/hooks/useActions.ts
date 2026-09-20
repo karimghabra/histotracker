@@ -130,13 +130,19 @@ export function useActions() {
       // words: a viewer is told to use the workstation, an unsigned user is told
       // to sign in — which is the whole fix, and one click away.
       if (readOnly) throw new Error(readOnlyMessage(reason));
-      // The journal's head, not a copy of the database: the undo is written by
-      // the change itself (undoJournal.ts). Runs inside the caller's lane slot.
+      // The journal's head either side of the action, not a copy of the database:
+      // the undo is written by the change itself (undoJournal.ts). Both reads and
+      // the writes between them are in the caller's lane slot, so the entry is
+      // exactly this action's rows and nothing that landed around it.
       const before = await journalHead();
       const result = await fn();
+      const after = await journalHead();
       invalidate();
-      record({ label, mark: before });
-      await pruneJournal(oldestMark());
+      record({ label, mark: before, end: after });
+      // Housekeeping only: an unpruned journal costs space, and the next action
+      // prunes it. It must never fail an action that has already landed and is
+      // already on the undo stack (a sign-out mid-action refuses the DELETE).
+      await pruneJournal(oldestMark()).catch(() => undefined);
       return result;
     },
     [invalidate, reason, record, readOnly],

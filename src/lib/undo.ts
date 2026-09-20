@@ -6,21 +6,22 @@ import { create } from "zustand";
  * revertJournalRange), so the UI just refetches; the replay returns the range it
  * wrote, which is the entry the other stack keeps.
  *
- * A freshly recorded action's range runs to the journal's head (`end` absent)
- * until the next action is recorded, which closes it at the next one's mark. So
- * an undo replays only its own entry's rows, never the rows every earlier undo in
- * a row wrote back, which would double the journal with each undo.
+ * The range is CLOSED when the entry is recorded: `mark` is the journal's head
+ * before the action, `end` its head after. So an entry covers its own action and
+ * nothing else - not the rows an earlier undo wrote back (which would double the
+ * journal with every undo), and not a write that landed after it from outside the
+ * action, which the replay's own guards then refuse rather than quietly erase.
  */
 export interface UndoEntry {
   label: string;
   mark: number;
-  end?: number;
+  end: number;
 }
 
 interface UndoState {
   undoStack: UndoEntry[];
   redoStack: UndoEntry[];
-  /** Record a freshly-performed action, marked where it began; clears redo. */
+  /** Record a freshly-performed action, with the journal range it wrote; clears redo. */
   record: (entry: UndoEntry) => void;
   /** Pop the newest undo entry and push the given entry (the mark that redoes it) onto redo. */
   commitUndo: (redoEntry: UndoEntry) => UndoEntry | undefined;
@@ -45,12 +46,7 @@ export const useUndoStore = create<UndoState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   record: (entry) =>
-    set((s) => {
-      const closed = s.undoStack.map((e, i) =>
-        i === s.undoStack.length - 1 && e.end === undefined ? { ...e, end: entry.mark } : e,
-      );
-      return { undoStack: [...closed, entry].slice(-MAX), redoStack: [] };
-    }),
+    set((s) => ({ undoStack: [...s.undoStack, entry].slice(-MAX), redoStack: [] })),
   commitUndo: (redoEntry) => {
     const { undoStack, redoStack } = get();
     if (undoStack.length === 0) return undefined;

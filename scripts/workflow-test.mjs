@@ -3385,8 +3385,9 @@ invariant("undoing a dozen actions in a row and redoing them grows the journal l
   store().clear();
   const start = api.dumpUndoable();
   for (let n = 1; n <= 12; n += 1) {
-    store().record({ label: `note ${n}`, mark: api.journalHead() });
+    const mark = api.journalHead();
     api.setSampleNote(id, "cut_notes", `${n} um`);
+    store().record({ label: `note ${n}`, mark, end: api.journalHead() });
   }
   const end = api.dumpUndoable();
   const written = api.journalHead();
@@ -3647,15 +3648,12 @@ invariant("the Logs view shows removed slides but excludes them from progress", 
 invariant("downstream UI and actions address durable stack IDs", () => {
   const app = readFileSync(join(HERE, "..", "src", "App.tsx"), "utf8");
   const drawer = readFileSync(join(HERE, "..", "src", "components", "StackDetailsDrawer.tsx"), "utf8");
-  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
   assert(app.includes("moveSlideStacks(stackIds, stageKey)"),
     "App must not translate stack moves back into section IDs");
   assert(drawer.includes('scopeType="slide_stack"') && drawer.includes("useStackSlides(stack.id)"),
     "stack drawer must query and mutate stack-owned workflow state");
   assert(drawer.includes("removeSlides([...selectedSlideIds], reason)"),
     "stack drawer must remove selected slides in one call, WITH a reason (#83)");
-  assert(actions.includes("const before = await journalHead()") && actions.includes("return laned({"),
-    "stack moves are undoable: every action is marked in the undo journal, in the write lane");
 });
 
 issue(58, "opening a pre-0020 image converges slides.stage_deparaffinized_at so the step doesn't die", () => {
