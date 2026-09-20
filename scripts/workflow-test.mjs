@@ -1186,8 +1186,12 @@ function makeApi(db) {
       // (#12): a slide saved as an extra is a PLAN until its group leaves the
       // queue, and the plan is not the cut (#95/#118). Without it this pulled
       // uncut glass straight into a staining rack — found by the v2 fuzzer.
+      // The cut stamp is required with it (#182): the group's stage says nothing
+      // about a slide that was refiled into that group, or left in it when the
+      // group was retired underneath it. See db.ts.
       `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+          AND sl.stage_cut_at IS NOT NULL
           AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
         ORDER BY sl.id LIMIT 1`, [sampleId]);
     if (extra) {
@@ -1279,6 +1283,7 @@ function makeApi(db) {
          JOIN samples s ON s.id = sr.sample_id JOIN projects p ON p.id = s.project_id
         WHERE sl.purpose = 'extra' AND sl.assignment_saved = 1 AND sl.current_stage = 'extra' AND p.is_active = 1
           AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
+          AND sl.stage_cut_at IS NOT NULL
         ORDER BY sl.id`);
   }
 
@@ -1877,6 +1882,54 @@ invariant("a requested stain pulls from an extra first, else flags the block (#2
   // Second request pulls the remaining extra; third has none → flags the block.
   eq(api.requestStainForSample(id, "ihc", "CD31").target, "extra", "second request pulls the last extra");
   eq(api.requestStainForSample(id, "stain", "PAS").target, "block", "no extras left → the block is flagged");
+});
+
+// #182 — a stain request must never pull glass that was never cut.
+//
+// The extras query filtered on the GROUP's stage, which is only a proxy for "a
+// blade touched this block". A slide carries its own stamps between groups, so
+// refiling an uncut extra onto another block drops it into one of that block's
+// groups — and if that group is past the queue, the proxy says cut. The stress
+// fuzzer then found it in a staining rack with no cut date: a record of glass
+// that does not exist. The cut stamp is the fact; the stage is not.
+issue(182, "a stain request does not pull an uncut extra refiled onto the block", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const left = api.addSample(p, "EE", "left").id;
+  const right = api.addSample(p, "EE", "right").id;
+  api.markEmbedded(left);
+  api.markEmbedded(right);
+
+  // The right block has a cut group that really was cut, and its one extra is
+  // taken by a first request — so the group is past the queue with nothing free.
+  const [cutGroup] = api.createSectionRequests(right, [{ duplicates: 1 }]);
+  api.startAssayWork(cutGroup);
+  eq(api.requestStainForSample(right, "stain", "SafO").target, "extra",
+     "the right block's own cut extra fulfils the first request");
+
+  // The left block's cut is still queued, so its extra is a line in a plan.
+  const [queued] = api.createSectionRequests(left, [{ duplicates: 1 }]);
+  const planned = api.get(`SELECT id, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`, [queued]);
+  eq(planned.cut, null, "the queued block's extra has no cut date");
+
+  // Refiled onto the right block, it lands in that block's cut group.
+  api.relabelSlideToSample(planned.id, right, "mislabelled at the microtome");
+  eq(api.get(`SELECT sr.current_stage AS stage FROM slides sl
+                JOIN section_requests sr ON sr.id = sl.section_request_id
+               WHERE sl.id = ?`, [planned.id]).stage,
+     "stain_requested", "the refiled slide sits in a group past Needs Sectioning");
+
+  const result = api.requestStainForSample(right, "stain", "PAS");
+  eq(result.target, "block", "the uncut slide is not glass, so the block is flagged for a cut");
+  const after = api.get(`SELECT stack_id AS rack, stage_cut_at AS cut, purpose FROM slides WHERE id = ?`, [planned.id]);
+  eq(after.rack, null, "the uncut slide never joins a staining rack");
+  eq(after.purpose, "extra", "and is not re-purposed as a stain slide");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN slide_stacks st ON st.id = sl.stack_id
+               WHERE st.kind = 'stain' AND sl.purpose = 'stain'
+                 AND sl.current_stage <> 'removed' AND sl.stage_cut_at IS NULL`).c, 0,
+     "no slide sits in a staining rack before it was cut");
+  eq(api.listExtraSlides().some((sl) => sl.id === planned.id), false,
+     "nor does it show in the extras inventory as glass on the bench");
 });
 
 // #34/#38 — pre-assigned slides skip a separate assignment step: a section cut

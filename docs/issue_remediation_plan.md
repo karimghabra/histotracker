@@ -44,6 +44,19 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #182 — a slide reached a staining rack without ever being cut
+
+- **#182 · ✅ fixed.**
+  The nightly stress2 fuzzer (seed 20260813, step 132) broke the `racked-slide-was-cut` invariant: `BB-0003-E` sat in rack 1 with no cut date, which is a record of glass that does not exist.
+  Root cause: the extras a stain request may draw on were filtered by their cut GROUP's stage (`NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')`, the #12 rule), and that stage is only a PROXY for "a blade took this section".
+  A slide carries its own stamps when it moves between groups, so an uncut extra refiled onto another block (`relabelSlideToSample`) lands in one of that block's groups and inherits its answer; a group retired under a live slide (`removeSectionRequest`) leaves it reading `removed`, which the filter also let through.
+  `requestStainForSample` then pulled that plan line into a staining rack, where the next rack tick would stamp it stained with no cut date - the 0.14.2 harm again.
+  The hole predates the fix that exposed it: #180's exhaust-cancels-the-waiting-cut is what let the fuzzer's walk reach a `removed` group holding a live slide, but the refiling route needs no cancellation at all and is what the regression test uses.
+  The fix states the rule the rest of `db.ts` already states - the cut stamp is what says a blade touched the block (#95), as `addSlideToSection` reads off its siblings and `reassignSlide` refuses on - so `requestStainForSample` and `listExtraSlides` now require `slides.stage_cut_at IS NOT NULL` alongside the group-stage filter, which stays for rows older builds stamped at creation (#12/#118).
+  Consequence for the bench: an uncut plan line no longer appears in the Extra Slides inventory and no longer fulfils a stain request; the request falls through to the block, which is flagged for a cut, exactly as it does when there are no extras at all.
+  No schema change, so the release in use opens this tree's database unchanged.
+  *Test:* `tests/scenarios/uncut-extra.test.ts` on the real `db.ts`, harness gate `issue #182` in `scripts/workflow-test.mjs`, and the stress2 fuzzer's own `racked-slide-was-cut` invariant on seed 20260813, which is red before the fix and green after.
+
 ## #144 — a stain request joined the cut waiting on a spent block
 
 - **#144 · ✅ fixed.**

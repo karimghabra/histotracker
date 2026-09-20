@@ -115,6 +115,12 @@ suite runs" below applies to running two heavy suites side by side.
 
 `pnpm verify` (without `--screenshot`) runs the first three in sequence, stopping at the first red one.
 
+stress2's two big swarm tests are the exception to that table on a WSL2 host: `seedLarge` there has
+taken 537s for the 150-block board that a CI runner seeds in 79s, which expires the config's 900s
+per-test timeout during setup while CI passes the same test in 4.8m.
+A swarm timeout whose findings line shows a seeding time in the hundreds of seconds is that, not a
+defect; re-run the one test with `--timeout` raised before reading anything into it.
+
 **Never run the packaged desktop app or its suite on the lab machine.** It opens
 real windows on the desktop someone is working on. Browser suites are headless;
 keep them that way (`DISPLAY` unset) so nothing can reach the desktop.

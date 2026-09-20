@@ -3200,6 +3200,13 @@ export async function listExtraSlides(): Promise<Slide[]> {
         -- a slide saved as 'extra' during assignment must not surface in the
         -- inventory until its section is dispositioned onward.
         AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
+        -- And only when a blade actually took it (#95). The stage above is the
+        -- GROUP's; a slide refiled onto another block, or left behind by a group
+        -- that was retired under it, carries its own stamps into a group that
+        -- reads "past the queue". The inventory is a list of glass on the bench,
+        -- so an extra with no cut date does not belong in it - the same rule
+        -- requestStainForSample applies where it takes one.
+        AND sl.stage_cut_at IS NOT NULL
       ORDER BY s.is_priority DESC, p.code COLLATE NOCASE, s.project_sample_number, sl.id`,
   );
 }
@@ -4006,8 +4013,22 @@ export async function requestStainForSample(input: {
     // "pulled from an extra" and put glass nobody had cut into Staining, where a
     // rack tick then recorded it as stained with no cut date. Found by the v2
     // fuzzer; the guard belongs here, at the one place that takes an extra.
+    //
+    // The stage filter alone is a PROXY for "this glass exists", and a proxy the
+    // record can outrun: a slide keeps its own stamps when it moves between
+    // groups, so an uncut extra refiled onto another block (relabelSlideToSample)
+    // lands in one of that block's groups, and a cut group retired under the
+    // slide (removeSectionRequest, which #144's exhaust-cancels-the-waiting-cut
+    // now reaches) leaves it in a group at 'removed'. Both read as "past the
+    // queue" while no blade ever touched the block, and this pulled the slide
+    // into a rack with no cut date - a record of glass that does not exist.
+    // So the cut stamp is required too, which is the rule addSlideToSection and
+    // reassignSlide already state: the stamp is what says a blade touched the
+    // block (#95), and the stage filter stays for the rows older builds stamped
+    // at creation (#12/#118).
     `SELECT sl.id FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
       WHERE sr.sample_id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'
+        AND sl.stage_cut_at IS NOT NULL
         AND sr.current_stage NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')
       ORDER BY sl.id LIMIT 1`,
     [input.sampleId],
