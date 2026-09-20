@@ -17,11 +17,15 @@ it("a revert leaves nothing to undo or redo: the safety backup is the way back",
   lab = await openLab();
   await lab.sample("in the backup");
   const backup = await lab.app.backup.createBackup("manual", 10);
+  // Two actions, the newer one taken back: one step to undo, one to redo. Recording
+  // is what clears the redo branch, so the undo has to come last or the Redo half of
+  // this test would be asserting against a stack that was already empty.
   const { useUndoStore } = await import("../../src/lib/undo");
   useUndoStore.getState().record({ label: "an action before the revert", mark: 0, end: 1 });
-  useUndoStore.getState().commitUndo({ label: "an action before the revert", mark: 1, end: 2 });
   useUndoStore.getState().record({ label: "another action", mark: 2, end: 3 });
-  expect(useUndoStore.getState().undoStack).toHaveLength(1);
+  useUndoStore.getState().commitUndo({ label: "another action", mark: 3, end: 4 });
+  expect(useUndoStore.getState().undoStack, "one step to undo when the revert lands").toHaveLength(1);
+  expect(useUndoStore.getState().redoStack, "and one to redo").toHaveLength(1);
 
   await lab.app.backup.revertToBackup(backup.name);
 

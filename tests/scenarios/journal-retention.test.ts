@@ -8,10 +8,16 @@
 // one moment nothing can be relying on a row: the undo stack is empty until the saved history is
 // hydrated, and that is anchored to the journal's ends. On the real db.ts, a real SQLite file,
 // relaunched the way the app relaunches.
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it } from "vitest";
 import { openLab, type Lab } from "./lab";
 import { launch, quit, type App } from "../compat/app";
 import { currentBuild } from "../compat/builds";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Any = any;
 
 let running: App | null = null;
 afterEach(async () => {
@@ -27,7 +33,17 @@ async function relaunch(lab: Lab): Promise<App> {
   return running;
 }
 
+/** The app's own actions, bound to the db.ts this lab opened (as undo-lane does). */
+async function appActions(): Promise<Any> {
+  const { useActions } = await import("../../src/hooks/useActions");
+  let actions: Any;
+  const Probe = () => ((actions = useActions()), null);
+  renderToString(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe)));
+  return actions;
+}
+
 const journal = (lab: Lab) => lab.rows(`SELECT seq, stmt FROM undo_journal ORDER BY seq`);
+const floor = (lab: Lab) => Number(lab.rows(`SELECT COALESCE(MIN(seq), 0) AS n FROM undo_journal`)[0].n);
 const rows = (lab: Lab) => Number(lab.rows(`SELECT COUNT(*) AS n FROM undo_journal`)[0].n);
 const bytes = (lab: Lab) =>
   Number(lab.rows(`SELECT COALESCE(SUM(LENGTH(CAST(stmt AS BLOB))), 0) AS n FROM undo_journal`)[0].n);
@@ -114,4 +130,25 @@ it("keeps the newest row even when it alone is past the ceiling, rather than emp
     lab.rows(`SELECT substr(stmt, 1, 6) AS head FROM undo_journal`)[0].head,
     "and what survives is the newest row",
   ).toBe("giant ");
+});
+
+it("a walk back and forward forgets the journal rows it leaves behind", async () => {
+  const lab = await openLab();
+  running = lab.app;
+  const id = await lab.sample("DESC-0", "embedded");
+  const actions = await appActions();
+  const { oldestMark } = await import("../../src/lib/undo");
+
+  await actions.editSampleDescription(id, "DESC-B");
+  await actions.editSampleNote(id, "cut_notes", "CUT-B");
+
+  // Ctrl+Z, Ctrl+Z: each replay writes its own rows and strands the ones behind it.
+  expect(await actions.undo()).toBeTruthy();
+  expect(await actions.undo()).toBeTruthy();
+  expect(floor(lab), "nothing older than the oldest step either stack still needs").toBeGreaterThan(oldestMark());
+
+  // Ctrl+Y, Ctrl+Y: the same again in the other direction.
+  expect(await actions.redo()).toBeTruthy();
+  expect(await actions.redo()).toBeTruthy();
+  expect(floor(lab), "still nothing older than the oldest step either stack needs").toBeGreaterThan(oldestMark());
 });

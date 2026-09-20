@@ -892,6 +892,7 @@ export function useActions() {
     const entry = undoStack[undoStack.length - 1];
     const replayed = await replayOrSkip(entry, "undo");
     useUndoStore.getState().commitUndo({ label: entry.label, mark: replayed.from, end: replayed.to });
+    await pruneJournal(oldestMark()).catch(() => undefined);
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
     return entry.label;
@@ -905,6 +906,7 @@ export function useActions() {
     const entry = redoStack[redoStack.length - 1];
     const replayed = await replayOrSkip(entry, "redo");
     useUndoStore.getState().commitRedo({ label: entry.label, mark: replayed.from, end: replayed.to });
+    await pruneJournal(oldestMark()).catch(() => undefined);
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
     return entry.label;
