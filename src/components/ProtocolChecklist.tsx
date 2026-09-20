@@ -81,18 +81,24 @@ export function ProtocolChecklist({
       // scatter it triggers) at a time, instead of jumping to the last
       // board-level action (#56).
       await inLane(async () => {
-        const before = await journalHead();
-        await setChecklistItemComplete(itemId, value, operator.trim());
+        // Drawing a neighbouring rack's checklist for the first time is not part of
+        // this step, so it happens BEFORE the mark. Inside the range, an Undo would
+        // delete the run and the refetch that follows would immediately re-create it
+        // under a new id, leaving the Redo nothing to put the old one back as.
+        const siblings = new Map<number, Awaited<ReturnType<typeof ensureChecklist>>>();
         if (item) {
           for (const targetScopeId of scopeIds) {
             if (targetScopeId === scopeId) continue;
-            const targetItems = await ensureChecklist({
-              scopeType,
-              scopeId: targetScopeId,
-              stageKey,
-              protocolName,
-              labels,
-            });
+            siblings.set(
+              targetScopeId,
+              await ensureChecklist({ scopeType, scopeId: targetScopeId, stageKey, protocolName, labels }),
+            );
+          }
+        }
+        const before = await journalHead();
+        await setChecklistItemComplete(itemId, value, operator.trim());
+        if (item) {
+          for (const targetItems of siblings.values()) {
             const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
             if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
           }
