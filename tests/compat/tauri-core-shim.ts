@@ -2,7 +2,8 @@
 // data layer reaches, against real files on the current machine.
 //
 //   read_file / save_file  - lib.rs: plain std::fs on the live database path
-//                            (snapshots, undo, sync publish and pull)
+//                            (backups, sync publish and pull; undo replays the
+//                            journal and never copies the file)
 //   backup_*               - backup.rs: validated, atomic, named backups
 //   db_migrate_image       - migrate.rs: the running build's migrations, run on a
 //                            staging copy of an image (a backup before a revert,

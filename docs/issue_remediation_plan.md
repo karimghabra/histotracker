@@ -1318,8 +1318,8 @@ Second pass — the remaining eight, all now fixed:
   not "never initialised" — legacy rows still carry the column's
   `NOT NULL DEFAULT 1` and initialise as before. Recomputed rather than
   decremented so a database that already drifted self-corrects. Undo is
-  unaffected: it restores a whole DB image, so `duplicates` returns with the
-  slides. Gate: `issue #83`, observed failing without the fix.
+  unaffected: the removal's own journal range is replayed, so `duplicates`
+  returns with the slides. Gate: `issue #83`, observed failing without the fix.
 
   That fix on its own traded a resurrecting group for a dead one — an emptied
   group has no `HAVING` clause hiding it, so it sat in Needs Sectioning as "×0".

@@ -46,13 +46,15 @@ The bound is five megabytes of statement text, and a fortnight.
 The size is expressed in bytes because bytes are what the payload costs: the journal is copied into every backup and uploaded whole in every published snapshot, and one inverse row is anything from a hundred bytes to several kilobytes.
 Five megabytes is a fraction of a lab-sized database (about 23 MB) and far more journal than a hundred-step undo stack reaches in ordinary use.
 
-**A published snapshot can hold rows the workstation has deleted, and that is deliberate.**
-The inverse of a delete is the row written back out in full, so deleting a project or emptying a processing run leaves that row's contents inside `undo_journal` - and the journal goes wherever the file goes, into every backup and into the snapshot every viewer downloads.
-That is what makes the deletion something the technician can take back, which is the whole point of the journal, and it is why the age bound is a retention window and not only a size one: fourteen days, after which the next open forgets those rows and the snapshot published after it no longer carries them.
-Deletion in this app is a workflow correction, not a redaction.
-Nothing here is a way to remove a record from the lab's own private data repo, and nothing should be deleted on the understanding that it is.
 The file therefore grows for as long as the lab stays rolled back, and every backup and published snapshot carries that growth, until a build that trims comes forward again and the next open brings it back inside the bound.
 Nothing is lost or corrupted by it; it costs space.
+
+**A published snapshot can hold rows the workstation has deleted. The captain ruled on 2026-09-19 that this is acceptable**, having been given this exact consequence: deletion in this app is a workflow correction, not a redaction.
+The inverse of a delete is the row written back out in full, so deleting a project or emptying a processing run leaves that row's contents inside `undo_journal` - and the journal goes wherever the file goes, into every backup and into the snapshot every viewer downloads.
+A delete cascades, so what is reconstructible is not only the row the technician picked: deleting a project takes its samples, cut groups, slides and timeline events with it, and every one of those rows is in the journal in full - sample descriptions, all four note fields, and the operator names stamped on the work.
+Any viewer's copy of the snapshot, and any backup taken in the window, can be read back with a SQLite tool for as long as the journal keeps those rows.
+That is what makes the deletion something the technician can take back, which is the whole point of the journal, and it is why the age bound is a retention window and not only a size one: fourteen days, after which the next open forgets those rows and the snapshot published after it no longer carries them.
+Nothing here is a way to remove a record from the lab's own private data repo, and nothing should be deleted on the understanding that it is.
 
 The migration record lives inside the image, so an older image swapped in as it is would carry a record without the newer migrations.
 `getDb()` would converge their columns for the session, and the next launch would run the migrations again on top of those columns ("duplicate column name"), leaving a database the app cannot open.

@@ -2016,8 +2016,8 @@ issue(91, "a block that is already embedded cannot be added to a run", () => {
 // sectioned!"
 //
 // This is also the whole of the original report ("sectioned, undone, redone —
-// the slide shows as cut"): undo/redo swaps whole DB images and was never
-// broken, but the cut stamp was written when the group was CREATED, so it
+// the slide shows as cut"): undo/redo replays the action's journal range and was
+// never broken, but the cut stamp was written when the group was CREATED, so it
 // predated the thing being undone and no amount of rewinding could clear it.
 issue(95, "a slide is stamped cut when its group leaves Needs Sectioning, not before", () => {
   const api = makeApi(freshDb());

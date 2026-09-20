@@ -41,15 +41,16 @@ test("undo reverts a create; redo reapplies it", async ({ page }) => {
   await signInAndSeedUser(page);
   await createProject(page, "EE", "Enthesis Engineering");
 
-  // Creating a sample IS an undoable action (goes through the commit/snapshot path).
+  // Creating a sample IS an undoable action: it records the journal range it wrote.
   await createSample(page, "Undo test block");
   await expect(page.getByText("EE-1")).toBeVisible();
 
-  // Undo → the whole DB reverts to the pre-create image; the UI follows.
+  // Undo → the action's journal range is replayed back to its mark; the UI follows.
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByText("EE-1")).toHaveCount(0);
 
-  // Redo → the image is reapplied and the sample is back, same ID (no sequence drift).
+  // Redo → the range the undo wrote is replayed, so the sample is back under the
+  // same ID (no sequence drift).
   await page.getByTitle("Redo (Ctrl+Y)").click();
   await expect(page.getByText("EE-1")).toBeVisible();
 
@@ -153,27 +154,41 @@ test("a step ticked across a range of racks can be undone and redone", async ({ 
   const rack = (agent: string) => staining.getByRole("button", { name: new RegExp(`^${agent} `) }).first();
   for (const agent of AGENTS) await expect(rack(agent)).toBeVisible({ timeout: 15_000 });
 
+  const drawer = page.locator("div.border-l").filter({ has: page.getByText("Assay slides") }).last();
+  // How far through the protocol the OPEN rack is, which is how this test sees a
+  // step land on a rack whose drawer it never opened.
+  const progress = drawer.getByText(/^Protocol v1 · \d+\/2 complete$/);
+
   // Open the first rack, then take the range to the last. The middle rack comes into
   // the selection without ever being opened, so it has no checklist of its own.
   await rack(AGENTS[0]).click();
-  await expect(page.getByRole("button", { name: /^Stained/ })).toBeVisible({ timeout: 15_000 });
+  await expect(progress).toHaveText("Protocol v1 · 0/2 complete", { timeout: 15_000 });
   await rack(AGENTS[2]).click({ modifiers: ["Shift"] });
-  const step = page.getByRole("button", { name: /^Stained/ });
-  await expect(step).toBeVisible({ timeout: 15_000 });
-  await step.click();
-  await expect(page.getByText(/^Undone: |^Redone: /)).toHaveCount(0);
+  await expect(progress).toHaveText("Protocol v1 · 0/2 complete", { timeout: 15_000 });
+  await drawer.getByRole("button", { name: /^Stained/ }).click();
+  await expect(progress).toHaveText("Protocol v1 · 1/2 complete", { timeout: 15_000 });
 
-  // Look at the rack the fan-out drew a checklist for, so its query is mounted and
-  // refetches the moment the undo lands.
+  // The middle rack. Its step can only have been ticked by the fan-out, because its
+  // drawer has never been open: 0/2 here would mean the shift-range selected nothing
+  // to fan out to and this test never reached the thing it is named for.
   await rack(AGENTS[1]).click();
-  await expect(page.getByRole("button", { name: /^Stained/ })).toBeVisible({ timeout: 15_000 });
+  await expect(progress, "the fan-out ticked the rack nobody opened").toHaveText(
+    "Protocol v1 · 1/2 complete",
+    { timeout: 15_000 },
+  );
 
   await page.getByTitle("Undo (Ctrl+Z)").click();
   await expect(page.getByText(/^Undone: Complete · Stained$/)).toBeVisible({ timeout: 15_000 });
+  await expect(progress, "the undo takes the step back off it").toHaveText("Protocol v1 · 0/2 complete", {
+    timeout: 15_000,
+  });
 
   await page.getByTitle("Redo (Ctrl+Y)").click();
   await expect(
     page.getByText(/^Redone: Complete · Stained$/),
     "the step goes back on, rather than being skipped as changed since",
   ).toBeVisible({ timeout: 15_000 });
+  await expect(progress, "and it is on the rack again").toHaveText("Protocol v1 · 1/2 complete", {
+    timeout: 15_000,
+  });
 });
