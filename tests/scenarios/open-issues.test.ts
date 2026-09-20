@@ -1,12 +1,12 @@
-// Open issue #144 (and #139 and #148, fixed and now hard checks), each as a scenario on the real db.ts.
+// Issues #139, #144 and #148, all fixed and now hard checks, each as a scenario on the real db.ts.
 //
 // Each assertion is written against the harm the issue describes, not against one
 // fix: where the issue leaves the remedy open (refuse the action, or allow it and
 // keep the record straight), every remedy that removes the harm passes.
 //
-// Each open issue's test is `it.fails`: the bug is open, so the test is expected to fail and CI stays green.
-// The day the fix lands the test passes, `it.fails` reports that as a failure, and whoever fixed
-// the issue must change `it.fails` to `it` here, which turns the scenario into a hard check.
+// A scenario added here while its issue is still open is marked `it.fails`, so the failure is expected
+// and CI stays green. The day the fix lands the test passes, `it.fails` reports that as a failure, and
+// whoever fixed the issue changes `it.fails` to `it`, which turns the scenario into a hard check.
 import { afterEach, describe, expect, it } from "vitest";
 import { workedButNeverCut } from "./invariants";
 import { openLab, type Lab } from "./lab";
@@ -38,8 +38,7 @@ describe("#139: retracting a cut never leaves glass that was worked on but never
 });
 
 describe("#144: a stain request never plans glass on a block with no tissue left", () => {
-  // OPEN ISSUE #144: remove `.fails` in the pull request that fixes it.
-  it.fails("an exhausted block with a cut still waiting in Needs Sectioning", async () => {
+  it("an exhausted block with a cut still waiting in Needs Sectioning", async () => {
     lab = await openLab();
     const block = await lab.sample("spent block");
     await lab.db.createSectionRequests(block, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
@@ -51,8 +50,6 @@ describe("#144: a stain request never plans glass on a block with no tissue left
           [block],
         )[0].n,
       );
-    const before = planned();
-
     let exhausted = true;
     await lab.db.setBlockExhausted(block, true).catch(() => (exhausted = false));
     if (!exhausted) {
@@ -60,11 +57,95 @@ describe("#144: a stain request never plans glass on a block with no tissue left
       expect(lab.rows(`SELECT block_exhausted FROM samples WHERE id = ?`, [block])[0].block_exhausted).toBe(0);
       return;
     }
+    // Exhausting may itself cancel the waiting cut (#144); the request must add nothing on top.
+    const before = planned();
     let outcome = "accepted";
     await lab.db
       .requestStainForSample({ sampleId: block, assayType: "stain", assayName: "PAS" })
       .catch((e: Error) => (outcome = `refused: ${e.message}`));
     expect(planned(), `planned slides on the exhausted block's waiting cut; request ${outcome.slice(0, 60)}`).toBe(before);
+  });
+});
+
+describe("#144: exhausting a block cancels the cut waiting for it, with a record", () => {
+  it("the group is marked removed, its slides removed with a reason, and restoring does not revive it", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, cut queued");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 2, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.setBlockExhausted(block, true);
+
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("removed");
+    const slides = lab.rows(`SELECT current_stage, stack_id FROM slides WHERE section_request_id = ?`, [group]);
+    expect(slides.length).toBeGreaterThan(0);
+    expect(slides.every((s) => s.current_stage === "removed" && s.stack_id === null)).toBe(true);
+    const events = lab.rows(
+      `SELECT details FROM sample_timeline_events WHERE sample_id = ? AND event_type = 'slide_removed'`,
+      [block],
+    );
+    expect(events).toHaveLength(slides.length);
+    expect(events.every((e) => /exhausted/i.test(String(e.details)))).toBe(true);
+
+    await lab.db.setBlockExhausted(block, false);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe("removed");
+  });
+
+  it("a database that already holds the state shows no Needs Sectioning card for it", async () => {
+    lab = await openLab();
+    const block = await lab.sample("already spent, cut still queued");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    const raw = await lab.db.getDb();
+    await raw.execute(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [block]);
+
+    const open = (await lab.db.listOpenSectionRequests()) as Array<{ id: number; sample_id: number }>;
+    expect(open.some((request) => request.id === group)).toBe(false);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe(
+      "needs_sectioning",
+    );
+  });
+
+  it("a cut already past the queue is left alone", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, already cut");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.updateSectionStage(group, "sectioned");
+    await lab.db.setBlockExhausted(block, true);
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).not.toBe("removed");
+    const open = (await lab.db.listOpenSectionRequests()) as Array<{ id: number }>;
+    expect(open.some((request) => request.id === group)).toBe(true);
+  });
+
+  it("and it cannot be dragged back into the queue afterwards, so it never leaves the board", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, cut retracted after");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.updateSectionStage(group, "sectioned");
+    await lab.db.setBlockExhausted(block, true);
+    const board = (request: { id: number; current_stage: string }) => [request.id, request.current_stage];
+    const before = ((await lab.db.listOpenSectionRequests()) as Array<{ id: number; current_stage: string }>).map(board);
+
+    let refusal = "";
+    await lab.db
+      .revertSectionToStage(group, "needs_sectioning")
+      .catch((error: Error) => (refusal = error.message));
+    expect(refusal).toMatch(/exhausted/i);
+
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe(
+      "sectioned",
+    );
+    const slides = lab.rows(`SELECT stage_cut_at, current_stage FROM slides WHERE section_request_id = ?`, [group]);
+    expect(slides.length).toBeGreaterThan(0);
+    expect(slides.every((s) => s.stage_cut_at !== null)).toBe(true);
+    expect(((await lab.db.listOpenSectionRequests()) as Array<{ id: number; current_stage: string }>).map(board)).toEqual(
+      before,
+    );
   });
 });
 

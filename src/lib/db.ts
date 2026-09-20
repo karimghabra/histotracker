@@ -1451,12 +1451,30 @@ export async function setSamplesProcessingType(
   return switched;
 }
 
+/**
+ * Mark a block exhausted, or restore it.
+ *
+ * Exhausting a block cancels every cut still waiting for it in Needs Sectioning
+ * (#144): a plan for glass from a block with no tissue left can never be carried
+ * out. The cancel is `removeSectionRequest`, the same path the board's Delete
+ * takes, so each planned slide is soft-removed with a reason and a
+ * `slide_removed` timeline event, and the group is marked removed, not deleted.
+ * Restoring the block does not bring the cancelled cut back.
+ */
 export async function setBlockExhausted(sampleId: number, exhausted: boolean): Promise<void> {
   const db = await getDb();
   await db.execute(`UPDATE samples SET block_exhausted = ? WHERE id = ?`, [
     exhausted ? 1 : 0,
     sampleId,
   ]);
+  if (!exhausted) return;
+  const waiting = await db.select<Array<{ id: number }>>(
+    `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage = 'needs_sectioning'`,
+    [sampleId],
+  );
+  for (const group of waiting) {
+    await removeSectionRequest(group.id, "Block marked exhausted - waiting cut cancelled");
+  }
 }
 
 /** Free-text notes on a sample (the block's general notes) and on a slide. */
@@ -2929,6 +2947,8 @@ export async function listOpenSectionRequests(): Promise<SectionRequest[]> {
       WHERE p.is_active = 1 AND sr.current_stage != 'analyzed'
         AND sr.current_stage != 'removed' -- a retired cut group leaves the board (#83)
         AND s.archived_at IS NULL -- archiving clears the board (#74)
+        -- a cut still waiting for a spent block can never be carried out (#144)
+        AND NOT (s.block_exhausted = 1 AND sr.current_stage = 'needs_sectioning')
       GROUP BY sr.id
       HAVING NOT (
         sr.current_stage = 'ready_for_imaging'
@@ -3927,11 +3947,18 @@ export async function requestStainForSample(input: {
   // been cut, and its glass exists — putting a new agent on it would be claiming
   // a section that was never taken. Those blocks still route to the extras
   // branch above, or to a genuine new cut below.
+  //
+  // An exhausted block is excluded (#144): there is no tissue left, so the
+  // waiting cut can never be carried out and joining it would plan glass nobody
+  // can produce. `setBlockExhausted` cancels such a cut, so this only bites on a
+  // database that already holds the state, where the request falls through to
+  // the #70 refusal below.
   const pendingCut = await db.select<Array<{ id: number }>>(
     `SELECT id FROM section_requests
       WHERE sample_id = ? AND current_stage = 'needs_sectioning'
+        AND NOT EXISTS (SELECT 1 FROM samples WHERE id = ? AND block_exhausted = 1)
       ORDER BY id LIMIT 1`,
-    [input.sampleId],
+    [input.sampleId, input.sampleId],
   );
   if (pendingCut.length > 0) {
     // Appended, not inserted among the extras: slide_ordinal is the order the
@@ -5388,6 +5415,23 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
       throw new Error(
         `${codes} ${worked.length === 1 ? "has" : "have"} already been worked on (stained, imaged or analyzed), so ` +
           `this cut cannot be retracted. Reassign or remove the slide instead.`,
+      );
+    }
+
+    // A spent block has no tissue left to cut, so its cut cannot go back to
+    // waiting for the blade (#144). The board does not draw a group waiting on
+    // an exhausted block, so a retraction allowed here would take the card off
+    // the screen with nothing said.
+    const spent = await db.select<Array<{ sample_code: string }>>(
+      `SELECT s.sample_code
+         FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
+        WHERE sr.id = ? AND s.block_exhausted = 1`,
+      [id],
+    );
+    if (spent.length > 0) {
+      throw new Error(
+        `${spent[0].sample_code} is marked exhausted, so this cut cannot go back to Needs Sectioning - ` +
+          `there is no tissue left to cut. Remove the cut group instead.`,
       );
     }
   }

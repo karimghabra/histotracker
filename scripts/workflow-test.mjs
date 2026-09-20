@@ -802,6 +802,17 @@ function makeApi(db) {
     }
     run(`UPDATE section_requests SET current_stage = 'removed' WHERE id = ?`, [sectionId]);
   }
+  // Port of setBlockExhausted() — db.ts (#144). Exhausting a block cancels every
+  // cut still waiting for it in Needs Sectioning, through removeSectionRequest.
+  function setBlockExhausted(sampleId, exhausted) {
+    run(`UPDATE samples SET block_exhausted = ? WHERE id = ?`, [exhausted ? 1 : 0, sampleId]);
+    if (!exhausted) return;
+    for (const g of all(
+      `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage = 'needs_sectioning'`,
+      [sampleId])) {
+      removeSectionRequest(g.id, 'Block marked exhausted - waiting cut cancelled');
+    }
+  }
   // Port of removeSamples() — db.ts (#96, #159). The board's Delete and the Logs'
   // Remove: every live cut group goes through removeSectionRequest (and so every
   // slide through removeSlide), then the block itself is flagged and the reason
@@ -1087,6 +1098,12 @@ function makeApi(db) {
       if (worked.length > 0) {
         throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already worked on (stained, imaged or analyzed)`);
       }
+      // A spent block has no tissue left to cut, so its cut cannot go back to
+      // waiting for the blade (#144).
+      const spent = get(
+        `SELECT s.sample_code AS code FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
+          WHERE sr.id = ? AND s.block_exhausted = 1`, [sectionId]);
+      if (spent) throw new Error(`${spent.code} is marked exhausted - this cut cannot go back to Needs Sectioning`);
       run(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [sectionId]);
       // The slides leave their racks too. Clearing the cut date alone left a
       // slide that is "not cut" sitting in a live stainer, and the next tick of
@@ -1161,8 +1178,10 @@ function makeApi(db) {
     // exists.
     const pending = get(
       `SELECT id FROM section_requests
-        WHERE sample_id = ? AND current_stage = 'needs_sectioning' ORDER BY id LIMIT 1`,
-      [sampleId]);
+        WHERE sample_id = ? AND current_stage = 'needs_sectioning'
+          AND NOT EXISTS (SELECT 1 FROM samples WHERE id = ? AND block_exhausted = 1)
+        ORDER BY id LIMIT 1`,
+      [sampleId, sampleId]);
     if (pending) {
       const slideId = addSlideToSection(pending.id, { assayType, assayName });
       return { target: "cut", slideId, stackId: null, createdStackId: null, sectionId: pending.id };
@@ -1494,7 +1513,7 @@ function makeApi(db) {
     revertSectionToStage, setSlidesDepthTag, rackCapacity,
     splitSlidesIntoNewRack, mergeSlideStacks,
     tickSectionStainedCheckbox,
-    removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, removeSample, removeSamples,
+    removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, setBlockExhausted, removeSample, removeSamples,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
     ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
@@ -4320,6 +4339,57 @@ issue(125, "a stain requested for a block already queued for cutting joins that 
      "and the block is NOT flagged for a fresh cut — that was the whole complaint");
   eq(api.get(`SELECT stage_cut_at AS c FROM slides WHERE id = ?`, [result.slideId]).c, null,
      "the new slide is planned, not cut: the blade has not touched the block yet (#95)");
+});
+
+// #144 — exhausting a block cancels the cut still waiting for it, so a stain
+// request on the spent block is refused (#70) instead of joining a plan that can
+// never be carried out.
+issue(144, "exhausting a block cancels its waiting cut and a stain request is refused", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const { id } = api.addSample(p, "EE", "spent with a cut waiting");
+  api.markEmbedded(id);
+  const [section] = api.createSectionRequests(id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.setBlockExhausted(id, true);
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [section]).s,
+     "removed", "the waiting cut is cancelled, not deleted");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ? AND current_stage != 'removed'`, [section]).c,
+     0, "no planned slide is left on it");
+  let threw = false;
+  try { api.requestStainForSample(id, "stain", "PAS"); } catch { threw = true; }
+  assert(threw, "the stain request on the exhausted block is refused");
+
+  // A database that already holds the state (flag set, cut still queued) must
+  // refuse too, not join the waiting cut.
+  const legacy = api.addSample(p, "EE", "already spent, cut still queued");
+  api.markEmbedded(legacy.id);
+  const [queued] = api.createSectionRequests(legacy.id, [{ duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" }]);
+  api.run(`UPDATE samples SET block_exhausted = 1 WHERE id = ?`, [legacy.id]);
+  threw = false;
+  try { api.requestStainForSample(legacy.id, "stain", "PAS"); } catch { threw = true; }
+  assert(threw, "an already-exhausted block with a queued cut refuses the request");
+  eq(api.get(`SELECT COUNT(*) AS c FROM slides WHERE section_request_id = ?`, [queued]).c, 1,
+     "and no planned slide is added to the queued cut");
+
+  // A cut already past the queue survives the exhaustion, and cannot be dragged
+  // back into it afterwards: the board does not draw a waiting cut on a spent
+  // block, so the retraction would take the card off the screen silently.
+  const cut = api.addSample(p, "EE", "spent after it was cut");
+  api.markEmbedded(cut.id);
+  const [past] = api.createSectionRequests(cut.id, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  api.startAssayWork(past);
+  api.setBlockExhausted(cut.id, true);
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [past]).s,
+     "stain_requested", "a cut past the queue is left alone");
+  threw = false;
+  try { api.revertSectionToStage(past, "needs_sectioning"); } catch { threw = true; }
+  assert(threw, "and it cannot be retracted into Needs Sectioning on a spent block");
+  eq(api.get(`SELECT current_stage AS s FROM section_requests WHERE id = ?`, [past]).s,
+     "stain_requested", "the refused retraction leaves the group where it was");
 });
 
 invariant("a stain request still flags a block that is NOT queued for cutting", () => {

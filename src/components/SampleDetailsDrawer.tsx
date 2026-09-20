@@ -577,7 +577,11 @@ export function SampleDetailsDrawer({
             title="Block is out of sample to cut — remove from Embedded Inventory"
             onClick={() => {
               const count = selectedEmbedded.length || 1;
-              if (confirm(`Mark ${count === 1 ? sample.sample_code : `${count} selected samples`} exhausted? ${count === 1 ? "It leaves" : "They leave"} Embedded Inventory.`)) {
+              const message =
+                count === 1
+                  ? `Mark ${sample.sample_code} exhausted? It leaves Embedded Inventory, and a cut still waiting for it in Needs Sectioning is cancelled - its planned slides are removed.`
+                  : `Mark ${count} selected samples exhausted? They leave Embedded Inventory, and any cut still waiting in Needs Sectioning for those ${count} blocks is cancelled - its planned slides are removed.`;
+              if (confirm(message)) {
                 if (selectedEmbedded.length > 1) setExhaustedSamples(selectedEmbedded.map((selected) => selected.id), true);
                 else setExhausted(sample.id, true);
                 onClose();
