@@ -379,6 +379,38 @@ function makeApi(db) {
     return readyStr;
   }
 
+  // Port of dissolveEmptyRun() — db.ts (#135): children before parent.
+  function dissolveEmptyRun(batchId) {
+    run(`DELETE FROM checklist_items WHERE checklist_run_id IN (
+           SELECT id FROM checklist_runs
+            WHERE scope_type = 'processing_batch' AND scope_id = ?)`, [batchId]);
+    run(`DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batchId]);
+    run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
+    run(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
+  }
+  // Port of detachSampleFromRuns() — db.ts. A block being removed leaves every
+  // open run first, with an audit record; a run left empty is dissolved when it
+  // was only PLANNED, and kept as 'cancelled' once it has actually run.
+  function detachSampleFromRuns(sample) {
+    for (const r of all(
+      `SELECT pb.id, pb.status FROM processing_batch_members pbm
+         JOIN processing_batches pb ON pb.id = pbm.batch_id
+        WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready') ORDER BY pb.id`,
+      [sample.id])) {
+      run(`DELETE FROM processing_batch_members WHERE batch_id = ? AND sample_id = ?`, [r.id, sample.id]);
+      const emptied = get(`SELECT COUNT(*) AS n FROM processing_batch_members WHERE batch_id = ?`, [r.id]).n === 0;
+      const dissolved = emptied && r.status === 'planned';
+      const cancelled = emptied && !dissolved;
+      if (dissolved) dissolveEmptyRun(r.id);
+      if (cancelled) run(`UPDATE processing_batches SET status = 'cancelled' WHERE id = ?`, [r.id]);
+      run(`INSERT INTO audit_events (action, entity_type, entity_id, sample_id, summary, details)
+           VALUES ('update', 'processing_batch', ?, ?, ?, ?)`,
+          [r.id, sample.id, `Removed ${sample.code} from processing batch ${r.id} (block deleted)`,
+           JSON.stringify({ batch_id: r.id, batch_status: r.status, sample_id: sample.id,
+                           run_dissolved: dissolved, run_cancelled: cancelled })]);
+    }
+  }
+
   // Port of updatePlannedBatchMembers() — src/lib/db.ts (issue #32).
   // Port of updateBatchMembers() — db.ts. PLANNED **and** RUNNING batches are
   // editable (#91); a running one also has to move samples between stages,
@@ -411,12 +443,7 @@ function makeApi(db) {
            JSON.stringify({ batch_id: batchId, sample_ids: previousIds })]);
         return;
       }
-      run(`DELETE FROM checklist_items WHERE checklist_run_id IN (
-             SELECT id FROM checklist_runs
-              WHERE scope_type = 'processing_batch' AND scope_id = ?)`, [batchId]);
-      run(`DELETE FROM checklist_runs WHERE scope_type = 'processing_batch' AND scope_id = ?`, [batchId]);
-      run(`DELETE FROM processing_batch_members WHERE batch_id = ?`, [batchId]);
-      run(`DELETE FROM processing_batches WHERE id = ?`, [batchId]);
+      dissolveEmptyRun(batchId);
       return;
     }
 
@@ -814,23 +841,16 @@ function makeApi(db) {
     }
   }
   // Port of removeSamples() — db.ts (#96, #159). The board's Delete and the Logs'
-  // Remove: every live cut group goes through removeSectionRequest (and so every
-  // slide through removeSlide), then the block itself is flagged and the reason
-  // recorded. An already-removed block is skipped (no second event), and with
-  // refuseInProcessingRun (the Logs) a block still in a planned/running/ready
-  // processing run refuses the whole call.
-  function removeSamples(sampleIds, reason = 'test removal', { refuseInProcessingRun = false } = {}) {
+  // Remove: a block in a planned/running/ready processing run is detached from
+  // it first, every live cut group goes through removeSectionRequest (and so
+  // every slide through removeSlide), then the block itself is flagged and the
+  // reason recorded. An already-removed block is skipped (no second event).
+  function removeSamples(sampleIds, reason = 'test removal') {
     const live = sampleIds
       .map((id) => get(`SELECT id, sample_code AS code, current_stage AS stage FROM samples WHERE id = ?`, [id]))
       .filter((row) => row && row.stage !== 'removed');
-    const committed = !refuseInProcessingRun ? [] : live.filter((row) => get(
-      `SELECT 1 AS x FROM processing_batch_members pbm
-         JOIN processing_batches pb ON pb.id = pbm.batch_id
-        WHERE pbm.sample_id = ? AND pb.status IN ('planned', 'processing', 'ready')`, [row.id]));
-    if (committed.length > 0) {
-      throw new Error(`${committed.map((row) => row.code).join(', ')} still in a processing run`);
-    }
     for (const sample of live) {
+      detachSampleFromRuns(sample);
       for (const row of all(
         `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage != 'removed'`,
         [sample.id])) {
@@ -2073,10 +2093,10 @@ issue(96, "deleting a block from the board removes it without erasing anything",
 // #159 — "should be able to remove a sample (not remove a slide) in the logs".
 //
 // The Logs' Remove is the board's soft removal, so a second call must not write a
-// second audit event, and the Logs refuse a block still in a processing run: moving
-// that run on would write its members' stage over 'removed' and bring the block
-// back to life. The board's Delete keeps removing it as it always has.
-issue(159, "removing a sample twice records once, and the Logs refuse a block in a run", () => {
+// second audit event. A block in a processing run is detached from the run as it is
+// removed (captain's ruling): advancing the run rewrites its members' stage, and a
+// removed block still in it would come back to life as Pickup or Needs Embedding.
+issue(159, "removing a sample twice records once, and a block in a run leaves it", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "entered in error");
@@ -2087,16 +2107,31 @@ issue(159, "removing a sample twice records once, and the Logs refuse a block in
      "one removal, one audit event, however many times it is asked for");
 
   const batched = api.addSample(p, "EE", "in a run"); api.completePreprocessing(batched.id);
-  const free = api.addSample(p, "EE", "not in a run");
-  api.planProcessingBatch({ sampleIds: [batched.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
-  let threw = null;
-  try { api.removeSamples([free.id, batched.id], "cleanup", { refuseInProcessingRun: true }); } catch (err) { threw = err.message; }
-  assert(threw != null && /processing run/.test(threw), "the Logs refuse a block still in a run");
-  assert(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [free.id]).s !== "removed",
-     "and the refusal is all or nothing: the block that was free is not removed either");
-  api.removeSamples([batched.id], "board delete");
+  const mate = api.addSample(p, "EE", "run mate"); api.completePreprocessing(mate.id);
+  const batch = api.planProcessingBatch({ sampleIds: [batched.id, mate.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
+  api.removeSamples([batched.id], "wrong block");
+  eq(api.all(`SELECT sample_id AS s FROM processing_batch_members WHERE batch_id = ?`, [batch]).map((r) => r.s).join(","), String(mate.id),
+     "the deleted block is out of the run and its mate is still in it");
+  eq(api.all(`SELECT summary FROM audit_events WHERE sample_id = ? AND entity_type = 'processing_batch'`, [batched.id]).length, 1,
+     "the detachment has an audit record");
+  api.moveBatch(batch, "processed");
+  api.moveBatch(batch, "needs_embedding");
   eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [batched.id]).s, "removed",
-     "the board's Delete still removes a block in a run, as it always has");
+     "advancing the run does not bring the deleted block back");
+  eq(api.get(`SELECT current_stage AS s FROM samples WHERE id = ?`, [mate.id]).s, "needs_embedding",
+     "the run still advances its other members");
+
+  const lone = api.addSample(p, "EE", "lone block"); api.completePreprocessing(lone.id);
+  const loneBatch = api.planProcessingBatch({ sampleIds: [lone.id], processingType: "Short", plannedStartAt: "2026-08-01 08:00" });
+  api.removeSamples([lone.id], "wrong block");
+  eq(api.all(`SELECT id FROM processing_batches WHERE id = ?`, [loneBatch]).length, 0,
+     "a PLANNED run left empty is dissolved, as emptying it from its drawer does (#135)");
+
+  const onlyRunning = api.addSample(p, "EE", "the only block in a run"); api.completePreprocessing(onlyRunning.id);
+  const ranBatch = api.startProcessingBatch({ sampleIds: [onlyRunning.id], processingType: "Short", startedAt: "2026-08-01 08:00" });
+  api.removeSamples([onlyRunning.id], "wrong block");
+  eq(api.get(`SELECT status FROM processing_batches WHERE id = ?`, [ranBatch])?.status, "cancelled",
+     "a run that RAN keeps its record when its last block is deleted, cancelled rather than erased (#83)");
 });
 
 // #106 — "modifications to project acronym in management tab do not apply to

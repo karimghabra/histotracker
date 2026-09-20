@@ -1051,7 +1051,7 @@ export function LogsView({
           onConfirm={(why) => {
             const target = sampleToRemove;
             setSampleToRemove(null);
-            void removeSamples([target.id], why, { refuseInProcessingRun: true }).catch((err: unknown) =>
+            void removeSamples([target.id], why).catch((err: unknown) =>
               setSampleRemoveError(err instanceof Error ? err.message : "Could not remove."),
             );
           }}

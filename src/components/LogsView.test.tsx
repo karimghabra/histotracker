@@ -508,7 +508,7 @@ describe("LogsView — removing a sample", () => {
     await userEvent.type(within(dialog).getByLabelText("Reason for removal"), "wrong animal");
     await userEvent.click(confirm);
     expect(data.calls.filter(([name]) => name === "removeSamples")).toEqual([
-      ["removeSamples", [target.id], "wrong animal", { refuseInProcessingRun: true }],
+      ["removeSamples", [target.id], "wrong animal"],
     ]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -547,13 +547,13 @@ describe("LogsView — removing a sample", () => {
 
   it("says so when the removal is refused, and keeps the sample listed", async () => {
     data.samples = [sample({ sample_code: "EE-0001" })];
-    data.failure = new Error("EE-1 is still in a processing run - take it out of the run first.");
+    data.failure = new Error("Sign in before making modifications.");
     render(<LogsView />);
     await openRow("EE-1");
     await userEvent.click(screen.getByRole("button", { name: "Remove EE-1" }));
     await userEvent.type(within(screen.getByRole("dialog")).getByLabelText("Reason for removal"), "cleanup");
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove sample" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("still in a processing run");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sign in before making modifications.");
     expect(screen.getByText("EE-1")).toBeInTheDocument();
 
     await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Dismiss" }));

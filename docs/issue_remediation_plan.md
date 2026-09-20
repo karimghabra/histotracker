@@ -79,9 +79,10 @@
   The expanded Logs row has **Remove** beside Archive, asking for a reason through `RemovalReasonDialog`.
   It is the board Delete's soft removal (#96): `removeSamples` in `db.ts`, each live cut group removed, `current_stage = 'removed'`, one `sample_removed` event.
   A sample already removed is skipped, so a stale row writes no second event.
-  The Logs pass `refuseInProcessingRun`: a block in a planned, processing or ready run is refused before anything is written, because advancing the run rewrites its members' stage and would bring the block back.
-  The board's Delete does not pass it and removes such a block as before.
-  *Test:* harness port and gate in `scripts/workflow-test.mjs`, `tests/scenarios/remove-sample.test.ts` on the real `db.ts`, `LogsView.test.tsx`, and `tests/e2e/never-delete.spec.ts`.
+  A block in a planned, processing or ready run is taken out of that run as it is removed, from the Logs or the board's Delete alike, with an `audit_events` row naming the run and the block.
+  Advancing a run rewrites its members' stage, so a removed block left in it came back as Pickup or Needs Embedding; the Logs first refused such a block, and the board's Delete let the bug through.
+  A run left with no members follows the #83 line: a **planned** one is dissolved, exactly as emptying it from its drawer already does (#135), while one that is **processing or ready** actually ran, so its batch row, its protocol checklist and its completed items stay and the run is marked `cancelled`. The audit row says which.
+  *Test:* harness port and gate in `scripts/workflow-test.mjs`, `tests/scenarios/remove-sample.test.ts` on the real `db.ts`, `LogsView.test.tsx`, and `tests/e2e/never-delete.spec.ts` (including a block removed from a running run, then the run advanced).
 
 ## #158, #160, #161 — the Logs' project scope and defaults
 

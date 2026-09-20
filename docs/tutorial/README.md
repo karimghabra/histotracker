@@ -138,8 +138,11 @@ export.
 Beside **Archive** in the expanded row, **Remove** takes a whole sample out of
 play, with a reason; its slides go with it. Nothing is deleted: the sample stays
 in the Logs under **Show removed**, and `Ctrl+Z` brings it back. A sample still
-in a processing run is refused until it is taken out of the run or the run is
-finished.
+in a processing run is taken out of that run as it goes, so moving the run on
+afterwards cannot bring the block back; the **Manifest** records which run it
+left. If it was the run's last block, a run that had only been *planned* goes
+with it, while a run that had already started is marked cancelled and keeps its
+protocol checklist and the steps already completed.
 
 ## 9. Depth tagging (optional)
 
