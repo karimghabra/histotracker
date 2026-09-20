@@ -3,12 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 // Drives the REAL app in Chromium against a sql.js-backed Tauri SQL shim
 // (see vite.config.playwright.ts). This is for interactive debugging and real
 // UI regression checks — distinct from the jsdom vitest suite.
-// One dev server per suite run, on 5599 unless HISTOMETER_PORT says otherwise.
-// Two heavy browser suites sharing a host is a documented source of failures
-// that look like real defects (AGENTS.md), and on a machine running more than
-// one checkout the second run simply cannot start. Set HISTOMETER_PORT to give
-// a run a port of its own; unset, nothing changes, so CI is unaffected.
-const PORT = Number(process.env.HISTOMETER_PORT ?? 5599);
+const PORT = 5599;
 
 // Some sandboxes ship a pre-installed Chromium whose build number doesn't match
 // the one this Playwright version would download (and can't fetch a new one).

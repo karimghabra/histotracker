@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   acknowledgeRequestsForSlide,
   assayTypeByName,
-  bytesFromIpc,
   findSampleIdByCode,
   getActiveUser,
   getDbFilePath,
@@ -230,7 +229,7 @@ export async function publishSnapshot(): Promise<string> {
   }
 
   const dbPath = await getDbFilePath();
-  const dbBytes = bytesFromIpc(await invoke<ArrayBuffer | number[]>("read_file", { path: dbPath }));
+  const dbBytes = Uint8Array.from(await invoke<number[]>("read_file", { path: dbPath }));
   const workbookBytes = await buildStatusWorkbookBytes();
 
   await githubUploadReleaseAsset(RELEASE_TAG, DB_ASSET, dbBytes, DB_CONTENT_TYPE);

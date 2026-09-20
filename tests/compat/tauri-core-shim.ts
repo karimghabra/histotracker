@@ -49,8 +49,6 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
 
   switch (cmd) {
     case "read_file":
-      // A number array, as every release up to 0.18.1 returned it and as their own
-      // code reads it; this tree returns raw bytes and reads either (bytesFromIpc).
       return out(Array.from(readFileSync(String(args.path))));
 
     // undo_journal.rs, modelled in src/test/undoJournalCommands.ts: its own

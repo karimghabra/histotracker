@@ -555,16 +555,6 @@ export async function resetDb(): Promise<void> {
 export type DbImage = Uint8Array;
 
 /**
- * Bytes as `read_file` delivers them: a raw IPC response arrives as an
- * ArrayBuffer, where a `Vec<u8>` would arrive as a JSON array of numbers.
- * `Uint8Array.from` on an ArrayBuffer is EMPTY, which would make an empty
- * backup, so the shape is checked rather than assumed.
- */
-export function bytesFromIpc(value: ArrayBuffer | ArrayLike<number>): Uint8Array {
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : Uint8Array.from(value);
-}
-
-/**
  * Capture the current database as a byte image. We checkpoint the WAL into the
  * main file first so the on-disk image is complete: the -wal sidecar holding
  * un-checkpointed writes is exactly what made naive file copies lossy before.
@@ -578,7 +568,7 @@ export async function snapshotDb(): Promise<DbImage> {
     // Not in WAL mode (or checkpoint unsupported): the main file is already current.
   }
   const path = await getDbFilePath();
-  return bytesFromIpc(await invoke<ArrayBuffer | number[]>("read_file", { path }));
+  return Uint8Array.from(await invoke<number[]>("read_file", { path }));
 }
 
 /**

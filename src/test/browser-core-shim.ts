@@ -151,8 +151,7 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
       // command; only their delivery waits, as the JSON marshalling does.
       const bytes = readShimFile(String(_args?.path ?? ""));
       await ipcCost(String(_args?.path ?? ""));
-      // A raw IPC response, as lib.rs returns it: an ArrayBuffer, not a number array.
-      return (bytes ?? new Uint8Array()).slice().buffer as unknown as T;
+      return Array.from(bytes ?? new Uint8Array()) as unknown as T;
     }
     case "save_file": {
       const contents = (_args?.contents as number[] | undefined) ?? [];

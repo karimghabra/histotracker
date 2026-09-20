@@ -17,16 +17,9 @@ fn save_file(path: String, contents: Vec<u8>) -> Result<(), String> {
 /// live SQLite file for publishing and for a backup. The path is discovered at
 /// runtime via `PRAGMA database_list`, so we never hardcode the plugin's storage
 /// dir.
-///
-/// Returned as a raw IPC response (an `ArrayBuffer` in the webview), not a
-/// `Vec<u8>`, which Tauri would serialise as a JSON integer array: on a
-/// lab-sized database that array is tens of megabytes of text, parsed on the UI
-/// thread (`bytesFromIpc` in src/lib/db.ts accepts either shape).
 #[tauri::command]
-fn read_file(path: String) -> Result<tauri::ipc::Response, String> {
-    std::fs::read(&path)
-        .map(tauri::ipc::Response::new)
-        .map_err(|e| e.to_string())
+fn read_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| e.to_string())
 }
 
 /// Undo or redo: replay one range of the undo journal, `(from, to]` (`to`
