@@ -1,32 +1,69 @@
 # Changelog
 
-## 0.18.2 - unreleased
+## 0.18.2 - 2026-09-20
 
 No schema change: no new column and no new migration, so a 0.18.1 instance opens a 0.18.2 database unchanged, and the reverse holds too.
-One thing is written that was not written before — the cut-date repair below fills in, once per database, cut dates that older builds never recorded, each taken from the slide's own cut group. No date already recorded is rewritten, and an older build reads a filled-in date as it reads any other.
-The note change stores nothing new at all: the four note columns are read and written exactly as before, only the words above them changed.
+Two things to know before updating.
 
-- **A slide that was never cut can no longer be stained (#182).**
-  A slide with no record of being cut is a line in a cutting plan, not a piece of glass in a box, and it could still end up in a staining rack.
-  Whether a slide existed was judged from the stage of the cut group it sat in, which is only a stand-in for the slide's own cut date: a slide keeps its own dates when it is refiled under another block, so an uncut slide filed into a block whose cut had already been taken read as glass, and the next rack tick recorded it as stained on a day it had never been cut.
-  All three places now read the slide's own cut date instead. The Extra slide inventory does not list a slide with no cut date, a stain request passes over it and flags the block for a cut — exactly as it does when a block has no extras at all — and sending one to an agent by hand is refused by name.
-  Refiling an uncut slide under a block whose cut has already been taken is refused too, pointing at the cutting plan, which is where a change to an uncut plan belongs; refiling it under a block still waiting for the microtome is one plan moving to another, and is unaffected.
+- **Update every instance.**
+  A processing run cancelled by emptying it (below) keeps its members, so an instance still on 0.17.0 can show that run as live until it is updated.
+- **A published sync snapshot can contain recently deleted rows** for as long as Undo can still put them back.
+  This is deliberate: deleting something here is a workflow correction, not a redaction.
+  Once Undo can no longer restore a row, a later snapshot no longer carries it.
+
+What changed, in the order a lab would meet it:
+
+- **A note is called the same thing wherever you read it (#175).**
+  The four notes were named three ways: intake, the Logs and the sample drawer each had their own headings.
+  All three now take their headings from one list: Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes.
+  A note typed under one heading and read back under another looks like a different field, which is the one thing a correction surface must not do.
+
+- **The Logs export carries all four notes (#176).**
+  The export now has all four, under the same labels as on screen.
+  The 0.18.1 note that the Logs export lacked two of the four is retired.
+  In the samples export the **Cut Notes** column is now **Sectioning / Cut Notes**, in the samples CSV, the Samples sheet of the Excel workbook and the Sample Status sheet of the workbook a workstation publishes with every sync.
+  A saved spreadsheet or formula that looks up the old "Cut Notes" heading by name needs that one heading updated.
+  The column is in the same place with the same contents.
+
+- **A cut group can no longer skip the microtome by drag (#177).**
+  Dragging a group from Needs Sectioning straight to Ready for Imaging is refused.
+  The refusal is shown on screen, where before the card snapped back with no word.
+
+- **Emptying a started processing run cancels it (#178, issue #148).**
+  The run keeps its record, its members and its checklist, and an audit entry says it was cancelled.
+  A run that was only planned and never started still disappears, as before.
+
+- **Deleting a sample takes it out of its processing batch (#179, issue #159).**
+  A run that had already run keeps its record.
+
+- **Marking a block exhausted no longer leaves work waiting for it (#180, issue #144).**
+  The cut waiting for that block is cancelled and its planned slides are removed, with a record of it.
+  A stain request on a spent block is refused.
+  A card left stranded on the board by the old behaviour leaves the board.
+  A cut group cannot be retracted to Needs Sectioning once its block is spent.
+
+- **Logs, themes and sign-out (#170, issues #162, #140, #141, #142, #143).**
+  The Logs "Add a stain" dropdown follows the theme instead of staying white.
+  Faint ink now meets contrast.
+  Theme hex fields can be typed into.
+  Signing out clears the project selection.
+
+- **Undo no longer loses edits (#181).**
+  Undo replays a journal of changes instead of copying the whole database on every write.
+  An undo step covers only its own action, so nothing that landed around it is rolled back with it.
+  A step blocked by a later change is skipped with a message instead of jamming Undo.
+  The journal trims itself.
+
+- **Extra slides count only glass that was cut (#184, #185, issue #182).**
+  A slide that was never cut is a line in a cutting plan, not a piece of glass, and it could still end up in a staining rack.
+  Every route that can rack a slide now reads the slide's own cut date, not the stage of the group it sits in.
+  Refiling an uncut slide into a group that has already left the queue is refused, pointing at the cutting plan.
+  Refiling it under a block still waiting for the microtome is unaffected.
   Nothing that has been cut is affected.
-
-- **Cut dates older builds never recorded are filled in.**
-  Builds before 0.2.3 wrote no cut date on an extra slide at all, and before 0.8.0 a cut group dragged from Needs Sectioning straight to Ready for Imaging was never recorded as cut either.
-  That was harmless while the date was only displayed; now that it decides whether a slide may be stained, real glass sitting in a box would have dropped out of the Extra slide inventory and its block been flagged for a fresh cut of a section that already exists.
-  The first time this version opens a database it fills those dates in, taking each from the slide's own cut group's earliest record of leaving Needs Sectioning.
-  A group whose record does not say when it left the queue is left alone rather than given a date it never had: its slides stay out of the inventory and out of a stain request, and the block is flagged for a cut instead.
-
-- **A note is called the same thing wherever you read it.**
-  The same four notes were named three ways: intake called them Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes, the Logs were aligned to intake in 0.18.1, and the sample drawer still had its own set.
-  A note typed into "Sectioning / Cut Notes" at intake and read back under a different heading a week later reads as a different field, which is the one thing a correction surface must not do.
-  The drawer now takes its headings from the same list intake does, so all three surfaces name the four notes identically.
-
-  The samples export follows: its **Cut Notes** column header is now **Sectioning / Cut Notes**, in the samples CSV, the Samples sheet of the Excel workbook, and the Sample Status sheet of the workbook a workstation publishes with every sync.
-  A saved spreadsheet or formula that looks up the old "Cut Notes" heading by name needs that one heading updated; the column is in the same place with the same contents.
-  The Logs export headers are untouched by this release.
+  Builds before 0.2.3 recorded no cut date on an extra slide, and before 0.8.0 a group dragged straight to Ready for Imaging was never recorded as cut.
+  The first time this version opens a database it fills those dates in once, each taken from the slide's own cut group's earliest record of leaving Needs Sectioning.
+  No date already recorded is rewritten, and a group whose record does not say when it left the queue is left alone, so its slides stay out of the inventory and the block is flagged for a cut instead.
+  An older build reads a filled-in date as it reads any other.
 
 ## 0.18.1 - 2026-09-12
 
@@ -43,8 +80,7 @@ A 0.18.0 instance opens a 0.18.1 database unchanged, and the reverse holds too.
   The row can briefly show the old text while the write is still landing, and opening the editor inside that window and clicking away writes the old text back over what you just typed, with no error and an undo entry like any other edit.
   The normal path is unaffected: type, click away, leave it alone, and the correction stands.
 
-  The Logs export is unchanged and does not carry two of the four notes.
-  Its Slide Notes column is the physical slide's own note, not the sample's, and there is no cut-notes column in it at all, so correcting the sample-level Slide Notes or Sectioning / Cut Notes on screen will not show up the next time you export the same view.
+  This limit on the Logs export was lifted in 0.18.2, which exports all four notes.
 
 ## 0.18.0 - 2026-09-12
 
