@@ -54,7 +54,7 @@ describe("undo store: undo-journal mark bookkeeping", () => {
     ]);
   });
 
-  it("drops a blocked undo entry, and the redo branch that no longer follows", () => {
+  it("drops a blocked undo entry and leaves the redo branch alone", () => {
     const s = useUndoStore.getState();
     s.record(undoEntry("A", 1));
     s.record(undoEntry("B", 3));
@@ -62,7 +62,10 @@ describe("undo store: undo-journal mark bookkeeping", () => {
     useUndoStore.getState().discardBlocked("undo"); // A's replay was refused
 
     expect(useUndoStore.getState().undoStack).toEqual([]);
-    expect(useUndoStore.getState().redoStack).toEqual([]);
+    expect(
+      useUndoStore.getState().redoStack.map((e) => e.label),
+      "the refusal wrote nothing, so B can still be put back",
+    ).toEqual(["B"]);
   });
 
   it("drops a blocked redo entry and leaves the undo history alone", () => {

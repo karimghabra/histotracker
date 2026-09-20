@@ -278,3 +278,27 @@ it("a replay that fails for any other reason keeps its step, and says to try aga
   // The step is still there, so pressing Undo again meets the same step, not the one before it.
   expect(String(await pressed(actions.undo()))).toMatch(/^Could not undo "Edit EE-1 description" just now: /);
 });
+
+it("an undo the drain refuses leaves the redo of an untouched step still there", async () => {
+  lab = await openLab();
+  const l = lab;
+  const overtaken = await blockWithARequestWaiting(l);
+  const other = await l.sample("OTHER-0", "embedded");
+  const actions = await appActions();
+
+  await actions.editSampleDescription(overtaken, "DESC-B");
+  await actions.editSampleDescription(other, "OTHER-B");
+
+  // Take back the newer edit. Its redo is on the stack now.
+  expect(await actions.undo()).toBe("Edit EE-2 description");
+  expect(block(l, other).sample_description).toBe("OTHER-0");
+
+  // The timer flags the block the OLDER edit touched, so that step can never replay.
+  expect((await l.app.sync.drainRequests()).ingested).toBe(1);
+  const refusal = await pressed(actions.undo());
+  expect(String(refusal)).toMatch(/^Could not undo "Edit EE-1 description": .*has been skipped\.$/);
+
+  // That refusal wrote nothing, so the step it did not touch is still there to put back.
+  expect(await actions.redo(), "the untouched step can still be redone").toBe("Edit EE-2 description");
+  expect(block(l, other).sample_description, "and it is back").toBe("OTHER-B");
+});

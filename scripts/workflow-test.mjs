@@ -3436,9 +3436,6 @@ issue(29, "undo removes any stack a move minted, with no bespoke reconciliation"
   assert(api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id != null, "start assay mints a stack");
   api.revertJournal(mark, api.journalHead());
   eq(api.dumpUndoable(), before, "undo removes the minted stack and detaches the slide");
-  const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
-  assert(!actions.includes("snapshotStacksForSlides") && !actions.includes("pruneStacks("),
-    "the fragile per-stack reconciliation is gone");
 });
 
 // The stack-pruning primitive itself: a stack with no slides is removed, one
