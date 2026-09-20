@@ -64,14 +64,28 @@ function preprocessingStages() {
 const SECTION_STAGES_PORT = (() => {
   const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
   const block = src.slice(src.indexOf("export const SECTION_STAGES"));
-  const defs = [...block.slice(0, block.indexOf("];")).matchAll(/key:\s*"([a-z_]+)",\s*label:[^,]*,\s*column:\s*"([a-z_]+)"/g)]
+  const body = block.slice(0, block.indexOf("];"));
+  const defs = [...body.matchAll(/key:\s*"([a-z_]+)",\s*label:[^,]*,\s*column:\s*"([a-z_]+)"/g)]
     .map((m) => ({ key: m[1], column: m[2] }));
   if (defs.length < 4) throw new Error("could not read SECTION_STAGES out of stages.ts");
+  // The index IS the order, so a stage this regex cannot parse would not merely
+  // go missing — it would shift every later stage's order and quietly change
+  // what the whole harness calls "past the queue". Count the keys separately and
+  // insist the two agree, so an unreadable entry is loud.
+  const keys = [...body.matchAll(/key:\s*"([a-z_]+)"/g)].length;
+  if (keys !== defs.length) {
+    throw new Error(
+      `SECTION_STAGES port read ${defs.length} of ${keys} stages out of stages.ts — ` +
+      `one of them does not match the expected key/label/column shape, and the stage order here would be wrong.`,
+    );
+  }
   return defs;
 })();
 const SECTION_STAGE_ORDER_PORT = Object.fromEntries(SECTION_STAGES_PORT.map((s, i) => [s.key, i]));
-const pastTheQueue = (stage) =>
-  (SECTION_STAGE_ORDER_PORT[stage] ?? 0) > SECTION_STAGE_ORDER_PORT.needs_sectioning;
+// Named against the ONE stage that means the blade has not come yet, so every
+// other value — 'removed', which SECTION_STAGES does not list, included — fails
+// closed. Mirrors relabelSlideToSample in db.ts.
+const pastTheQueue = (stage) => stage !== "needs_sectioning";
 const SECTION_STAGES_PAST_QUEUE = SECTION_STAGES_PORT.filter((s) => pastTheQueue(s.key));
 const VERBOSE = process.argv.includes("--verbose");
 
@@ -1986,6 +2000,46 @@ issue(182, "an uncut extra cannot be refiled into a cut that has already been ta
   eq(racked, false, "and assigning it to an agent by hand is refused outright");
   eq(api.get(`SELECT stack_id AS rack FROM slides WHERE id = ?`, [planned.id]).rack, null,
      "so it is left out of every rack");
+});
+
+// #182 — a RETIRED group is a cut that was taken, not a queue to join.
+//
+// The group a refile lands in is matched by agent alone, retired groups
+// included, and 'removed' is not one of the workflow stages — so a guard that
+// asked how far along the stage was would read a retired group as "still
+// waiting for the blade" and let an uncut slide in. It is one step from the
+// harm: restoring the group puts it back at the stage it was cut in, and that
+// group's next ordinary move stamps every slide in it.
+issue(182, "an uncut extra cannot be refiled into a group that was retired after being cut", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const left = api.addSample(p, "EE", "left").id;
+  const right = api.addSample(p, "EE", "right").id;
+  api.markEmbedded(left);
+  api.markEmbedded(right);
+
+  // The right block is cut for real, then the whole group is taken off the board.
+  const [cutGroup] = api.createSectionRequests(right, [{ duplicates: 1 }]);
+  api.startAssayWork(cutGroup);
+  api.removeSectionRequest(cutGroup, "cut recorded against the wrong block");
+  eq(api.get(`SELECT current_stage AS stage FROM section_requests WHERE id = ?`, [cutGroup]).stage,
+     "removed", "the cut group is retired");
+
+  // The left block's cut is still queued, so its extra is a line in a plan.
+  const [queued] = api.createSectionRequests(left, [{ duplicates: 1 }]);
+  const planned = api.get(`SELECT id, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`, [queued]);
+  eq(planned.cut, null, "the queued block's extra has no cut date");
+
+  let refiled = false;
+  try {
+    api.relabelSlideToSample(planned.id, right, "mislabelled at the microtome");
+    refiled = true;
+  } catch { /* desired: a retired group is a cut already taken */ }
+  eq(refiled, false, "the refile into the retired group is refused");
+  eq(api.get(`SELECT section_request_id AS g FROM slides WHERE id = ?`, [planned.id]).g, queued,
+     "and the slide is left in the plan it came from");
+  eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [planned.id]).cut, null,
+     "with no cut date it did not earn");
 });
 
 // #182 — the other half: glass that WAS cut, by a build that never stamped it.

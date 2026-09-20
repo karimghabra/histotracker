@@ -5017,11 +5017,14 @@ export async function relabelSlideToSample(
   // reassignSlide already makes, at the other route onto a stainer.
   // The group created below when the target has none is created 'sectioned', so
   // it is a cut already taken too.
+  //
+  // Named against the ONE stage that means the blade has not come yet, so every
+  // other value fails closed: the group match above does not exclude a retired
+  // group, and 'removed' is not one of SECTION_STAGES, so reading its order back
+  // would have made a retired landing site — a group that WAS cut — read as
+  // still queued and let the refile through.
   const landingStage = groupRows[0]?.current_stage ?? "sectioned";
-  if (
-    !slide.stage_cut_at &&
-    (SECTION_STAGE_ORDER[landingStage] ?? 0) > SECTION_STAGE_ORDER.needs_sectioning
-  ) {
+  if (!slide.stage_cut_at && landingStage !== "needs_sectioning") {
     throw new Error(
       `${displayCode(slide.slide_code)} has not been cut yet, so it cannot be filed under ` +
         `${target.sample_code}, whose cut has already been taken. Change the cutting plan instead.`,

@@ -126,3 +126,36 @@ it("both rack entrances refuse an uncut extra whose group reads past the queue",
   expect(after.stage_cut_at, "and is still uncut").toBeNull();
   expect(rackedButNeverCut(lab).join("; ") || "none", "the racks hold only real glass").toBe("none");
 });
+
+it("an uncut extra cannot be refiled into a group that was retired after being cut", async () => {
+  lab = await openLab();
+  const left = await lab.sample("left tendon");
+  const right = await lab.sample("right tendon");
+
+  // The right block is cut for real, then the whole group is taken off the board.
+  // A refile matches a group by agent alone, retired groups included, and a
+  // retired group is a cut that was taken — not a queue an uncut slide may join.
+  const [cutGroup] = await lab.db.createSectionRequests(right, [{ duplicates: 1, stains: "" }]);
+  await lab.db.updateSectionStage(cutGroup, "sectioned");
+  await lab.db.removeSectionRequest(cutGroup, "cut recorded against the wrong block");
+  expect(
+    lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [cutGroup])[0].current_stage,
+    "the cut group is retired",
+  ).toBe("removed");
+
+  const [queued] = await lab.db.createSectionRequests(left, [{ duplicates: 1, stains: "" }]);
+  const planned = lab.rows(`SELECT id, stage_cut_at FROM slides WHERE section_request_id = ?`, [
+    queued,
+  ])[0];
+  expect(planned.stage_cut_at, "the queued block's extra has no cut date").toBeNull();
+
+  await expect(
+    lab.db.relabelSlideToSample(planned.id, right, "mislabelled at the microtome"),
+  ).rejects.toThrow(/has not been cut yet/);
+  const after = lab.rows(`SELECT section_request_id, stage_cut_at FROM slides WHERE id = ?`, [
+    planned.id,
+  ])[0];
+  expect(after.section_request_id, "the slide is left in the plan it came from").toBe(queued);
+  expect(after.stage_cut_at, "with no cut date it did not earn").toBeNull();
+  expect(rackedButNeverCut(lab).join("; ") || "none", "the racks hold only real glass").toBe("none");
+});
