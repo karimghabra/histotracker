@@ -639,10 +639,13 @@ export async function revertJournalRange(from: number, to: number): Promise<{ fr
 }
 
 /**
- * A replay a later write has overtaken: a row it would put back is no longer as
- * the action left it, so the command refused the whole thing and nothing changed
- * (`CHANGED_SINCE`). The caller drops the entry it blocked rather than offering a
- * step that can never run again.
+ * A replay the command refused whole, with nothing changed (`CHANGED_SINCE`):
+ * something outside the entry's range is in its way - a row it would put back is
+ * no longer as the action left it, a key it needs has been taken since, or a
+ * delete of its own row would cascade past it. Which of the three, and why each
+ * is terminal rather than worth retrying, is in `src-tauri/src/undo_journal.rs`.
+ * The caller drops the entry it blocked rather than offering a step that can
+ * never run again.
  */
 export class ReplayRefusedError extends Error {
   constructor() {

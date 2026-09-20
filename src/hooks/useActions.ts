@@ -967,11 +967,11 @@ export function useActions() {
 /**
  * Replay one entry's range, or take that step off the stack for good.
  *
- * A replay a later write has overtaken is refused whole, with nothing changed
- * (ReplayRefusedError). Asking again can only be refused again, and the entry
- * would sit at the top of the stack hiding everything behind it, so it is
- * dropped and the user is told in one sentence. The next Undo then reaches the
- * step before it.
+ * A replay something outside its own range is in the way of is refused whole,
+ * with nothing changed (ReplayRefusedError, db.ts). Asking again can only be
+ * refused again, and the entry would sit at the top of the stack hiding
+ * everything behind it, so it is dropped and the user is told in one sentence.
+ * The next Undo then reaches the step before it.
  *
  * Every other failure is temporary as far as anyone here knows (a busy database,
  * most of all), so the step stays exactly where it is and the user is told they
