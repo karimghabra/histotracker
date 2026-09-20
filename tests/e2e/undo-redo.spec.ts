@@ -61,9 +61,10 @@ test("undo/redo keep sample IDs stable (no sequence drift)", async ({ page }) =>
   await signInAndSeedUser(page);
   await createProject(page, "EE", "Enthesis Engineering");
 
-  // Create, undo, then create again: the ID must be EE-1 both times. The old
-  // logical-dump undo left sqlite_sequence un-rewound, so the second create
-  // could jump to EE-2; a true image revert restores the counter too.
+  // Create, undo, then create again: the ID must be EE-1 both times. Nothing
+  // rewinds sqlite_sequence — the journal skips `sqlite_%` tables — and nothing
+  // needs to: the replay deletes the row, and addSample numbers the next block
+  // from MAX(project_sample_number) over the rows that are there.
   await createSample(page, "First block");
   await expect(page.getByText("EE-1")).toBeVisible();
 

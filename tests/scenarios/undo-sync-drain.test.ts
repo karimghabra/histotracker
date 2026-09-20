@@ -302,3 +302,39 @@ it("an undo the drain refuses leaves the redo of an untouched step still there",
   expect(await actions.redo(), "the untouched step can still be redone").toBe("Edit EE-2 description");
   expect(block(l, other).sample_description, "and it is back").toBe("OTHER-B");
 });
+
+it("an undo whose delete would cascade past its own range is refused, not quietly applied", async () => {
+  lab = await openLab();
+  const l = lab;
+
+  // A: a project of its own. Nothing touches that row again, so A's inverse -
+  // deleting it - still matches what A left there.
+  const markA: number = await l.db.journalHead();
+  await l.db.addProject({ code: "ZZ", name: "Scratch", team_lead: "", is_active: true, lead_user_id: 0 });
+  const endA: number = await l.db.journalHead();
+  const project = l.rows(`SELECT id FROM projects WHERE code = 'ZZ'`)[0].id as number;
+
+  // B: a block inside it, with a viewer's request waiting for it.
+  const markB: number = await l.db.journalHead();
+  const id: number = await l.db.addSample(newSampleInput(project, "CASCADE-0"), "ZZ");
+  const endB: number = await l.db.journalHead();
+  await requestAStainOn(l, id);
+
+  // The sync timer drains the request and flags the block, so B is overtaken.
+  expect((await l.app.sync.drainRequests()).ingested).toBe(1);
+  const blocks = l.rows(`SELECT id, sample_code, preselected_stains FROM samples ORDER BY id`);
+  expect(blocks.some((b) => String(b.preselected_stains).includes("H&E"))).toBe(true);
+
+  // Undo B: refused on the guard, because the drain rewrote the row it would remove.
+  expect(String(await replay(l, markB, endB)), "the block's own step is refused").toMatch(/changed since/);
+
+  // Undo A: its delete of the project still matches the project row, and would take
+  // the block, the drain's flag and the request away with it through the cascade.
+  expect(String(await replay(l, markA, endA)), "and so is the project's").toMatch(/changed since/);
+
+  expect(l.rows(`SELECT id FROM projects WHERE id = ?`, [project]), "the project is still there").toHaveLength(1);
+  expect(l.rows(`SELECT id, sample_code, preselected_stains FROM samples ORDER BY id`), "so is the block").toEqual(
+    blocks,
+  );
+  expect(requests(l), "and the request the drain recorded").toHaveLength(1);
+});

@@ -66,7 +66,7 @@ import { sampleNoteLabel } from "../lib/sampleNotes";
 import type { SampleNoteField } from "../lib/sampleNotes";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
 import { oldestMark, useUndoStore, type UndoEntry } from "../lib/undo";
-import { inLane } from "../lib/writeLane";
+import { laned } from "../lib/writeLane";
 import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
 
@@ -912,7 +912,7 @@ export function useActions() {
     return entry.label;
   }, [invalidate]);
 
-  return laned({
+  return allLaned({
     moveSamples,
     startProcessingBatch,
     planProcessingBatch,
@@ -1007,12 +1007,12 @@ async function replayOrSkip(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => any;
 const lanedFns = new WeakMap<AnyFn, AnyFn>();
-function laned<T extends Record<string, AnyFn>>(actions: T): T {
+function allLaned<T extends Record<string, AnyFn>>(actions: T): T {
   const out: Record<string, AnyFn> = {};
   for (const [name, fn] of Object.entries(actions)) {
     let wrapped = lanedFns.get(fn);
     if (!wrapped) {
-      wrapped = (...args: unknown[]) => inLane(async () => fn(...args));
+      wrapped = laned(async (...args: unknown[]) => fn(...args));
       lanedFns.set(fn, wrapped);
     }
     out[name] = wrapped;

@@ -35,8 +35,10 @@ function inTransaction<T>(db: SqlHandle, work: () => T): T {
 const one = (db: SqlHandle, sql: string, params?: Array<number | string>) =>
   Number(Object.values(db.all(sql, params)[0] ?? {})[0] ?? 0);
 
-const head = (db: SqlHandle) =>
-  one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0)");
+const sequence = (db: SqlHandle, table: string) =>
+  one(db, `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = ?), 0)`, [table]);
+
+const head = (db: SqlHandle) => sequence(db, "undo_journal");
 
 /**
  * A constraint violation, as sqlx's `ErrorKind` tells the Rust command apart from
@@ -56,18 +58,23 @@ export interface Replayed {
  * `undo_journal_revert`: replay the journal rows in `(from, to]`, newest first,
  * sweep the replay's audit rows, and return the range the replay wrote.
  *
- * Every statement must touch exactly one row: each is one row's guarded inverse,
- * so none matching means something outside the range has changed that row since,
- * and the replay is refused with nothing changed. A constraint violation is the
- * same refusal, from the other side: the row's key has been taken since. Any
- * other failure is reported as it is, so the caller can keep the step.
+ * Every statement must change exactly one row of the lab record, its own: each is
+ * one row's guarded inverse, so matching no row means something outside the range
+ * has changed that row since, and the replay is refused with nothing changed. A
+ * constraint violation is the same refusal from the other side (the row's key has
+ * been taken since), and so is a DELETE that cascades, which `changes()` does not
+ * count - it is counted through the journal instead, one inverse row per journaled
+ * row changed, less the audit rows the app's own triggers wrote. Any other failure
+ * is reported as it is, so the caller can keep the step.
  */
 export function revertJournal(db: SqlHandle, from: number, to: number): Replayed {
   return inTransaction(db, () => {
     const start = head(db);
-    const audit = one(db, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)");
+    const audit = sequence(db, "audit_events");
     const rows = db.all("SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC", [from, to]);
     for (const row of rows) {
+      const journalBefore = head(db);
+      const auditBefore = sequence(db, "audit_events");
       let changed: number;
       try {
         changed = db.run(String(row.stmt));
@@ -77,6 +84,9 @@ export function revertJournal(db: SqlHandle, from: number, to: number): Replayed
         throw new Error(CHANGED_SINCE);
       }
       if (changed !== 1) throw new Error(CHANGED_SINCE);
+      if (head(db) - journalBefore - (sequence(db, "audit_events") - auditBefore) !== 1) {
+        throw new Error(CHANGED_SINCE);
+      }
     }
     db.all("DELETE FROM audit_events WHERE id > ? RETURNING id", [audit]);
     return { from: start, to: head(db) };

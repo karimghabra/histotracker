@@ -8,9 +8,17 @@ import { create } from "zustand";
  *
  * The range is CLOSED when the entry is recorded: `mark` is the journal's head
  * before the action, `end` its head after. So an entry covers its own action and
- * nothing else - not the rows an earlier undo wrote back (which would double the
- * journal with every undo), and not a write that landed after it from outside the
- * action, which the replay's own guards then refuse rather than quietly erase.
+ * nothing else - not the rows an earlier undo wrote back, which would double the
+ * journal with every undo, and not a write that landed after it from outside the
+ * action.
+ *
+ * What the replay then enforces, row by row: every inverse must change exactly
+ * one row of the lab record, its own. It is guarded by what the action left in
+ * that row, so a later write to it makes the inverse match nothing; a row whose
+ * key has since been taken makes it raise a constraint; and a delete that would
+ * cascade past its own row is counted through the journal it appends. Each is
+ * refused whole, with nothing changed, rather than quietly erasing what it met
+ * (src-tauri/src/undo_journal.rs).
  */
 export interface UndoEntry {
   label: string;

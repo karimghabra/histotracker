@@ -23,3 +23,13 @@ export function inLane<T>(work: () => Promise<T>): Promise<T> {
   return slot;
 }
 
+/**
+ * `fn`, in the lane: the same call, taking its place in line at the moment it is
+ * made. The one way a caller says "this write belongs in the lane", whether it is
+ * an action (useActions) or a dialog's mutation (useData).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function laned<A extends any[], R>(fn: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
+  return (...args) => inLane(() => fn(...args));
+}
+

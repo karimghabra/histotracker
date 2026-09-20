@@ -42,18 +42,12 @@ import {
 } from "../lib/db";
 import type { NewSampleInput, StainRequestStatus } from "../lib/types";
 import { DEFAULT_SETTINGS, type AppSettings } from "../lib/settings";
-import { inLane } from "../lib/writeLane";
-
-/**
- * A write from one of these dialogs, in the write lane (writeLane.ts) like every
- * action: it takes its place in line when the user asks for it, so it can never
- * land between an action's journal mark and the action's own writes and be undone
- * as part of it. The session tables (users, settings) are not journaled and need
- * no slot.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const laned = <A extends any[], R>(fn: (...args: A) => Promise<R>) =>
-  (...args: A): Promise<R> => inLane(() => fn(...args));
+// A write from one of these dialogs goes in the write lane (writeLane.ts) like
+// every action: it takes its place in line when the user asks for it, so it can
+// never land between an action's journal mark and the action's own writes and be
+// undone as part of it. The session tables (users, settings) are not journaled
+// and need no slot.
+import { laned } from "../lib/writeLane";
 
 const KEYS = {
   projects: ["projects"] as const,

@@ -128,16 +128,31 @@ pub struct Replayed {
 /// undo, the rows a redo puts back sit below it. The sweep is journaled too, so
 /// a redo restores the undone action's own audit rows exactly.
 ///
-/// Every journal statement must touch EXACTLY ONE row. Each is an inverse of one
-/// row's change, guarded by what that change left there, so none touching a row
-/// means something outside the range being replayed has changed it since -- the
-/// sync timer draining a viewer's request between an Undo and its Redo, say --
-/// and restoring the whole row would silently erase that. A constraint violation
-/// says the same thing from the other side: a row the action created, deleted by
-/// the undo, cannot be put back under a key something else has taken. Both are
-/// refused with [`CHANGED_SINCE`], rolled back, nothing changed. Anything else (a
-/// busy database, a statement that cannot run) is reported as it is, so the
-/// caller keeps the step and the user can try again.
+/// Every journal statement must change EXACTLY ONE ROW OF THE LAB RECORD, its own.
+///
+/// Each is an inverse of one row's change, guarded by what that change left
+/// there, so matching no row means something outside the range being replayed
+/// has changed it since -- the sync timer draining a viewer's request between an
+/// Undo and its Redo, say -- and restoring the whole row would silently erase
+/// that. A constraint violation says the same thing from the other side: a row
+/// the action created, deleted by the undo, cannot be put back under a key
+/// something else has taken.
+///
+/// `rows_affected` alone does not see the third way out. `sqlite3_changes` does
+/// not count rows an ON DELETE CASCADE takes, so a DELETE inverse that matches
+/// its own guarded row reports one while the cascade carries off whatever hangs
+/// below it. Inside the range that is correct and expected -- children are
+/// inserted after their parent, so newest-first has already deleted them and
+/// there is nothing left to cascade -- which makes a cascade that DOES find
+/// children exactly the case of rows outside the range. It is counted instead
+/// through the journal: every change to a journaled row appends one inverse, and
+/// the only other rows a statement can add are the audit rows the app's own
+/// triggers write, so `journal growth - audit growth` is that statement's own
+/// row count, and anything but one is the cascade.
+///
+/// All three are refused with [`CHANGED_SINCE`], rolled back, nothing changed.
+/// Anything else (a busy database, a statement that cannot run) is reported as it
+/// is, so the caller keeps the step and the user can try again.
 pub async fn revert(path: &Path, from: i64, to: i64) -> Result<Replayed, String> {
     let mut conn = open(path).await?;
     begin(&mut conn).await?;
@@ -145,20 +160,23 @@ pub async fn revert(path: &Path, from: i64, to: i64) -> Result<Replayed, String>
     finish(conn, work).await
 }
 
-async fn head(conn: &mut SqliteConnection) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0)")
+/// `table`'s AUTOINCREMENT high-water mark, which is 0 before its first row and
+/// never moves backwards, so a difference across a statement counts the rows that
+/// statement appended.
+async fn sequence(conn: &mut SqliteConnection, table: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = ?), 0)")
+        .bind(table)
         .fetch_one(&mut *conn)
         .await
 }
 
+async fn head(conn: &mut SqliteConnection) -> Result<i64, sqlx::Error> {
+    sequence(conn, "undo_journal").await
+}
+
 async fn replay(conn: &mut SqliteConnection, from: i64, to: i64) -> Result<Replayed, String> {
     let start = head(conn).await.map_err(|e| e.to_string())?;
-    let audit: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)",
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| e.to_string())?;
+    let audit = sequence(conn, "audit_events").await.map_err(|e| e.to_string())?;
     let statements: Vec<String> = sqlx::query_scalar(
         "SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC",
     )
@@ -168,12 +186,19 @@ async fn replay(conn: &mut SqliteConnection, from: i64, to: i64) -> Result<Repla
     .await
     .map_err(|e| e.to_string())?;
     for statement in &statements {
+        let journal_before = head(conn).await.map_err(|e| e.to_string())?;
+        let audit_before = sequence(conn, "audit_events").await.map_err(|e| e.to_string())?;
         let done = match stmt(statement).execute(&mut *conn).await {
             Ok(done) => done,
             Err(err) if is_constraint(&err) => return Err(CHANGED_SINCE.to_string()),
             Err(err) => return Err(err.to_string()),
         };
         if done.rows_affected() != 1 {
+            return Err(CHANGED_SINCE.to_string());
+        }
+        let journaled = head(conn).await.map_err(|e| e.to_string())? - journal_before;
+        let audited = sequence(conn, "audit_events").await.map_err(|e| e.to_string())? - audit_before;
+        if journaled - audited != 1 {
             return Err(CHANGED_SINCE.to_string());
         }
     }
@@ -244,6 +269,13 @@ mod tests {
         CREATE TABLE undo_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL);
         CREATE TABLE samples (id INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT '');
         CREATE TABLE racks (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);
+        CREATE TABLE rack_slides (id INTEGER PRIMARY KEY, rack_id INTEGER REFERENCES racks(id) ON DELETE CASCADE, code TEXT NOT NULL);
+        CREATE TRIGGER undo_journal_rack_slides_insert AFTER INSERT ON rack_slides BEGIN
+          INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM rack_slides WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND rack_id IS ' || quote(new.rack_id) || ' AND code IS ' || quote(new.code));
+        END;
+        CREATE TRIGGER undo_journal_rack_slides_delete AFTER DELETE ON rack_slides BEGIN
+          INSERT INTO undo_journal(stmt) VALUES ('INSERT INTO rack_slides(id,rack_id,code) VALUES(' || quote(old.id) || ',' || quote(old.rack_id) || ',' || quote(old.code) || ')');
+        END;
         CREATE TRIGGER undo_journal_racks_insert AFTER INSERT ON racks BEGIN
           INSERT INTO undo_journal(stmt) VALUES ('DELETE FROM racks WHERE rowid=' || new.rowid || ' AND id IS ' || quote(new.id) || ' AND code IS ' || quote(new.code));
         END;
@@ -294,6 +326,7 @@ mod tests {
     const SAMPLES: &str = "SELECT id || ':' || note FROM samples ORDER BY id";
     const AUDIT: &str = "SELECT id || ':' || summary FROM audit_events ORDER BY id";
     const RACKS: &str = "SELECT id || ':' || code FROM racks ORDER BY id";
+    const RACK_SLIDES: &str = "SELECT id || ':' || code FROM rack_slides ORDER BY id";
 
     #[test]
     fn a_replay_puts_every_row_back_and_a_second_replay_redoes_it() {
@@ -444,6 +477,29 @@ mod tests {
                 .expect_err("the redo is refused");
             assert_eq!(err, CHANGED_SINCE);
             assert_eq!(rows(&mut conn, RACKS).await, racks, "and nothing was changed");
+        });
+    }
+
+    /// A row created after the entry hangs off one the entry created, so the
+    /// entry's DELETE still matches its own guarded row and still reports one row
+    /// changed while the cascade carries the newer one off with it.
+    #[test]
+    fn a_replay_whose_delete_would_cascade_past_its_range_is_refused() {
+        block_on(async {
+            let scratch = Scratch::new();
+            let mut conn = lab(&scratch).await;
+            let mark = head(&mut conn).await;
+            run(&mut conn, "INSERT INTO racks(id, code) VALUES (1, 'R1')").await;
+            let end = head(&mut conn).await;
+
+            // Outside the range: a slide put on that rack afterwards.
+            run(&mut conn, "INSERT INTO rack_slides(id, rack_id, code) VALUES (5, 1, 'S1')").await;
+            let (racks, slides) = (rows(&mut conn, RACKS).await, rows(&mut conn, RACK_SLIDES).await);
+
+            let err = revert(&scratch.db(), mark, end).await.expect_err("the undo is refused");
+            assert_eq!(err, CHANGED_SINCE);
+            assert_eq!(rows(&mut conn, RACKS).await, racks, "the rack is still there");
+            assert_eq!(rows(&mut conn, RACK_SLIDES).await, slides, "and so is the slide on it");
         });
     }
 
