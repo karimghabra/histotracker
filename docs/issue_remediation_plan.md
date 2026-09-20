@@ -1137,7 +1137,8 @@ observed failing with the fix removed (`node scripts/revert-verify.mjs <case>`).
   *Fix:* three parts. The INSERT no longer stamps. `updateSectionStage` stamps
   once, for **any** stage past `needs_sectioning` — two specific destinations
   used to stamp it individually and a group dragged straight to Ready for
-  Imaging was never recorded as cut at all. `revertSectionToStage` clears it
+  Imaging was never recorded as cut at all (that drag is itself refused now:
+  `sectionMoveRefusal` in `db.ts`). `revertSectionToStage` clears it
   when a group goes back into the queue. On the read side, `slideCutAt()` refuses
   to report a cut for a slide whose group is still queued, which is what corrects
   rows **already written** by 0.7.4 without rewriting history; it keeps the

@@ -56,6 +56,7 @@ import {
   updateSampleStage,
   updateSectioningPlan,
   updateSectionStage,
+  sectionMoveRefusal,
   updateSlideStackStage,
 } from "../lib/db";
 import type { DbImage } from "../lib/db";
@@ -417,6 +418,8 @@ export function useActions() {
         }
       }
       for (const section of before) {
+        const refusal = sectionMoveRefusal(section.current_stage, stageKey);
+        if (refusal) throw new Error(refusal);
         const currentOrder = SECTION_STAGE_ORDER[section.current_stage] ?? 0;
         if (
           stageKey === "pictures_taken" &&

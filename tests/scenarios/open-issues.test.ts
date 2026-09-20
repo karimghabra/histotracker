@@ -26,8 +26,10 @@ describe("#139: retracting a cut never leaves glass that was worked on but never
       const [group] = await lab.db.createSectionRequests(block, [
         { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
       ]);
+      // Needs Sectioning straight to Ready for Imaging is refused, so that stage is reached by way of Staining.
+      if (reached === "ready_for_imaging") await lab.db.updateSectionStage(group, "stain_requested");
       await lab.db.updateSectionStage(group, reached);
-      // The board allows this drag; whether the data layer refuses it is the fix's call.
+      // The board allows a straight drag to the later stages; whether the data layer refuses the retraction is the fix's call.
       let refusal = "accepted";
       await lab.db.revertSectionToStage(group, "needs_sectioning").catch((e: Error) => (refusal = `refused: ${e.message}`));
       expect(workedButNeverCut(lab).join("; ") || "none", `retraction ${refusal.slice(0, 60)}`).toBe("none");

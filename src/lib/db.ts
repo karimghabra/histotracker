@@ -5162,10 +5162,36 @@ export async function deleteAssay(id: number): Promise<void> {
   await db.execute(`DELETE FROM assay_catalog WHERE id = ?`, [id]);
 }
 
+/**
+ * The message for a move of a cut group that is not allowed, or null when it is.
+ *
+ * A group waiting in Needs Sectioning cannot go straight to Ready for Imaging:
+ * that drag stamped uncut glass as cut and imaged, and once #167 stopped such a
+ * group being retracted the record could not be put right. The captain ruled to
+ * deny it. Every other move is unchanged. One function, read by the UI's
+ * preflight (a multi-group drag is refused before any group moves) and by
+ * `updateSectionStage`, so no route can do it.
+ */
+export function sectionMoveRefusal(currentStage: string, stageKey: string): string | null {
+  if (currentStage === "needs_sectioning" && stageKey === "ready_for_imaging") {
+    return (
+      "This group is still waiting to be cut, so it cannot go to Ready for Imaging yet. " +
+      "The group must be cut first: mark it Sectioned, then take it through staining."
+    );
+  }
+  return null;
+}
+
 export async function updateSectionStage(id: number, stageKey: string): Promise<void> {
   const db = await getDb();
   const column = SECTION_STAGE_COLUMNS[stageKey];
   if (!column) throw new Error(`Unknown section stage: ${stageKey}`);
+  const current = await db.select<Array<{ current_stage: string }>>(
+    `SELECT current_stage FROM section_requests WHERE id = ?`,
+    [id],
+  );
+  const refusal = current[0] ? sectionMoveRefusal(current[0].current_stage, stageKey) : null;
+  if (refusal) throw new Error(refusal);
   const timestamp = nowTimestamp();
 
   // #95 — ONE rule for when a slide is cut: the moment its group leaves Needs
