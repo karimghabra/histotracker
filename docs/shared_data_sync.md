@@ -41,7 +41,10 @@ A swap therefore clears Undo and Redo: the swapped-in file brings its own journa
 **Compatibility with the release in use, stated plainly.**
 The journal adds no numbered migration and no column to any lab table, so the release in use opens, reads and writes every database this build writes, and a backup or a snapshot moves between them as before.
 The asymmetry is the journal itself.
-Its triggers are persistent and live in the file, so a workstation rolled back to the release in use keeps appending an inverse row on every write, and that build has nothing that trims them: this build bounds the journal by age and count at open (`journalTrimStatements`, `src/lib/undoJournal.ts`), and the older one does not.
+Its triggers are persistent and live in the file, so a workstation rolled back to the release in use keeps appending an inverse row on every write, and that build has nothing that trims them: this build bounds the journal at open (`journalTrimStatements`, `src/lib/undoJournal.ts`), and the older one does not.
+The bound is five megabytes of statement text, with a row count and an age as secondary guards.
+It is expressed in bytes because bytes are what the payload costs: the journal is copied into every backup and uploaded whole in every published snapshot, and one inverse row is anything from a hundred bytes to several kilobytes.
+Five megabytes is a fraction of a lab-sized database (about 23 MB) and far more journal than a hundred-step undo stack reaches in ordinary use.
 The file therefore grows for as long as the lab stays rolled back, and every backup and published snapshot carries that growth, until a build that trims comes forward again and the next open brings it back inside the bound.
 Nothing is lost or corrupted by it; it costs space.
 

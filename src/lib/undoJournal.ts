@@ -63,17 +63,25 @@ export const JOURNAL_TABLE_SQL =
   `seq INTEGER PRIMARY KEY AUTOINCREMENT, stmt TEXT NOT NULL, at TEXT NOT NULL DEFAULT (datetime('now')))`;
 
 /**
- * How much journal is worth carrying. The undo stack holds a hundred steps
- * (undo.ts), and a bulk action writes one inverse per row it touches, so a heavy
- * week can leave tens of thousands of rows behind. They ride inside the database
- * file, which means inside every backup and every snapshot the workstation
- * publishes, so there is a bound on both age and count.
+ * How much journal is worth carrying.
+ *
+ * The cost is BYTES, not rows: the journal rides inside the database file, so it
+ * is copied into every backup and uploaded whole in every snapshot the
+ * workstation publishes. Rows vary by two orders of magnitude - an UPDATE inverse
+ * writes each of a table's columns twice, once to set it back and once to guard
+ * it, and a block's four note fields hold whatever was typed at the bench - so a
+ * row count says little about the payload. Five megabytes is the ceiling: a
+ * fraction of a lab-sized database (about 23 MB), and far more journal than the
+ * hundred-step stack can reach in ordinary use, where `pruneJournal` keeps it
+ * near the live stack anyway. The row count and the age are secondary guards,
+ * for a journal that is small in bytes and long in rows or in days.
  */
-const KEEP_DAYS = 14;
+const KEEP_BYTES = 5 * 1024 * 1024;
 const KEEP_ROWS = 20_000;
+const KEEP_DAYS = 14;
 
 /**
- * Forget journal rows older or more numerous than the bound above, oldest first.
+ * Forget journal rows past the bound above, oldest first.
  *
  * Run at open (db.ts), where nothing is live yet: the undo stack is empty until
  * the history is hydrated, and that hydration is anchored to the journal's ends,
@@ -81,8 +89,11 @@ const KEEP_ROWS = 20_000;
  * (undoPersist.ts). A replay is never left with part of its range.
  */
 export function journalTrimStatements(): string[] {
+  const running = `SUM(LENGTH(CAST(stmt AS BLOB))) OVER (ORDER BY seq DESC)`;
   return [
     `DELETE FROM undo_journal WHERE at < datetime('now', '-${KEEP_DAYS} days')`,
+    `DELETE FROM undo_journal WHERE seq NOT IN (` +
+      `SELECT seq FROM (SELECT seq, ${running} AS bytes FROM undo_journal) WHERE bytes <= ${KEEP_BYTES})`,
     `DELETE FROM undo_journal WHERE seq NOT IN (SELECT seq FROM undo_journal ORDER BY seq DESC LIMIT ${KEEP_ROWS})`,
   ];
 }
@@ -160,13 +171,6 @@ export async function journalInstallStatements(db: Pick<Database, "select">): Pr
   const statements: string[] = [];
   const journal = await db.select<Array<{ name: string }>>(`PRAGMA table_info(undo_journal)`);
   if (journal.length === 0) statements.push(JOURNAL_TABLE_SQL);
-  else if (!journal.some((c) => c.name === "at")) {
-    // A journal from a build before rows were dated cannot be trimmed by age, and
-    // ALTER TABLE cannot add a column defaulted to the time it is written. It is
-    // bookkeeping, not lab record: start it again, which the history's anchor
-    // notices (undoPersist.ts).
-    statements.push(`DROP TABLE undo_journal`, JOURNAL_TABLE_SQL);
-  }
   const tables = await db.select<Array<{ name: string }>>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
   );
