@@ -117,6 +117,34 @@ describe("#144: exhausting a block cancels the cut waiting for it, with a record
     const open = (await lab.db.listOpenSectionRequests()) as Array<{ id: number }>;
     expect(open.some((request) => request.id === group)).toBe(true);
   });
+
+  it("and it cannot be dragged back into the queue afterwards, so it never leaves the board", async () => {
+    lab = await openLab();
+    const block = await lab.sample("spent block, cut retracted after");
+    const [group] = await lab.db.createSectionRequests(block, [
+      { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+    ]);
+    await lab.db.updateSectionStage(group, "sectioned");
+    await lab.db.setBlockExhausted(block, true);
+    const board = (request: { id: number; current_stage: string }) => [request.id, request.current_stage];
+    const before = ((await lab.db.listOpenSectionRequests()) as Array<{ id: number; current_stage: string }>).map(board);
+
+    let refusal = "";
+    await lab.db
+      .revertSectionToStage(group, "needs_sectioning")
+      .catch((error: Error) => (refusal = error.message));
+    expect(refusal).toMatch(/exhausted/i);
+
+    expect(lab.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage).toBe(
+      "sectioned",
+    );
+    const slides = lab.rows(`SELECT stage_cut_at, current_stage FROM slides WHERE section_request_id = ?`, [group]);
+    expect(slides.length).toBeGreaterThan(0);
+    expect(slides.every((s) => s.stage_cut_at !== null)).toBe(true);
+    expect(((await lab.db.listOpenSectionRequests()) as Array<{ id: number; current_stage: string }>).map(board)).toEqual(
+      before,
+    );
+  });
 });
 
 describe("#148: emptying a processing run that already ran leaves a record that it ran", () => {

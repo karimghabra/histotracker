@@ -5391,6 +5391,23 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
           `this cut cannot be retracted. Reassign or remove the slide instead.`,
       );
     }
+
+    // A spent block has no tissue left to cut, so its cut cannot go back to
+    // waiting for the blade (#144). The board does not draw a group waiting on
+    // an exhausted block, so a retraction allowed here would take the card off
+    // the screen with nothing said.
+    const spent = await db.select<Array<{ sample_code: string }>>(
+      `SELECT s.sample_code
+         FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
+        WHERE sr.id = ? AND s.block_exhausted = 1`,
+      [id],
+    );
+    if (spent.length > 0) {
+      throw new Error(
+        `${spent[0].sample_code} is marked exhausted, so this cut cannot go back to Needs Sectioning - ` +
+          `there is no tissue left to cut. Remove the cut group instead.`,
+      );
+    }
   }
 
   const clear = SECTION_STAGES.filter((s) => SECTION_STAGE_ORDER[s.key] > targetOrder).map(
