@@ -24,3 +24,22 @@ export function workedButNeverCut(l: Lab): string[] {
     )
     .map((r) => `${r.slide_code} never cut but ${WORK_AFTER_CUT.filter((c) => r[c]).join(", ")}`);
 }
+
+/**
+ * Slides sitting in a staining rack with no cut date; empty means the rack holds
+ * only glass that exists.
+ *
+ * The same read as stress2's `racked-slide-was-cut` invariant, kept here so a
+ * scenario can sweep for it without a browser: a rack is where a slide is worked
+ * on, and a slide that was never cut has nothing to work on.
+ */
+export function rackedButNeverCut(l: Lab): string[] {
+  return l
+    .rows(
+      `SELECT sl.slide_code, sl.stack_id FROM slides sl
+         JOIN slide_stacks st ON st.id = sl.stack_id
+        WHERE st.kind = 'stain' AND sl.purpose = 'stain'
+          AND sl.current_stage <> 'removed' AND sl.stage_cut_at IS NULL`,
+    )
+    .map((r) => `${r.slide_code} is in rack ${r.stack_id} but was never cut`);
+}

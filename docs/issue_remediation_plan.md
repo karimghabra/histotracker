@@ -44,6 +44,40 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #182 — a slide reached a staining rack without ever being cut
+
+- **#182 · ✅ fixed.**
+  The nightly stress2 fuzzer (seed 20260813, step 132) broke the `racked-slide-was-cut` invariant: `BB-0003-E` sat in rack 1 with no cut date, which is a record of glass that does not exist.
+  Root cause: the extras a stain request may draw on were filtered by their cut GROUP's stage (`NOT IN ('needs_sectioning', 'sectioned', 'assignment_required')`, the #12 rule), and that stage is only a PROXY for "a blade took this section".
+  A slide carries its own stamps when it moves between groups, so an uncut extra refiled onto another block (`relabelSlideToSample`) lands in one of that block's groups and inherits its answer - any group past the queue will do, a retired one (`removed`) included, since the filter names only the three queue stages.
+  The refile is the whole route: `removeSectionRequest` cannot make one on its own, because it removes every live slide before marking the group removed, so a live extra reaches a retired group only by being refiled into it afterwards.
+  `requestStainForSample` then pulled that plan line into a staining rack, where the next rack tick would stamp it stained with no cut date - the 0.14.2 harm again.
+  The hole predates the fix that exposed it: it needs only `relabelSlideToSample` and the group-stage proxy, both of which are older than #179 and #180, so the same state was reachable in 0.17.0 (the release in use) and in 0.18.1.
+  #180's exhaust-cancels-the-waiting-cut is only what steered the fuzzer's walk into it; what kept it off the bench is that no UI affordance has called `relabelSlideToSample` since #121 (see the comment in `LogsView.tsx`), so only a data-layer caller - the fuzzer - could reach it.
+  The fix states the rule the rest of `db.ts` already states - the cut stamp is what says a blade touched the block (#95), as `addSlideToSection` reads off its siblings and `reassignSlide` refuses on - so `requestStainForSample` and `listExtraSlides` now require `slides.stage_cut_at IS NOT NULL` alongside the group-stage filter, which stays for rows older builds stamped at creation (#12/#118).
+  `assignExtraSlideToAssay` reads the same stamp, so the rule holds at the mutation that actually racks a slide and not only in the list it is offered from.
+  But the stamp is only as good as the routes that set it, and two of those had to be closed with it.
+  **The refile itself is refused.**
+  `updateSectionStage` stamps EVERY slide in a group the moment the group leaves the queue (#95, deliberately: one rule, no enumerated destinations), so a refiled plan line sitting in a cut group is stamped by that group's next ordinary move - a cut date for a cut taken before the slide arrived, and one the `racked-slide-was-cut` invariant cannot see because the stamp is no longer NULL.
+  Rather than weaken the group-move stamp, `relabelSlideToSample` now refuses to file an uncut slide into a group that has left the queue - the refusal `reassignSlide` already makes at the other route onto a stainer, and the group it creates when the target has none is created `sectioned`, so that counts as a cut already taken too.
+  An uncut slide may still be refiled into a group that is itself still waiting for the blade, which is a plan line moving to another plan.
+  The guard names `needs_sectioning`, the ONE stage that means the blade has not come yet, rather than asking how far along the landing group is, so every other value fails closed.
+  That is not pedantry: the group match is by agent alone and does not exclude a retired group, and `removed` is not one of `SECTION_STAGES`, so a guard reading the stage's order back would have read a retired group - a group that WAS cut - as still queued and let the refile through, one restore away from the same minted stamp.
+  **Glass cut before the stamp existed is given its group's date.**
+  The builds before 0.2.3 inserted extras with no cut date at all, and before 0.8.0 a group dragged from Needs Sectioning straight past it was never recorded as cut either (see #61 below), so a live database holds real glass, in a box on the bench, whose row says it was never cut.
+  Harmless while the date was only displayed; not harmless now that it decides whether a slide may be stained, so `backfillSlideCutStamps()` runs once per image at open (marker in `schema_meta`, beside the other one-time repairs) and stamps each such slide with its group's own earliest moment past the queue - `stage_sectioned_at` where there is one, otherwise the first stamp the group does record, which is the same reading `ensureSlidesForSectionRequest` takes.
+  **Rows left unstamped:** a group that is past the queue but records no moment it left it keeps its slides unstamped, because there is nothing honest to write; those extras stay out of the inventory and out of a stain request, and the block is flagged for a cut instead.
+  Nothing is invented, and nothing already stamped is rewritten.
+  **Why the backfill may read a row the guards refuse.**
+  The two halves rest on opposite readings of one shape: `listExtraSlides` and `requestStainForSample` treat "unstamped slide in a past-queue group" as not-glass, while the backfill treats it as glass cut before the stamp existed.
+  They do not disagree, because in an image this build wrote that shape does not occur: a cut group is only ever created at `needs_sectioning` (`createSectionRequests`), so it acquires its past-queue stage through `updateSectionStage`, which stamps every slide in it on the way - a past-queue group therefore always has its slides stamped.
+  `addSlideToSection` reads `alreadyCut` off those siblings, so it leaves a new slide unstamped only in a genuinely legacy group, which is exactly where stamping is the right answer.
+  The one thing that could put an unstamped slide beside a cut group was `relabelSlideToSample`, which the refusal above now closes and which has had no UI affordance since #121 in any case.
+  So the backfill runs once, on rows no live build can still produce.
+  Consequence for the bench: an uncut plan line no longer appears in the Extra Slides inventory, no longer fulfils a stain request, and cannot be sent to an agent by hand; the request falls through to the block, which is flagged for a cut, exactly as it does when there are no extras at all.
+  No schema change - the backfill is data, and additive - so the release in use opens this tree's database unchanged, and an image it back-fills still opens on 0.17.0.
+  *Test:* `tests/scenarios/uncut-extra.test.ts` (the refile refusal, the group's next move minting nothing, and both rack entrances) and `tests/scenarios/legacy-cut-stamps.test.ts` (the pre-0.2.3 extra and the pre-0.8.0 straight-to-imaging group, back-filled at open on a relaunched lab), both on the real `db.ts`; the three `issue #182` gates in `scripts/workflow-test.mjs`; and the stress2 fuzzer's own `racked-slide-was-cut` invariant on seed 20260813, which is red before the fix and green after.
+
 ## #144 — a stain request joined the cut waiting on a spent block
 
 - **#144 · ✅ fixed.**
@@ -267,7 +301,9 @@ Two experiments, both run:
 
 1. Rewriting the filter to ask `stage_cut_at IS NOT NULL` — "has this glass been
    cut?" — makes the suspected case pass and **breaks issue #12**, which exists
-   precisely to keep provisional extras out of the inventory.
+   precisely to keep provisional extras out of the inventory. (Still true of
+   *replacing* the stage filter. #182 above adds that predicate **alongside** it,
+   which is a different change: both must hold.)
 2. Removing the three stages one at a time says which carry weight. Without
    `needs_sectioning`, three checks fail. Without `assignment_required`, #12
    fails. Without **`sectioned`, nothing fails at all** — it is unreachable from
@@ -1158,7 +1194,9 @@ observed failing with the fix removed (`node scripts/revert-verify.mjs <case>`).
   to report a cut for a slide whose group is still queued, which is what corrects
   rows **already written** by 0.7.4 without rewriting history; it keeps the
   `created_at` fallback for genuinely old slides (early builds inserted slides
-  with no `stage_cut_at` at all — see `f26448a`). *Test:* harness gate covers the
+  with no `stage_cut_at` at all — see `f26448a`; 0.18.2 fills those rows in once,
+  from their group's own record of leaving the queue, now that the stamp decides
+  whether a slide may be stained — see #182 above). *Test:* harness gate covers the
   write, e2e covers the read; verified separately, because either mechanism alone
   makes the other's revert look vacuous.
 - **#92/#93/#94 — settings dialogue · ✅ shipped.** Slides per block (default 4
