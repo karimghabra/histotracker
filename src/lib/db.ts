@@ -166,6 +166,7 @@ export function getDb(): Promise<Database> {
         await reconcileFulfilledRequests(db);
         await splitContaminatedStainRacks(db);
         await backfillSlideLetterMarks(db);
+        await backfillSlideCutStamps(db);
         await retireDryingChecklistStep(db);
         await installUndoJournal(db);
         return db;
@@ -2695,6 +2696,69 @@ async function backfillSlideLetterMarks(db: Database): Promise<void> {
   }
 }
 
+/**
+ * When a cut group's own record says it left Needs Sectioning, as one SQL
+ * expression: the earliest stamp it carries past the queue. NULL for a group
+ * that records no such moment, which is the whole point — nothing is invented.
+ */
+const GROUP_LEFT_QUEUE_AT = `COALESCE(${SECTION_STAGES.filter(
+  (s) => SECTION_STAGE_ORDER[s.key] > SECTION_STAGE_ORDER.needs_sectioning,
+)
+  .map((s) => `sr.${s.column}`)
+  .join(", ")})`;
+
+const STAGES_PAST_QUEUE = SECTION_STAGES.filter(
+  (s) => SECTION_STAGE_ORDER[s.key] > SECTION_STAGE_ORDER.needs_sectioning,
+).map((s) => `'${s.key}'`);
+
+/**
+ * One-time backfill of `slides.stage_cut_at` for glass cut before the stamp
+ * existed.
+ *
+ * The builds before 0.2.3 inserted extras with no cut date at all, and before
+ * 0.8.0 a group dragged from Needs Sectioning straight past it was never
+ * recorded as cut either (#95) — so a live database holds real glass, sitting in
+ * a box on the bench, whose row says it was never cut. That was harmless while
+ * the cut date was only ever displayed. It is not harmless now that it decides
+ * whether a slide may be stained (#182): without this, such an extra silently
+ * leaves the inventory and a stain request cuts the block again for a section
+ * that already exists.
+ *
+ * The group's own earliest stamp past the queue is the closest honest record of
+ * when it was cut — the same reading `ensureSlidesForSectionRequest` takes for
+ * back-filled rows, and the rule `updateSectionStage` states going forward. A
+ * group that records no such moment is left alone rather than given a date it
+ * never had, so its slides stay unstamped and keep being treated as a plan.
+ *
+ * Guarded by `schema_meta`, which rides WITH the image: reverting an old backup
+ * back-fills it again, an already back-filled image is left alone. Idempotent
+ * anyway — it only ever writes where the stamp is NULL.
+ */
+async function backfillSlideCutStamps(db: Database): Promise<void> {
+  try {
+    const done = await db.select<Array<{ value: string }>>(
+      `SELECT value FROM schema_meta WHERE key = 'slide_cut_stamps_backfilled'`,
+    );
+    if (done[0]?.value === "1") return;
+    const leftQueueAt =
+      `(SELECT ${GROUP_LEFT_QUEUE_AT} FROM section_requests sr
+         WHERE sr.id = slides.section_request_id
+           AND sr.current_stage IN (${STAGES_PAST_QUEUE.join(", ")}))`;
+    await db.execute(
+      `UPDATE slides SET stage_cut_at = ${leftQueueAt}
+        WHERE stage_cut_at IS NULL AND ${leftQueueAt} IS NOT NULL`,
+    );
+    await db.execute(
+      `INSERT INTO schema_meta (key, value) VALUES ('slide_cut_stamps_backfilled', '1')
+         ON CONFLICT(key) DO UPDATE SET value = '1'`,
+    );
+  } catch (error) {
+    // Corrective, not load-bearing — never block the app from opening. The
+    // marker is only written on success, so a failure retries on the next open.
+    console.warn("Skipped the slide cut-stamp backfill on this image:", error);
+  }
+}
+
 /** Record how far a sample's letter sequence has advanced (never backwards). */
 async function recordSlidesIssued(db: Database, sampleId: number, lastLetter: number): Promise<void> {
   await db.execute(
@@ -4903,10 +4967,11 @@ export async function relabelSlideToSample(
       section_request_id: number;
       sample_id: number;
       parent_code: string;
+      stage_cut_at: string | null;
     }>
   >(
     `SELECT sl.slide_code, sl.purpose, sl.current_stage, sl.assay_type, sl.assay_name,
-            sl.section_request_id, sr.sample_id, s.sample_code AS parent_code
+            sl.section_request_id, sr.sample_id, s.sample_code AS parent_code, sl.stage_cut_at
        FROM slides sl
        JOIN section_requests sr ON sr.id = sl.section_request_id
        JOIN samples s ON s.id = sr.sample_id
@@ -4936,12 +5001,33 @@ export async function relabelSlideToSample(
   // its own; those live on the SLIDES. Matching on the wrong column here would
   // throw on every relabel, which is exactly what the harness caught.
   const agent = (slide.assay_name ?? "").trim();
-  const groupRows = await db.select<Array<{ id: number }>>(
-    `SELECT id FROM section_requests
+  const groupRows = await db.select<Array<{ id: number; current_stage: string }>>(
+    `SELECT id, current_stage FROM section_requests
       WHERE sample_id = ? AND COALESCE(stains, '') = ?
       ORDER BY id LIMIT 1`,
     [targetSampleId, agent],
   );
+
+  // An uncut slide is a line in a plan, not a piece of glass, and a plan line
+  // cannot be filed into a cut that has already been taken. Without this the
+  // slide keeps its empty cut date while its new group's stage says "past the
+  // queue", and the next ordinary move of that group stamps it cut for a cut
+  // that happened before it arrived (#182) - the one rule at the top of
+  // updateSectionStage covers every slide in the group. The same refusal
+  // reassignSlide already makes, at the other route onto a stainer.
+  // The group created below when the target has none is created 'sectioned', so
+  // it is a cut already taken too.
+  const landingStage = groupRows[0]?.current_stage ?? "sectioned";
+  if (
+    !slide.stage_cut_at &&
+    (SECTION_STAGE_ORDER[landingStage] ?? 0) > SECTION_STAGE_ORDER.needs_sectioning
+  ) {
+    throw new Error(
+      `${displayCode(slide.slide_code)} has not been cut yet, so it cannot be filed under ` +
+        `${target.sample_code}, whose cut has already been taken. Change the cutting plan instead.`,
+    );
+  }
+
   let groupId = groupRows[0]?.id ?? null;
   if (groupId == null) {
     const created = await db.execute(

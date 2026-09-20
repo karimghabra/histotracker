@@ -233,7 +233,7 @@ const ACTIONS: Action[] = [
       if (!target) return null;
       return { fn: "relabelSlideToSample", args: [slide.id, target.id, "fuzz: wrong block"] };
     },
-    refusals: [/already filed/i, /removed/i, /no longer exists/i],
+    refusals: [/already filed/i, /removed/i, /no longer exists/i, /has not been cut yet/i],
   },
   {
     name: "ask for a stain on a block",

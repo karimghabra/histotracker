@@ -61,13 +61,18 @@ function preprocessingStages() {
   return keys;
 }
 
-const SECTION_STAGE_ORDER_PORT = (() => {
+const SECTION_STAGES_PORT = (() => {
   const src = readFileSync(join(HERE, "..", "src", "lib", "stages.ts"), "utf8");
   const block = src.slice(src.indexOf("export const SECTION_STAGES"));
-  const keys = [...block.slice(0, block.indexOf("];")).matchAll(/key:\s*"([a-z_]+)"/g)].map((m) => m[1]);
-  if (keys.length < 4) throw new Error("could not read SECTION_STAGES out of stages.ts");
-  return Object.fromEntries(keys.map((k, i) => [k, i]));
+  const defs = [...block.slice(0, block.indexOf("];")).matchAll(/key:\s*"([a-z_]+)",\s*label:[^,]*,\s*column:\s*"([a-z_]+)"/g)]
+    .map((m) => ({ key: m[1], column: m[2] }));
+  if (defs.length < 4) throw new Error("could not read SECTION_STAGES out of stages.ts");
+  return defs;
 })();
+const SECTION_STAGE_ORDER_PORT = Object.fromEntries(SECTION_STAGES_PORT.map((s, i) => [s.key, i]));
+const pastTheQueue = (stage) =>
+  (SECTION_STAGE_ORDER_PORT[stage] ?? 0) > SECTION_STAGE_ORDER_PORT.needs_sectioning;
+const SECTION_STAGES_PAST_QUEUE = SECTION_STAGES_PORT.filter((s) => pastTheQueue(s.key));
 const VERBOSE = process.argv.includes("--verbose");
 
 // ---------------------------------------------------------------------------
@@ -701,6 +706,19 @@ function makeApi(db) {
       const highest = highestLetterOrdinal(row.codes);
       if (highest > 0) recordSlidesIssued(row.sample_id, highest);
     }
+  }
+  // Port of backfillSlideCutStamps() — db.ts. Glass cut before the stamp existed
+  // (pre-0.2.3 extras, and pre-0.8.0 groups dragged straight past the queue)
+  // takes its group's own earliest moment past Needs Sectioning. A group that
+  // records no such moment is left alone rather than given a date it never had.
+  function backfillSlideCutStamps() {
+    const leftQueueAt =
+      `(SELECT COALESCE(${SECTION_STAGES_PAST_QUEUE.map((s) => `sr.${s.column}`).join(", ")})
+          FROM section_requests sr
+         WHERE sr.id = slides.section_request_id
+           AND sr.current_stage IN (${SECTION_STAGES_PAST_QUEUE.map((s) => `'${s.key}'`).join(", ")}))`;
+    run(`UPDATE slides SET stage_cut_at = ${leftQueueAt}
+          WHERE stage_cut_at IS NULL AND ${leftQueueAt} IS NOT NULL`);
   }
   // Port of removeSlide() — db.ts. NOTHING IS DELETED (#83): the row stays, is
   // parked at current_stage='removed', detached from its rack, and the reason
@@ -1417,7 +1435,8 @@ function makeApi(db) {
     if (!reason || !reason.trim()) throw new Error("A relabel needs a reason.");
     const slide = get(
       `SELECT sl.slide_code AS code, sl.assay_type AS at, sl.assay_name AS an,
-              sl.current_stage AS stage, sl.section_request_id AS section, sr.sample_id AS sample
+              sl.current_stage AS stage, sl.section_request_id AS section, sr.sample_id AS sample,
+              sl.stage_cut_at AS cut
          FROM slides sl JOIN section_requests sr ON sr.id = sl.section_request_id
         WHERE sl.id = ?`, [slideId]);
     if (!slide) throw new Error("That slide no longer exists.");
@@ -1429,10 +1448,18 @@ function makeApi(db) {
     // A cut group names its agent in `stains`; assay_type/assay_name live on the
     // SLIDES. Mirrors relabelSlideToSample in db.ts.
     const agent = (slide.an ?? "").trim();
-    let group = get(
-      `SELECT id FROM section_requests
+    const landing = get(
+      `SELECT id, current_stage AS stage FROM section_requests
         WHERE sample_id = ? AND COALESCE(stains, '') = ? ORDER BY id LIMIT 1`,
-      [targetSampleId, agent])?.id ?? null;
+      [targetSampleId, agent]) ?? null;
+    // An uncut slide is a line in a plan, and a plan line cannot be filed into a
+    // cut already taken (#182) — the group it lands in would stamp it cut on its
+    // next ordinary move. The group created below is created 'sectioned', so it
+    // is a cut already taken too. Mirrors relabelSlideToSample in db.ts.
+    if (!slide.cut && pastTheQueue(landing?.stage ?? "sectioned")) {
+      throw new Error("has not been cut yet, so it cannot be filed under a block whose cut has already been taken");
+    }
+    let group = landing?.id ?? null;
     if (group == null) {
       group = Number(run(
         `INSERT INTO section_requests
@@ -1537,7 +1564,7 @@ function makeApi(db) {
     tickSectionStainedCheckbox,
     removeSlide, reassignSlide, nextSlideLetter, removeSlidesForStack, removeSectionRequest, setBlockExhausted, removeSample, removeSamples,
     removeSectionRequestIfEmpty, removeSlides, closeSlideStackIfEmpty,
-    ensureSlidesForSectionRequest, backfillSlideLetterMarks, highestLetterOrdinal,
+    ensureSlidesForSectionRequest, backfillSlideLetterMarks, backfillSlideCutStamps, highestLetterOrdinal,
     planProcessingBatch, confirmProcessingBatchStart, updateBatchMembers, revertToStage,
     requestStainForSample, installJournal, journalHead, revertJournal, dumpUndoable,
     setSampleNote,
@@ -1889,14 +1916,19 @@ invariant("a requested stain pulls from an extra first, else flags the block (#2
 
 // #182 — no route may put glass that was never cut into a staining rack.
 //
-// The extras query filtered on the GROUP's stage, which is only a proxy for "a
-// blade touched this block". A slide carries its own stamps between groups, so
-// refiling an uncut extra onto another block drops it into one of that block's
-// groups — and if that group is past the queue, the proxy says cut. The stress
-// fuzzer then found it in a staining rack with no cut date: a record of glass
-// that does not exist. The cut stamp is the fact; the stage is not, so both
-// rack entrances read the stamp: the stain request, and assignExtraSlideToAssay.
-issue(182, "a stain request does not pull an uncut extra refiled onto the block", () => {
+// The extras a stain request may draw on were filtered by the GROUP's stage,
+// which is only a proxy for "a blade touched this block". A slide carries its
+// own stamps between groups, so refiling an uncut extra onto another block drops
+// it into one of that block's groups — and if that group is past the queue, the
+// proxy says cut. The stress fuzzer then found it in a staining rack with no cut
+// date: a record of glass that does not exist.
+//
+// Three checks, at the three places the record can go wrong: the refile is
+// refused so the plan line never reaches a cut that was already taken; the cut
+// stamp, not the group's stage, is what both rack entrances read; and the
+// group's next ordinary move cannot mint a cut date for a slide that was not
+// there when the blade was.
+issue(182, "an uncut extra cannot be refiled into a cut that has already been taken", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const left = api.addSample(p, "EE", "left").id;
@@ -1916,18 +1948,24 @@ issue(182, "a stain request does not pull an uncut extra refiled onto the block"
   const planned = api.get(`SELECT id, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`, [queued]);
   eq(planned.cut, null, "the queued block's extra has no cut date");
 
-  // Refiled onto the right block, it lands in that block's cut group.
-  api.relabelSlideToSample(planned.id, right, "mislabelled at the microtome");
-  eq(api.get(`SELECT sr.current_stage AS stage FROM slides sl
-                JOIN section_requests sr ON sr.id = sl.section_request_id
-               WHERE sl.id = ?`, [planned.id]).stage,
-     "stain_requested", "the refiled slide sits in a group past Needs Sectioning");
+  let refiled = false;
+  try {
+    api.relabelSlideToSample(planned.id, right, "mislabelled at the microtome");
+    refiled = true;
+  } catch { /* desired: a plan line cannot join a cut already taken */ }
+  eq(refiled, false, "the refile onto the cut block is refused");
+  eq(api.get(`SELECT section_request_id AS g FROM slides WHERE id = ?`, [planned.id]).g, queued,
+     "and the slide is left in the plan it came from");
+
+  // The group it would have joined then moves on as it normally does. The one
+  // rule in updateSectionStage stamps every slide in the group, so had the
+  // refile landed, this is the move that would have minted its cut date.
+  api.startAssayWork(cutGroup);
+  eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [planned.id]).cut, null,
+     "the left block's plan line still has no cut date");
 
   const result = api.requestStainForSample(right, "stain", "PAS");
   eq(result.target, "block", "the uncut slide is not glass, so the block is flagged for a cut");
-  const after = api.get(`SELECT stack_id AS rack, stage_cut_at AS cut, purpose FROM slides WHERE id = ?`, [planned.id]);
-  eq(after.rack, null, "the uncut slide never joins a staining rack");
-  eq(after.purpose, "extra", "and is not re-purposed as a stain slide");
   eq(api.get(`SELECT COUNT(*) AS c FROM slides sl JOIN slide_stacks st ON st.id = sl.stack_id
                WHERE st.kind = 'stain' AND sl.purpose = 'stain'
                  AND sl.current_stage <> 'removed' AND sl.stage_cut_at IS NULL`).c, 0,
@@ -1935,16 +1973,82 @@ issue(182, "a stain request does not pull an uncut extra refiled onto the block"
   eq(api.listExtraSlides().some((sl) => sl.id === planned.id), false,
      "nor does it show in the extras inventory as glass on the bench");
 
-  // And the mutation that racks a slide refuses it on its own, so the list it is
-  // normally offered from is not the only thing holding the line.
+  // Both rack entrances read the slide's own stamp, so a row that is already in
+  // this shape — one an older build left behind — is refused too.
+  api.run(`UPDATE section_requests SET current_stage = 'stain_requested' WHERE id = ?`, [queued]);
+  eq(api.requestStainForSample(left, "stain", "PAS").target, "block",
+     "a stain request still refuses it when its own group reads past the queue");
   let racked = false;
   try {
     api.assignExtraSlideToAssay(planned.id, "stain", "PAS");
     racked = true;
   } catch { /* desired: no cut date, no glass */ }
-  eq(racked, false, "assigning the uncut extra to an agent is refused outright");
+  eq(racked, false, "and assigning it to an agent by hand is refused outright");
   eq(api.get(`SELECT stack_id AS rack FROM slides WHERE id = ?`, [planned.id]).rack, null,
-     "and it is left out of every rack");
+     "so it is left out of every rack");
+});
+
+// #182 — the other half: glass that WAS cut, by a build that never stamped it.
+//
+// Before 0.2.3 extras were inserted with no cut date at all, and before 0.8.0 a
+// group dragged from Needs Sectioning straight past it was never recorded as
+// cut either (#95). Those rows are real glass in a box. Now that the cut date
+// decides whether a slide may be stained, they have to be given the group's own
+// record of when it left the queue — and nothing may be invented for a group
+// that has no such record.
+issue(182, "glass cut before the stamp existed takes its group's own cut date", () => {
+  const api = makeApi(freshDb());
+  const p = api.seedProject();
+  const block = api.addSample(p, "EE", "legacy").id;
+  api.markEmbedded(block);
+
+  const legacy = (stage, stamps) => {
+    const cols = Object.keys(stamps);
+    const id = Number(api.run(
+      `INSERT INTO section_requests (sample_id, duplicates, stains, current_stage${cols.map((c) => `, ${c}`).join("")})
+       VALUES (?, 1, '', ?${cols.map(() => ", ?").join("")})`,
+      [block, stage, ...cols.map((c) => stamps[c])]).lastInsertRowid);
+    const slide = Number(api.run(
+      `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, assignment_saved, current_stage)
+       VALUES (?, 1, ?, 'extra', 1, 'extra')`,
+      [id, `EE-9${id}-A`]).lastInsertRowid);
+    return { group: id, slide };
+  };
+
+  // A pre-0.2.3 extra: its group was sectioned, the slide was never stamped.
+  const old = legacy("stain_requested", {
+    stage_needs_sectioning_at: "2023-01-01 09:00",
+    stage_sectioned_at: "2023-01-02 10:00",
+    stage_stain_requested_at: "2023-01-03 11:00",
+  });
+  // A pre-0.8.0 group dragged straight to Ready for Imaging: no sectioned stamp.
+  const straight = legacy("ready_for_imaging", {
+    stage_needs_sectioning_at: "2023-02-01 09:00",
+    stage_ready_for_imaging_at: "2023-02-02 10:00",
+  });
+  // Still queued: it has not been cut, and must stay that way.
+  const plan = legacy("needs_sectioning", { stage_needs_sectioning_at: "2023-03-01 09:00" });
+  // Past the queue but recording no moment it left — nothing to honestly say.
+  const undated = legacy("sectioned", {});
+
+  const cutOf = (slide) => api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [slide]).cut;
+  api.backfillSlideCutStamps();
+  eq(cutOf(old.slide), "2023-01-02 10:00", "the sectioned group's own stamp is the honest cut date");
+  eq(cutOf(straight.slide), "2023-02-02 10:00",
+     "a group with no sectioned stamp takes the earliest moment it records past the queue");
+  eq(cutOf(plan.slide), null, "a slide still waiting to be cut is left alone");
+  eq(cutOf(undated.slide), null, "and no date is invented for a group that records none");
+
+  eq(api.listExtraSlides().filter((sl) => sl.id === old.slide || sl.id === straight.slide).length, 2,
+     "the back-filled glass is back in the extras inventory");
+  eq(api.requestStainForSample(block, "stain", "PAS").target, "extra",
+     "and a stain request uses it rather than cutting the block again");
+
+  // Idempotent: a second pass writes nothing, so a re-run (or an old backup
+  // reverted and back-filled again) cannot move a date that is already set.
+  api.run(`UPDATE section_requests SET stage_sectioned_at = '2024-01-01 00:00' WHERE id = ?`, [old.group]);
+  api.backfillSlideCutStamps();
+  eq(cutOf(old.slide), "2023-01-02 10:00", "a stamp already set is never rewritten");
 });
 
 // #34/#38 — pre-assigned slides skip a separate assignment step: a section cut
