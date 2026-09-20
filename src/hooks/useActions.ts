@@ -21,6 +21,7 @@ import {
   assertMayRestore,
   journalHead,
   pruneJournal,
+  ReplayRefusedError,
   revertJournalRange,
   getSample,
   getSectionRequest,
@@ -64,7 +65,7 @@ import type { NewSampleInput, ProcessingType, Sample, SlidePurpose } from "../li
 import { sampleNoteLabel } from "../lib/sampleNotes";
 import type { SampleNoteField } from "../lib/sampleNotes";
 import { SECTION_STAGE_LABELS, SECTION_STAGE_ORDER, STAGE_LABELS, STAGE_ORDER } from "../lib/stages";
-import { oldestMark, useUndoStore } from "../lib/undo";
+import { oldestMark, useUndoStore, type UndoEntry } from "../lib/undo";
 import { inLane } from "../lib/writeLane";
 import { composeDescription, displayCode, nowTimestamp } from "../lib/utils";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
@@ -887,7 +888,7 @@ export function useActions() {
     const { undoStack } = useUndoStore.getState();
     if (undoStack.length === 0) return null;
     const entry = undoStack[undoStack.length - 1];
-    const replayed = await revertJournalRange(entry.mark, entry.end);
+    const replayed = await replayOrSkip(entry, "undo");
     useUndoStore.getState().commitUndo({ label: entry.label, mark: replayed.from, end: replayed.to });
     invalidate();
     await recordAuditEvent("undo", "undo_command", `Undid: ${entry.label}`, entry.label);
@@ -900,7 +901,7 @@ export function useActions() {
     const { redoStack } = useUndoStore.getState();
     if (redoStack.length === 0) return null;
     const entry = redoStack[redoStack.length - 1];
-    const replayed = await revertJournalRange(entry.mark, entry.end);
+    const replayed = await replayOrSkip(entry, "redo");
     useUndoStore.getState().commitRedo({ label: entry.label, mark: replayed.from, end: replayed.to });
     invalidate();
     await recordAuditEvent("redo", "undo_command", `Redid: ${entry.label}`, entry.label);
@@ -957,6 +958,31 @@ export function useActions() {
     undo,
     redo,
   } as const);
+}
+
+/**
+ * Replay one entry's range, or take that step off the stack for good.
+ *
+ * A replay a later write has overtaken is refused whole, with nothing changed
+ * (ReplayRefusedError). Asking again can only be refused again, and the entry
+ * would sit at the top of the stack hiding everything behind it, so it is
+ * dropped and the user is told in one sentence. The next Undo then reaches the
+ * step before it.
+ */
+async function replayOrSkip(
+  entry: UndoEntry,
+  stack: "undo" | "redo",
+): Promise<{ from: number; to: number }> {
+  try {
+    return await revertJournalRange(entry.mark, entry.end);
+  } catch (err) {
+    if (!(err instanceof ReplayRefusedError)) throw err;
+    useUndoStore.getState().discardBlocked(stack);
+    throw new Error(
+      `Could not ${stack} "${entry.label}": the records it would put back have changed since, ` +
+        `so this step has been skipped.`,
+    );
+  }
 }
 
 /**

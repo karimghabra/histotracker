@@ -27,7 +27,7 @@ import {
 } from "./stages";
 import type { SectionRequest, StainRequest, StainRequestStatus } from "./types";
 import { SAMPLE_NOTE_FIELDS } from "./sampleNotes";
-import { journalInstallStatements } from "./undoJournal";
+import { CHANGED_SINCE, journalInstallStatements } from "./undoJournal";
 import { useUndoStore } from "./undo";
 import { inLane } from "./writeLane";
 import type { SampleNoteField } from "./sampleNotes";
@@ -604,9 +604,13 @@ export async function journalHead(): Promise<number> {
 }
 
 /**
- * Replay one undo entry's range of the journal, `(from, to]` newest first (`to`
- * absent: up to the head), which puts every journaled table back as it stood at
- * `from`. Returns the range the replay itself wrote: the entry that reverses it.
+ * Replay one undo entry's range of the journal, `(from, to]` newest first, which
+ * puts every journaled table back as it stood at `from`. Returns the range the
+ * replay itself wrote: the entry that reverses it.
+ *
+ * Both ends are given. A range running to the live head would take in whatever
+ * landed after the action from outside it, which is the whole defect the guards
+ * below exist to catch, so there is no way to ask for one.
  *
  * One transaction, in Rust (`undo_journal_revert`, src-tauri/src/undo_journal.rs):
  * the replay is many statements, and statements sent through the plugin's pool
@@ -614,11 +618,30 @@ export async function journalHead(): Promise<number> {
  * be left half done. Session tables are not journaled, so the signed-in user and
  * the settings are never rewound. Gated like every restore (#146).
  */
-export async function revertJournalRange(from: number, to?: number): Promise<{ from: number; to: number }> {
+export async function revertJournalRange(from: number, to: number): Promise<{ from: number; to: number }> {
   assertMayRestore();
   const path = await getDbFilePath();
-  const replayed = await invoke<{ from: number; to: number }>("undo_journal_revert", { path, from, to: to ?? null });
-  return { from: Number(replayed.from), to: Number(replayed.to) };
+  try {
+    const replayed = await invoke<{ from: number; to: number }>("undo_journal_revert", { path, from, to });
+    return { from: Number(replayed.from), to: Number(replayed.to) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === CHANGED_SINCE) throw new ReplayRefusedError();
+    throw err;
+  }
+}
+
+/**
+ * A replay a later write has overtaken: a row it would put back is no longer as
+ * the action left it, so the command refused the whole thing and nothing changed
+ * (`CHANGED_SINCE`). The caller drops the entry it blocked rather than offering a
+ * step that can never run again.
+ */
+export class ReplayRefusedError extends Error {
+  constructor() {
+    super(CHANGED_SINCE);
+    this.name = "ReplayRefusedError";
+  }
 }
 
 /** Forget journal rows no undo or redo entry can reach: those at or before the oldest mark kept. */

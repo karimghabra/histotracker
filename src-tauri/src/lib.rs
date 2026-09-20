@@ -22,14 +22,14 @@ fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
-/// Undo or redo: replay one range of the undo journal, `(from, to]` (`to`
-/// absent: up to the head), in one transaction (`undo_journal::revert`),
-/// returning the range the replay wrote, which is the entry that reverses it.
+/// Undo or redo: replay one range of the undo journal, `(from, to]`, in one
+/// transaction (`undo_journal::revert`), returning the range the replay wrote,
+/// which is the entry that reverses it.
 #[tauri::command]
 async fn undo_journal_revert(
     path: String,
     from: i64,
-    to: Option<i64>,
+    to: i64,
 ) -> Result<undo_journal::Replayed, String> {
     undo_journal::revert(std::path::Path::new(&path), from, to).await
 }

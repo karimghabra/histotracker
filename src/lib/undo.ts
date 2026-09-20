@@ -27,6 +27,16 @@ interface UndoState {
   commitUndo: (redoEntry: UndoEntry) => UndoEntry | undefined;
   /** Pop the newest redo entry and push the given entry (the mark that undoes it) onto undo. */
   commitRedo: (undoEntry: UndoEntry) => UndoEntry | undefined;
+  /**
+   * Drop the entry whose replay was refused, and the redo branch with it.
+   *
+   * A refused replay is one a later write has overtaken, and no amount of asking
+   * again will change that, so an entry left in place would be offered forever
+   * and nothing behind it could ever be reached. The redo branch goes because
+   * that future no longer follows from the present, the same reason a fresh
+   * action clears it. From `"redo"`, clearing the branch is what drops the entry.
+   */
+  discardBlocked: (stack: "undo" | "redo") => void;
   clear: () => void;
 }
 
@@ -67,5 +77,10 @@ export const useUndoStore = create<UndoState>((set, get) => ({
     });
     return entry;
   },
+  discardBlocked: (stack) =>
+    set((s) => ({
+      undoStack: stack === "undo" ? s.undoStack.slice(0, -1) : s.undoStack,
+      redoStack: [],
+    })),
   clear: () => set({ undoStack: [], redoStack: [] }),
 }));

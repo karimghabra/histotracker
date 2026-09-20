@@ -54,6 +54,28 @@ describe("undo store: undo-journal mark bookkeeping", () => {
     ]);
   });
 
+  it("drops a blocked undo entry, and the redo branch that no longer follows", () => {
+    const s = useUndoStore.getState();
+    s.record(undoEntry("A", 1));
+    s.record(undoEntry("B", 3));
+    useUndoStore.getState().commitUndo(undoEntry("B", 5)); // B undone; redo holds its replay
+    useUndoStore.getState().discardBlocked("undo"); // A's replay was refused
+
+    expect(useUndoStore.getState().undoStack).toEqual([]);
+    expect(useUndoStore.getState().redoStack).toEqual([]);
+  });
+
+  it("drops a blocked redo entry and leaves the undo history alone", () => {
+    const s = useUndoStore.getState();
+    s.record(undoEntry("A", 1));
+    s.record(undoEntry("B", 3));
+    useUndoStore.getState().commitUndo(undoEntry("B", 5));
+    useUndoStore.getState().discardBlocked("redo"); // the redo of B was refused
+
+    expect(useUndoStore.getState().redoStack).toEqual([]);
+    expect(useUndoStore.getState().undoStack.map((e) => e.label), "A can still be undone").toEqual(["A"]);
+  });
+
   it("returns undefined when there is nothing to undo/redo", () => {
     expect(useUndoStore.getState().commitUndo(undoEntry("x", 0))).toBeUndefined();
     expect(useUndoStore.getState().commitRedo(undoEntry("x", 0))).toBeUndefined();

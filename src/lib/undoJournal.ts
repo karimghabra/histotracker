@@ -11,12 +11,12 @@ import type Database from "@tauri-apps/plugin-sql";
  * touched, so the record of how to go back is written atomically with the change
  * and costs the size of the change, not the size of the database.
  *
- * An undo entry is a MARK, the journal's head sequence number when its action
- * began. Reverting to a mark replays every journal row after it, newest first,
- * which returns every journaled table to exactly its state at the mark. The replay
- * is itself journaled, so the rows it writes are the redo. The replay runs in one
- * transaction in Rust (src-tauri/src/undo_journal.rs), because statements sent
- * through tauri-plugin-sql's pool cannot share one.
+ * An undo entry is a RANGE of the journal, the head either side of its action.
+ * Replaying it newest first returns every journaled table to exactly its state at
+ * the start of the range. The replay is itself journaled, so the rows it writes
+ * are the redo. The replay runs in one transaction in Rust
+ * (src-tauri/src/undo_journal.rs), because statements sent through
+ * tauri-plugin-sql's pool cannot share one.
  *
  * Each inverse CARRIES ITS OWN PRECONDITION: it matches the row only while the row
  * still holds exactly what the change left there. A replay is one entry's range of
@@ -32,6 +32,16 @@ import type Database from "@tauri-apps/plugin-sql";
  * a migration records its version in the file, and the build in use refuses a
  * database recording a version it does not know, so rolling back would break.
  */
+
+/**
+ * What a replay is refused with when a row it would put back is no longer as the
+ * action left it, so restoring the whole row would erase whatever changed it.
+ * The wording is the command's contract: `CHANGED_SINCE` in
+ * src-tauri/src/undo_journal.rs, which is what the running app actually raises,
+ * and src/test/undoJournalCommands.ts models. Change all three together.
+ */
+export const CHANGED_SINCE =
+  "Cannot undo or redo that step: the records it would put back have changed since. Nothing was changed.";
 
 /** Session and bookkeeping tables. Undo has never rewound these (restoreDbPreservingSession). */
 const NOT_JOURNALED = new Set([

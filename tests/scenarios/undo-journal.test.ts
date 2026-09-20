@@ -65,7 +65,7 @@ it("replaying the journal back to a mark, and forward again, reproduces every ta
     const after = dump(l);
     expect(after, `${name} changed nothing, so it proves nothing`).not.toEqual(before);
 
-    const redo = await db.revertJournalRange(mark);
+    const redo = await db.revertJournalRange(mark, await db.journalHead());
     expect(dump(l), `undo of: ${name}`).toEqual(before);
     await db.revertJournalRange(redo.from, redo.to);
     expect(dump(l), `redo of: ${name}`).toEqual(after);
@@ -75,7 +75,7 @@ it("replaying the journal back to a mark, and forward again, reproduces every ta
 
   // And all of it at once, back to the empty lab, then forward to the end.
   const end = dump(l);
-  const everything = await db.revertJournalRange(0);
+  const everything = await db.revertJournalRange(0, await db.journalHead());
   expect(l.rows(`SELECT COUNT(*) AS n FROM samples`)[0].n).toBe(0);
   await db.revertJournalRange(everything.from, everything.to);
   expect(dump(l)).toEqual(end);

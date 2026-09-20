@@ -64,7 +64,7 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
       };
       try {
         return cmd === "undo_journal_revert"
-          ? out(revertJournal(handle, Number(args.from ?? 0), (args.to as number | null | undefined) ?? null))
+          ? out(revertJournal(handle, Number(args.from ?? 0), Number(args.to ?? 0)))
           : out(executeBatch(handle, (args.statements as string[]) ?? []));
       } finally {
         db.close();

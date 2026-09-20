@@ -29,7 +29,11 @@ export function ProtocolChecklist({
   const queryKey = ["protocol-checklist", scopeType, scopeId, stageKey];
   const { data: items = [] } = useQuery({
     queryKey,
-    queryFn: () => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels }),
+    // Reading it CREATES it the first time a scope is drawn: one checklist_runs
+    // row and one checklist_items row per label, both journaled. So it goes in
+    // the write lane like every other journaled write, or those inserts could
+    // land inside an unrelated action's undo entry and be taken back with it.
+    queryFn: () => inLane(() => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels })),
   });
   // The operator IS the signed-in user (#127).
   //

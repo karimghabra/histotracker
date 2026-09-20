@@ -80,14 +80,14 @@ pub struct Replayed {
     pub to: i64,
 }
 
-/// Replay the journal rows in `(from, to]`, newest first (`to` absent: up to the
-/// head), so every journaled table is back as it stood at `from`, and return the
-/// range of rows the replay itself wrote.
+/// Replay the journal rows in `(from, to]`, newest first, so every journaled
+/// table is back as it stood at `from`, and return the range of rows the replay
+/// itself wrote.
 ///
-/// Only that range, never everything after `from`: an undo replaying everything
-/// after its mark would also replay every earlier undo's own rows. Each pair
-/// cancels, so the result would be right, but every replay would write back all
-/// the ones before it and the journal would double with every undo in a row.
+/// Both ends are given, never "everything after `from`": a range that ran to the
+/// live head would replay every earlier undo's own rows, doubling the journal
+/// with each undo in a row, and would swallow whatever landed after the action
+/// from outside it, where the per-row guards below cannot fire at all.
 ///
 /// The replay fires the app's own audit triggers (0010 onward) as it goes. Those
 /// rows narrate the replay, not an action, and undo has never written them, so
@@ -102,7 +102,7 @@ pub struct Replayed {
 /// sync timer draining a viewer's request between an Undo and its Redo, say --
 /// and restoring the whole row would silently erase that. Refused with
 /// [`CHANGED_SINCE`], rolled back, nothing changed.
-pub async fn revert(path: &Path, from: i64, to: Option<i64>) -> Result<Replayed, String> {
+pub async fn revert(path: &Path, from: i64, to: i64) -> Result<Replayed, String> {
     let mut conn = open(path).await?;
     begin(&mut conn).await?;
     let work = replay(&mut conn, from, to).await;
@@ -115,7 +115,7 @@ async fn head(conn: &mut SqliteConnection) -> Result<i64, sqlx::Error> {
         .await
 }
 
-async fn replay(conn: &mut SqliteConnection, from: i64, to: Option<i64>) -> Result<Replayed, String> {
+async fn replay(conn: &mut SqliteConnection, from: i64, to: i64) -> Result<Replayed, String> {
     let start = head(conn).await.map_err(|e| e.to_string())?;
     let audit: i64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'), 0)",
@@ -127,7 +127,7 @@ async fn replay(conn: &mut SqliteConnection, from: i64, to: Option<i64>) -> Resu
         "SELECT stmt FROM undo_journal WHERE seq > ? AND seq <= ? ORDER BY seq DESC",
     )
     .bind(from)
-    .bind(to.unwrap_or(start))
+    .bind(to)
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| e.to_string())?;
@@ -262,11 +262,12 @@ mod tests {
             run(&mut conn, "UPDATE samples SET note = 'c' WHERE id = 1; DELETE FROM samples WHERE id = 2; INSERT INTO samples(id, note) VALUES (3, 'd')").await;
             let (after_samples, after_audit) = (rows(&mut conn, SAMPLES).await, rows(&mut conn, AUDIT).await);
 
-            let redo = revert(&scratch.db(), mark, None).await.expect("the undo replays");
+            let end = head(&mut conn).await;
+            let redo = revert(&scratch.db(), mark, end).await.expect("the undo replays");
             assert_eq!(rows(&mut conn, SAMPLES).await, samples);
             assert_eq!(rows(&mut conn, AUDIT).await, audit, "the replay's own audit rows are swept");
 
-            revert(&scratch.db(), redo.from, Some(redo.to)).await.expect("the redo replays");
+            revert(&scratch.db(), redo.from, redo.to).await.expect("the redo replays");
             assert_eq!(rows(&mut conn, SAMPLES).await, after_samples);
             assert_eq!(rows(&mut conn, AUDIT).await, after_audit, "the undone action's audit rows come back");
         });
@@ -279,16 +280,13 @@ mod tests {
             let mut conn = lab(&scratch).await;
             run(&mut conn, "INSERT INTO samples(id, note) VALUES (1, 'n0')").await;
             let start = rows(&mut conn, SAMPLES).await;
-            // Twelve actions, each an undo entry: its mark, and where it ends once
-            // the next one starts (the undo stack's bookkeeping, src/lib/undo.ts).
-            let mut entries: Vec<(i64, Option<i64>)> = Vec::new();
+            // Twelve actions, each an undo entry: the journal's head either side of
+            // it, closed as it is recorded (the undo stack's bookkeeping, src/lib/undo.ts).
+            let mut entries: Vec<(i64, i64)> = Vec::new();
             for n in 1..=12 {
                 let mark = head(&mut conn).await;
-                if let Some(last) = entries.last_mut() {
-                    last.1.get_or_insert(mark);
-                }
-                entries.push((mark, None));
                 run(&mut conn, &format!("UPDATE samples SET note = 'n{n}' WHERE id = 1")).await;
+                entries.push((mark, head(&mut conn).await));
             }
             let end = rows(&mut conn, SAMPLES).await;
             let written = head(&mut conn).await;
@@ -307,7 +305,7 @@ mod tests {
             }
             assert_eq!(rows(&mut conn, SAMPLES).await, start, "every action is undone");
             while let Some(r) = redos.pop() {
-                revert(&scratch.db(), r.from, Some(r.to)).await.expect("a redo replays");
+                revert(&scratch.db(), r.from, r.to).await.expect("a redo replays");
                 replays += 1;
                 let grown = head(&mut conn).await - written;
                 assert!(grown <= replays * 3 * 4, "{replays} replays grew the journal by {grown} rows");
@@ -334,7 +332,8 @@ mod tests {
                 rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await,
             );
 
-            let err = revert(&scratch.db(), mark, None).await.expect_err("the replay is refused");
+            let end = head(&mut conn).await;
+            let err = revert(&scratch.db(), mark, end).await.expect_err("the replay is refused");
             assert!(err.contains("no_such_table"), "{err}");
             assert_eq!(rows(&mut conn, SAMPLES).await, samples, "no row was reverted");
             assert_eq!(rows(&mut conn, AUDIT).await, audit, "no audit row was swept");
@@ -354,7 +353,8 @@ mod tests {
             let mark = head(&mut conn).await;
             run(&mut conn, "UPDATE samples SET note = 'b' WHERE id = 1").await;
 
-            let redo = revert(&scratch.db(), mark, None).await.expect("the undo replays");
+            let end = head(&mut conn).await;
+            let redo = revert(&scratch.db(), mark, end).await.expect("the undo replays");
             assert_eq!(rows(&mut conn, SAMPLES).await, vec!["1:a"]);
 
             // The drain, outside the range the redo would replay.
@@ -365,7 +365,7 @@ mod tests {
                 rows(&mut conn, "SELECT stmt FROM undo_journal ORDER BY seq").await,
             );
 
-            let err = revert(&scratch.db(), redo.from, Some(redo.to))
+            let err = revert(&scratch.db(), redo.from, redo.to)
                 .await
                 .expect_err("the redo is refused");
             assert_eq!(err, CHANGED_SINCE);
@@ -405,7 +405,7 @@ mod tests {
     fn a_missing_database_is_refused_not_created() {
         block_on(async {
             let scratch = Scratch::new();
-            let err = revert(&scratch.db(), 0, None).await.expect_err("nothing to open");
+            let err = revert(&scratch.db(), 0, 0).await.expect_err("nothing to open");
             assert!(err.starts_with("Could not open the database"), "{err}");
             assert!(!scratch.db().exists(), "no empty database was created");
         });

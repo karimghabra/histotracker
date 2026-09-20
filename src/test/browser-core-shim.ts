@@ -163,7 +163,7 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
     // ---- Undo journal (undo_journal.rs), modelled in undoJournalCommands.ts ----
     case "undo_journal_revert":
       return withLiveDatabase((db) =>
-        revertJournal(db, Number(_args?.from ?? 0), (_args?.to as number | null | undefined) ?? null),
+        revertJournal(db, Number(_args?.from ?? 0), Number(_args?.to ?? 0)),
       ) as unknown as T;
     case "undo_journal_install":
       return withLiveDatabase((db) => executeBatch(db, (_args?.statements as string[]) ?? [])) as unknown as T;

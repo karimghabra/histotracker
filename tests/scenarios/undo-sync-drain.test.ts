@@ -61,8 +61,16 @@ async function appActions(): Promise<Any> {
 }
 
 /** The message a replay is refused with, or null if it was applied. */
-async function replay(l: Lab, from: number, to?: number): Promise<string | null> {
+async function replay(l: Lab, from: number, to: number): Promise<string | null> {
   return await l.db.revertJournalRange(from, to).then(
+    () => null,
+    (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  );
+}
+
+/** What the technician is shown when a step will not replay, or null if it did. */
+async function pressed(step: Promise<string | null>): Promise<string | null> {
+  return await step.then(
     () => null,
     (err: unknown) => (err instanceof Error ? err.message : String(err)),
   );
@@ -167,4 +175,46 @@ it("an undo leaves an assay added in Settings meanwhile alone", async () => {
 
   expect(block(l, id).sample_description, "the edit is taken back").toBe("DESC-0");
   expect(assays(l), "the assay Settings added survives the undo").toEqual(catalogue);
+});
+
+it("an undo the drain has overtaken is skipped, and the next undo reaches the step before it", async () => {
+  lab = await openLab();
+  const l = lab;
+  const first = await l.sample("FIRST-0", "embedded");
+  const overtaken = await blockWithARequestWaiting(l);
+  const actions = await appActions();
+
+  await actions.editSampleDescription(first, "FIRST-B");
+  await actions.editSampleDescription(overtaken, "DESC-B");
+  // The timer flags the very row the newest edit would put back.
+  expect((await l.app.sync.drainRequests()).ingested).toBe(1);
+  const drained = block(l, overtaken);
+  expect(drained.preselected_stains).toContain("H&E");
+
+  const refusal = await pressed(actions.undo());
+  expect(block(l, overtaken), "nothing was changed").toEqual(drained);
+
+  // Not wedged: the next Undo reaches the step before the one it could not take back.
+  expect(await actions.undo()).toBe("Edit EE-1 description");
+  expect(block(l, first).sample_description).toBe("FIRST-0");
+  expect(block(l, overtaken), "still untouched").toEqual(drained);
+  expect(String(refusal), "said in one plain sentence").toMatch(/^Could not undo "Edit EE-2 description": .*has been skipped\.$/);
+});
+
+it("a redo the drain has overtaken is skipped, and is not offered again", async () => {
+  lab = await openLab();
+  const l = lab;
+  const id = await blockWithARequestWaiting(l);
+  const actions = await appActions();
+
+  await actions.editSampleDescription(id, "DESC-B");
+  expect(await actions.undo()).toBe("Edit EE-1 description");
+  expect((await l.app.sync.drainRequests()).ingested).toBe(1);
+  const drained = block(l, id);
+
+  const refusal = await pressed(actions.redo());
+  expect(block(l, id), "nothing was changed").toEqual(drained);
+
+  expect(await actions.redo(), "the step that cannot run is no longer offered").toBeNull();
+  expect(String(refusal)).toMatch(/^Could not redo "Edit EE-1 description": .*has been skipped\.$/);
 });

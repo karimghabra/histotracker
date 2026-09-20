@@ -1286,8 +1286,8 @@ function makeApi(db) {
   // Port of the undo journal: the triggers getDb() installs (src/lib/undoJournal.ts,
   // imported, not retyped) and the two Rust commands (src-tauri/src/undo_journal.rs,
   // through their harness model src/test/undoJournalCommands.ts). An undo entry is
-  // journalHead() before the action; undo is revertJournal(mark) (the range up to
-  // the head), which returns the range { from, to } it wrote: the redo.
+  // journalHead() either side of the action; undo is revertJournal of that range,
+  // which returns the range { from, to } it wrote: the redo.
   const journal = {
     exec: (sql) => db.exec(sql),
     run: (sql) => Number(run(sql).changes),
@@ -1302,7 +1302,7 @@ function makeApi(db) {
     // would look like it lay after a mark taken before them.
     return get(`SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0) AS head`).head;
   }
-  function revertJournal(from, to = null) {
+  function revertJournal(from, to) {
     return revertJournalCommand(journal, from, to);
   }
   /** Every table undo restores, row for row: all but the session, bookkeeping and journal. */
@@ -2323,7 +2323,7 @@ issue(31, "undo/redo of an imaging move leave no ghost or duplicate tile", () =>
   assert(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE id = ?`, [rack]).c === 0, "the move deletes the rack");
   assert(api.get(`SELECT COUNT(*) AS c FROM slide_stacks WHERE kind = 'sample'`).c >= 2, "and mints per-sample stacks");
 
-  const redo = api.revertJournal(mark);
+  const redo = api.revertJournal(mark, api.journalHead());
   eq(api.dumpUndoable(), beforeMove, "undo puts the rack back and removes every stack the move minted");
   api.revertJournal(redo.from, redo.to);
   eq(api.dumpUndoable(), afterMove, "redo re-applies the move exactly, with no duplicate tile");
@@ -3331,7 +3331,7 @@ invariant("an undo-journal replay round-trips exactly across every table", () =>
   api.addSample(p, "EE", "three");
   assert(api.dumpUndoable() !== original, "the churn actually changed the database");
 
-  api.revertJournal(mark);
+  api.revertJournal(mark, api.journalHead());
   eq(api.dumpUndoable(), original, "the replay reproduces the exact pre-churn contents of every table");
 });
 
@@ -3351,7 +3351,7 @@ issue(28, "undo and redo each restore every table exactly, in one transaction", 
   api.setSampleNote(a.id, "cut_notes", "8 um");
   const after = api.dumpUndoable();
 
-  const redo = api.revertJournal(mark);
+  const redo = api.revertJournal(mark, api.journalHead());
   eq(api.dumpUndoable(), before, "undo restores every table");
   api.revertJournal(redo.from, redo.to);
   eq(api.dumpUndoable(), after, "redo restores every table");
@@ -3363,7 +3363,7 @@ issue(28, "undo and redo each restore every table exactly, in one transaction", 
   api.run(`UPDATE undo_journal SET stmt = 'UPDATE no_such_table SET x = 1' WHERE seq = ?`, [undoMark + 1]);
   let refused = false;
   try {
-    api.revertJournal(undoMark);
+    api.revertJournal(undoMark, api.journalHead());
   } catch {
     refused = true;
   }
@@ -3434,7 +3434,7 @@ issue(29, "undo removes any stack a move minted, with no bespoke reconciliation"
   const mark = api.journalHead();
   api.startAssayWork(section);
   assert(api.get(`SELECT stack_id FROM slides WHERE id = ?`, [slide.id]).stack_id != null, "start assay mints a stack");
-  api.revertJournal(mark);
+  api.revertJournal(mark, api.journalHead());
   eq(api.dumpUndoable(), before, "undo removes the minted stack and detaches the slide");
   const actions = readFileSync(join(HERE, "..", "src", "hooks", "useActions.ts"), "utf8");
   assert(!actions.includes("snapshotStacksForSlides") && !actions.includes("pruneStacks("),
