@@ -51,9 +51,10 @@
   `setBlockExhausted` (`db.ts`) cancels every cut still in `needs_sectioning` for that block through `removeSectionRequest`, the same path the board's Delete takes: the group is marked `removed`, not deleted, and each planned slide is soft-removed with a reason and a `slide_removed` timeline event. A cut already sectioned or further along is left alone, and restoring the block does not revive a cancelled cut.
   `requestStainForSample` no longer treats a waiting cut on an exhausted block as somewhere to hang another planned slide, so a database that already holds the stranded state (flag set, group still queued) refuses too.
   `listOpenSectionRequests` drops a `needs_sectioning` group whose block is exhausted, so a card stranded by an older build leaves the board and cannot be dragged to Sectioned - a read path only, with no migration and no record rewritten.
+  Because the board does not draw such a group, `revertSectionToStage` refuses to retract a cut back to `needs_sectioning` once its block is exhausted, naming the block; otherwise a drag back would take the card off the screen with nothing said.
   The Mark Exhausted confirmation, single and bulk, says the cut is cancelled and its planned slides removed.
   No schema change, so the release in use opens this tree's database unchanged.
-  *Test:* `tests/scenarios/open-issues.test.ts` on the real `db.ts` (the #144 `it.fails` markers are gone), and harness gate `issue #144` in `scripts/workflow-test.mjs`.
+  *Test:* `tests/scenarios/open-issues.test.ts` on the real `db.ts` (the #144 `it.fails` markers are gone), harness gate `issue #144` in `scripts/workflow-test.mjs`, and `tests/e2e/issue-144-exhausted-cut.spec.ts` for what the tech sees in the app - the confirm wording, the card leaving the board, the refusal, and Undo.
 
 ## #147 — a signed-out workstation and the request inbox
 

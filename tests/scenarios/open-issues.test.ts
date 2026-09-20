@@ -4,9 +4,9 @@
 // fix: where the issue leaves the remedy open (refuse the action, or allow it and
 // keep the record straight), every remedy that removes the harm passes.
 //
-// Each open issue's test is `it.fails`: the bug is open, so the test is expected to fail and CI stays green.
-// The day the fix lands the test passes, `it.fails` reports that as a failure, and whoever fixed
-// the issue must change `it.fails` to `it` here, which turns the scenario into a hard check.
+// A scenario added here while its issue is still open is marked `it.fails`, so the failure is expected
+// and CI stays green. The day the fix lands the test passes, `it.fails` reports that as a failure, and
+// whoever fixed the issue changes `it.fails` to `it`, which turns the scenario into a hard check.
 import { afterEach, describe, expect, it } from "vitest";
 import { workedButNeverCut } from "./invariants";
 import { openLab, type Lab } from "./lab";
