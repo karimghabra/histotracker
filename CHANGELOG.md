@@ -2,8 +2,22 @@
 
 ## 0.18.2 - unreleased
 
-No schema change, and no change to what is stored: the four note columns are read and written exactly as before, only the words above them changed.
-A 0.18.1 instance opens a 0.18.2 database unchanged, and the reverse holds too.
+No schema change: no new column and no new migration, so a 0.18.1 instance opens a 0.18.2 database unchanged, and the reverse holds too.
+One thing is written that was not written before — the cut-date repair below fills in, once per database, cut dates that older builds never recorded, each taken from the slide's own cut group. No date already recorded is rewritten, and an older build reads a filled-in date as it reads any other.
+The note change stores nothing new at all: the four note columns are read and written exactly as before, only the words above them changed.
+
+- **A slide that was never cut can no longer be stained (#182).**
+  A slide with no record of being cut is a line in a cutting plan, not a piece of glass in a box, and it could still end up in a staining rack.
+  Whether a slide existed was judged from the stage of the cut group it sat in, which is only a stand-in for the slide's own cut date: a slide keeps its own dates when it is refiled under another block, so an uncut slide filed into a block whose cut had already been taken read as glass, and the next rack tick recorded it as stained on a day it had never been cut.
+  All three places now read the slide's own cut date instead. The Extra slide inventory does not list a slide with no cut date, a stain request passes over it and flags the block for a cut — exactly as it does when a block has no extras at all — and sending one to an agent by hand is refused by name.
+  Refiling an uncut slide under a block whose cut has already been taken is refused too, pointing at the cutting plan, which is where a change to an uncut plan belongs; refiling it under a block still waiting for the microtome is one plan moving to another, and is unaffected.
+  Nothing that has been cut is affected.
+
+- **Cut dates older builds never recorded are filled in.**
+  Builds before 0.2.3 wrote no cut date on an extra slide at all, and before 0.8.0 a cut group dragged from Needs Sectioning straight to Ready for Imaging was never recorded as cut either.
+  That was harmless while the date was only displayed; now that it decides whether a slide may be stained, real glass sitting in a box would have dropped out of the Extra slide inventory and its block been flagged for a fresh cut of a section that already exists.
+  The first time this version opens a database it fills those dates in, taking each from the slide's own cut group's earliest record of leaving Needs Sectioning.
+  A group whose record does not say when it left the queue is left alone rather than given a date it never had: its slides stay out of the inventory and out of a stain request, and the block is flagged for a cut instead.
 
 - **A note is called the same thing wherever you read it.**
   The same four notes were named three ways: intake called them Embedding Notes, Sectioning / Cut Notes, Slide Notes and General Notes, the Logs were aligned to intake in 0.18.1, and the sample drawer still had its own set.

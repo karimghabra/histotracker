@@ -76,7 +76,7 @@
   So the backfill runs once, on rows no live build can still produce.
   Consequence for the bench: an uncut plan line no longer appears in the Extra Slides inventory, no longer fulfils a stain request, and cannot be sent to an agent by hand; the request falls through to the block, which is flagged for a cut, exactly as it does when there are no extras at all.
   No schema change - the backfill is data, and additive - so the release in use opens this tree's database unchanged, and an image it back-fills still opens on 0.17.0.
-  *Test:* `tests/scenarios/uncut-extra.test.ts` (the refile refusal, the group's next move minting nothing, and both rack entrances) and `tests/scenarios/legacy-cut-stamps.test.ts` (the pre-0.2.3 extra and the pre-0.8.0 straight-to-imaging group, back-filled at open on a relaunched lab), both on the real `db.ts`; the two `issue #182` gates in `scripts/workflow-test.mjs`; and the stress2 fuzzer's own `racked-slide-was-cut` invariant on seed 20260813, which is red before the fix and green after.
+  *Test:* `tests/scenarios/uncut-extra.test.ts` (the refile refusal, the group's next move minting nothing, and both rack entrances) and `tests/scenarios/legacy-cut-stamps.test.ts` (the pre-0.2.3 extra and the pre-0.8.0 straight-to-imaging group, back-filled at open on a relaunched lab), both on the real `db.ts`; the three `issue #182` gates in `scripts/workflow-test.mjs`; and the stress2 fuzzer's own `racked-slide-was-cut` invariant on seed 20260813, which is red before the fix and green after.
 
 ## #144 — a stain request joined the cut waiting on a spent block
 
@@ -301,7 +301,9 @@ Two experiments, both run:
 
 1. Rewriting the filter to ask `stage_cut_at IS NOT NULL` — "has this glass been
    cut?" — makes the suspected case pass and **breaks issue #12**, which exists
-   precisely to keep provisional extras out of the inventory.
+   precisely to keep provisional extras out of the inventory. (Still true of
+   *replacing* the stage filter. #182 above adds that predicate **alongside** it,
+   which is a different change: both must hold.)
 2. Removing the three stages one at a time says which carry weight. Without
    `needs_sectioning`, three checks fail. Without `assignment_required`, #12
    fails. Without **`sectioned`, nothing fails at all** — it is unreachable from
@@ -1192,7 +1194,9 @@ observed failing with the fix removed (`node scripts/revert-verify.mjs <case>`).
   to report a cut for a slide whose group is still queued, which is what corrects
   rows **already written** by 0.7.4 without rewriting history; it keeps the
   `created_at` fallback for genuinely old slides (early builds inserted slides
-  with no `stage_cut_at` at all — see `f26448a`). *Test:* harness gate covers the
+  with no `stage_cut_at` at all — see `f26448a`; 0.18.2 fills those rows in once,
+  from their group's own record of leaving the queue, now that the stamp decides
+  whether a slide may be stained — see #182 above). *Test:* harness gate covers the
   write, e2e covers the read; verified separately, because either mechanism alone
   makes the other's revert look vacuous.
 - **#92/#93/#94 — settings dialogue · ✅ shipped.** Slides per block (default 4
