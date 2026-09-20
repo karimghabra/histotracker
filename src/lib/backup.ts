@@ -1,7 +1,7 @@
 // Local database backups: create (from a WAL-checkpointed image), list, revert,
 // delete. The heavy lifting — validation, atomic writes, path guards — lives in
 // the Rust `backup_*` commands (src-tauri/src/backup.rs). This module is the
-// thin frontend orchestration plus the snapshot/restore glue shared with undo.
+// thin frontend orchestration plus the image/restore glue it shares with sync.
 
 import { invoke } from "@tauri-apps/api/core";
 import { ImageRefusedError, snapshotDb, swapInImageFromElsewhere } from "./db";
@@ -43,8 +43,8 @@ export async function listBackups(): Promise<BackupEntry[]> {
 
 /**
  * Take a fresh backup. Captures a WAL-checkpointed byte image (the same
- * consistent snapshot undo/redo use), writes it atomically via Rust, records
- * the time, and prunes to `retention`. Returns the new entry.
+ * consistent image the sync publish takes), writes it atomically via Rust,
+ * records the time, and prunes to `retention`. Returns the new entry.
  */
 export async function createBackup(reason: BackupReason, retention: number): Promise<BackupEntry> {
   const image = await snapshotDb();
@@ -75,7 +75,9 @@ export async function createBackup(reason: BackupReason, retention: number): Pro
  * the image with the same migrator the launch uses: what it lacks really runs,
  * and the record it comes back with is true. Then a `prerestore` safety backup
  * is taken (so a revert is itself reversible) and the image is swapped in via
- * the same session-preserving restore undo uses.
+ * the session-preserving restore (`restoreDbPreservingSession`). The swap clears
+ * Undo and Redo, because the entries on them are ranges of the old file's undo
+ * journal; the way back from a revert is that safety backup.
  *
  * Reverting to an older backup is therefore safe, launches after it included.
  * A backup this build cannot bring up to date is refused before anything

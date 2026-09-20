@@ -2,7 +2,8 @@
 // data layer reaches, against real files on the current machine.
 //
 //   read_file / save_file  - lib.rs: plain std::fs on the live database path
-//                            (snapshots, undo, sync publish and pull)
+//                            (backups, sync publish and pull; undo replays the
+//                            journal and never copies the file)
 //   backup_*               - backup.rs: validated, atomic, named backups
 //   db_migrate_image       - migrate.rs: the running build's migrations, run on a
 //                            staging copy of an image (a backup before a revert,
@@ -15,12 +16,13 @@
 // Anything else throws, so a build that starts relying on a new command fails
 // loudly here instead of being silently answered.
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "./sqlite";
 import { ImageRefused, assertSqliteImage, migrateImage } from "./sqlx-migrator";
 import { currentProcess, world } from "./world";
+import { executeBatch, revertJournal, type SqlHandle } from "../../src/test/undoJournalCommands";
 
 const BACKUP_PREFIX = "histometer-backup-";
 const BACKUP_EXT = ".db";
@@ -49,6 +51,26 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
   switch (cmd) {
     case "read_file":
       return out(Array.from(readFileSync(String(args.path))));
+
+    // undo_journal.rs, modelled in src/test/undoJournalCommands.ts: its own
+    // connection to the file, one transaction, closed after.
+    case "undo_journal_revert":
+    case "undo_journal_install": {
+      if (!existsSync(String(args.path))) throw `Could not open the database: no file at ${String(args.path)}`;
+      const db = new DatabaseSync(String(args.path));
+      const handle: SqlHandle = {
+        exec: (sql) => db.exec(sql),
+        run: (sql) => Number(db.prepare(sql).run().changes),
+        all: (sql, params = []) => db.prepare(sql).all(...params) as Array<Record<string, unknown>>,
+      };
+      try {
+        return cmd === "undo_journal_revert"
+          ? out(revertJournal(handle, Number(args.from ?? 0), Number(args.to ?? 0)))
+          : out(executeBatch(handle, (args.statements as string[]) ?? []));
+      } finally {
+        db.close();
+      }
+    }
     case "save_file":
       writeFileSync(String(args.path), Uint8Array.from((args.contents as number[]) ?? []));
       return out(undefined);

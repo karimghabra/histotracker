@@ -1,10 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { useState } from "react";
-import { ensureChecklist, setChecklistItemComplete, snapshotDb } from "../lib/db";
+import {
+  ensureChecklist,
+  journalHead,
+  listChecklistItems,
+  pruneJournal,
+  setChecklistItemComplete,
+} from "../lib/db";
+import { inLane } from "../lib/writeLane";
 import { useActiveUser } from "../hooks/useData";
 import { readOnlyMessage, useReadOnly, useReadOnlyReason } from "../lib/readOnly";
-import { useUndoStore } from "../lib/undo";
+import { oldestMark, useUndoStore } from "../lib/undo";
 import { cn } from "../lib/utils";
 
 export function ProtocolChecklist({
@@ -28,7 +35,17 @@ export function ProtocolChecklist({
   const queryKey = ["protocol-checklist", scopeType, scopeId, stageKey];
   const { data: items = [] } = useQuery({
     queryKey,
-    queryFn: () => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels }),
+    // Reading it CREATES it the first time a scope is drawn: one checklist_runs
+    // row and one checklist_items row per label, both journaled. Only that
+    // creation belongs in the write lane, or those inserts could land inside an
+    // unrelated action's undo entry and be taken back with it. Every later read
+    // is a read, and stays out of the lane rather than queueing behind whatever
+    // is being written elsewhere on the board.
+    queryFn: async () => {
+      const drawn = await listChecklistItems(scopeType, scopeId, stageKey);
+      if (drawn.length > 0) return drawn;
+      return inLane(() => ensureChecklist({ scopeType, scopeId, stageKey, protocolName, labels }));
+    },
   });
   // The operator IS the signed-in user (#127).
   //
@@ -59,27 +76,44 @@ export function ProtocolChecklist({
     const item = items.find((candidate) => candidate.id === itemId);
     const scopeIds = [...new Set([scopeId, ...batchScopeIds])];
     try {
-      // Snapshot BEFORE the step so Undo peels back one protocol step (and the
-      // staining→imaging scatter it triggers) at a time, instead of jumping to
-      // the last board-level action (#56).
-      const before = await snapshotDb();
-      await setChecklistItemComplete(itemId, value, operator.trim());
-      if (item) {
-        for (const targetScopeId of scopeIds) {
-          if (targetScopeId === scopeId) continue;
-          const targetItems = await ensureChecklist({
-            scopeType,
-            scopeId: targetScopeId,
-            stageKey,
-            protocolName,
-            labels,
-          });
-          const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
-          if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+      // In the write lane like every other undoable action, and marked BEFORE the
+      // step so Undo peels back one protocol step (and the staining→imaging
+      // scatter it triggers) at a time, instead of jumping to the last
+      // board-level action (#56).
+      await inLane(async () => {
+        // Drawing a neighbouring rack's checklist for the first time is not part of
+        // this step, so it happens BEFORE the mark. Inside the range, an Undo would
+        // delete the run and the refetch that follows would immediately re-create it
+        // under a new id, leaving the Redo nothing to put the old one back as.
+        const siblings = new Map<number, Awaited<ReturnType<typeof ensureChecklist>>>();
+        if (item) {
+          for (const targetScopeId of scopeIds) {
+            if (targetScopeId === scopeId) continue;
+            siblings.set(
+              targetScopeId,
+              await ensureChecklist({ scopeType, scopeId: targetScopeId, stageKey, protocolName, labels }),
+            );
+          }
         }
-        if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
-        record({ label: `${value ? "Complete" : "Undo"} · ${item.label}`, snapshot: before });
-      }
+        const before = await journalHead();
+        await setChecklistItemComplete(itemId, value, operator.trim());
+        if (item) {
+          for (const targetItems of siblings.values()) {
+            const targetItem = targetItems.find((candidate) => candidate.sort_order === item.sort_order);
+            if (targetItem) await setChecklistItemComplete(targetItem.id, value, operator.trim());
+          }
+          if (onStepChange) await onStepChange(item.sort_order, value, scopeIds);
+          record({
+            label: `${value ? "Complete" : "Undo"} · ${item.label}`,
+            mark: before,
+            end: await journalHead(),
+          });
+          // Housekeeping, exactly as commit() does it: a step ticked on a bench
+          // shift is the only undoable write outside useActions, and without
+          // this the journal keeps whatever the dropped entries left behind.
+          await pruneJournal(oldestMark()).catch(() => undefined);
+        }
+      });
     } catch (err) {
       // Never fail silently: a step whose stage write throws (e.g. a DB opened
       // on an image missing a stage column) must surface, not look like a dead

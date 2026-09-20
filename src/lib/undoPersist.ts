@@ -1,23 +1,25 @@
-import { snapshotDb, type DbImage } from "./db";
-import { useUndoStore, type Snapshot } from "./undo";
+import { getDb, journalHead } from "./db";
+import { useUndoStore, type UndoEntry } from "./undo";
 
 // Persist the undo/redo history across reloads so reopening the app doesn't
 // silently disable Undo even though the database is fully restored.
 //
-// SAFETY: whole-DB-image undo entries are only valid against the exact DB they
-// were captured from. We store the *current* DB image as an anchor next to the
-// history; on load we keep the history only if the live DB is byte-identical to
-// that anchor. Any mismatch (fresh install, a swapped-in snapshot, an externally
-// replaced file) discards the history — so a stale entry can never be restored
-// into the wrong database. Worst case degrades to today's behavior (no history).
+// SAFETY: an undo entry is a range of the undo journal, valid only against the
+// journal it was taken from. We store BOTH ENDS of that journal as an anchor next
+// to the history: its oldest sequence number, and its last one with the statement
+// there. On load we keep the history only if the live journal still runs from
+// exactly there to exactly there. Any mismatch (fresh install, a swapped-in image,
+// a write since, or the trim at open having forgotten the oldest rows) discards
+// the history, so a stale range can never be replayed into the wrong database, nor
+// one whose rows are half gone. Worst case: no history.
 const DB_NAME = "histometer-undo";
 const STORE = "kv";
 const KEY = "history";
 
 interface Persisted {
-  anchor: DbImage;
-  undoStack: Snapshot[];
-  redoStack: Snapshot[];
+  anchor: string;
+  undoStack: UndoEntry[];
+  redoStack: UndoEntry[];
 }
 
 function hasIdb(): boolean {
@@ -68,20 +70,24 @@ function idbClear(): Promise<void> {
   );
 }
 
-function bytesEqual(a: DbImage, b: DbImage): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
-  return true;
+async function journalAnchor(): Promise<string> {
+  const head = await journalHead();
+  const db = await getDb();
+  const rows = await db.select<Array<{ floor: number | null; stmt: string | null }>>(
+    `SELECT MIN(seq) AS floor, (SELECT stmt FROM undo_journal WHERE seq = ?) AS stmt FROM undo_journal`,
+    [head],
+  );
+  return `${rows[0]?.floor ?? 0}:${head}:${rows[0]?.stmt ?? ""}`;
 }
 
-async function persist(undoStack: Snapshot[], redoStack: Snapshot[]): Promise<void> {
+async function persist(undoStack: UndoEntry[], redoStack: UndoEntry[]): Promise<void> {
   if (!hasIdb()) return;
   try {
     if (undoStack.length === 0 && redoStack.length === 0) {
       await idbClear();
       return;
     }
-    const anchor = await snapshotDb(); // the DB state this history is valid against
+    const anchor = await journalAnchor(); // the journal this history is valid against
     await idbPut({ anchor, undoStack, redoStack });
   } catch {
     // Best-effort persistence; never let it disturb the app.
@@ -94,14 +100,20 @@ export async function hydrateUndoHistory(): Promise<void> {
   try {
     const saved = await idbGet();
     if (!saved?.undoStack) return;
-    const current = await snapshotDb();
-    if (!bytesEqual(current, saved.anchor)) {
-      await idbClear(); // history belongs to a different database — drop it
+    // A history persisted by a build before the journal holds whole database
+    // images (up to 100 of them) and a byte-image anchor, never a range: drop it,
+    // which also frees the space those images took. An entry without an `end` came
+    // from a build whose ranges ran to the head, which would replay far too much.
+    const marked = [...saved.undoStack, ...(saved.redoStack ?? [])].every(
+      (e) => typeof e?.mark === "number" && typeof e?.end === "number",
+    );
+    if (!marked || typeof saved.anchor !== "string" || (await journalAnchor()) !== saved.anchor) {
+      await idbClear(); // history belongs to a different database, or an older build
       return;
     }
     useUndoStore.setState({ undoStack: saved.undoStack, redoStack: saved.redoStack });
   } catch {
-    // Ignore — start with an empty in-memory history.
+    // Ignore: start with an empty in-memory history.
   }
 }
 

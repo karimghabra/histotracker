@@ -311,13 +311,13 @@ function SampleNote({
 }) {
   const [editing, setEditing] = useState(false);
   // The text just typed, held on screen for exactly as long as the write of it
-  // is in flight. A save is a write plus a whole-database snapshot for the undo
-  // stack — without the hold the note flips back to the words it replaced the
-  // instant focus leaves, or vanishes if it is the first thing written here,
-  // which reads as "it did not take" and invites a retype. The write finishing
-  // is what ends the hold, whatever it did: wrote, wrote nothing, or failed. So
-  // the screen goes back to the record as soon as the record can answer, and an
-  // undo landing in the meantime is what the row then shows.
+  // is in flight. A save is a write and the refetch behind it, both of which land
+  // after focus leaves — without the hold the note flips back to the words it
+  // replaced the instant focus leaves, or vanishes if it is the first thing
+  // written here, which reads as "it did not take" and invites a retype. The
+  // write finishing is what ends the hold, whatever it did: wrote, wrote nothing,
+  // or failed. So the screen goes back to the record as soon as the record can
+  // answer, and an undo landing in the meantime is what the row then shows.
   const [pending, setPending] = useState<string | null>(null);
   const readOnly = useReadOnly();
   const shown = pending ?? value ?? "";

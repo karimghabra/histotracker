@@ -124,8 +124,8 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
   await expect(page.getByText("3 slides")).toHaveCount(0); // section left Needs Sectioning
 
   // Undo the transfer → the minted tile must disappear from Staining (no ghost)
-  // and the Needs Sectioning card must return. Under whole-DB-image undo this is
-  // just a restore of the prior state, so nothing is left behind.
+  // and the Needs Sectioning card must return. Replaying the action's journal range
+  // takes back the row that minted the rack with the rest, so nothing is left behind.
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
   await expect(staining.getByText("Alcian Blue")).toHaveCount(0); // no ghost tile in Staining
   await expect(page.getByText("3 slides").first()).toBeVisible(); // section restored

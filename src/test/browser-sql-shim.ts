@@ -8,7 +8,7 @@
 // the ones `src-tauri/src/lib.rs` registers, run the way the plugin runs them:
 // through the sqlx migrator (./sqlx-migrator.ts) on the FIRST load of each page,
 // with the `_sqlx_migrations` ledger kept inside the image. A page load is a
-// process here, so a reload is a relaunch. A reopen after an undo or a
+// process here, so a reload is a relaunch. A reopen after a backup revert or a
 // sync pull does not migrate again, exactly as in the app.
 //
 // One exception, for fixtures only: an image with no ledger at all was not
@@ -18,11 +18,12 @@
 //
 // The database is persisted as a byte image in the shared virtual filesystem
 // (shim-fs) under SHIM_DB_FILE. That same path is what getDbFilePath() resolves
-// to here, so the core shim's read_file/save_file operate on this exact image —
-// which is what makes the real image-based undo/redo run unmodified.
+// to here, so the core shim's read_file/save_file operate on this exact image,
+// which is what makes the real backup, revert and sync paths run unmodified.
 import initSqlJs, { type Database as SqlJsDb, type SqlJsStatic } from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { clearShimFs, readShimFile, writeShimFile } from "./shim-fs";
+import type { SqlHandle } from "./undoJournalCommands";
 import {
   assertSqliteImage,
   migrateImage,
@@ -112,7 +113,7 @@ export const SHIM_DB_FILE = "histometer-shim.db";
 
 let SQL: SqlJsStatic | null = null;
 // `?freshdb=1` should reset only the initial open, not the reopen a restore
-// performs — otherwise undo would wipe the DB it just restored.
+// performs, otherwise a revert would wipe the DB it just restored.
 let freshHandled = false;
 
 function shouldReset(): boolean {
@@ -143,9 +144,41 @@ export interface QueryResult {
   lastInsertId?: number;
 }
 
+/**
+ * Run `work` on the live database and persist what it did: the shim's stand-in
+ * for a Rust command that opens the database file itself (undo_journal.rs). The
+ * sql.js database lives in memory, so "its own connection" is this one.
+ */
+export function withLiveDatabase<T>(work: (db: SqlHandle) => T): T {
+  if (!live) throw new Error("Could not open the database: no database is loaded");
+  const db = live.db;
+  const handle: SqlHandle = {
+    exec: (sql) => db.exec(sql),
+    run: (sql) => (db.run(sql), db.getRowsModified()),
+    all: (sql, params) => {
+      const stmt = db.prepare(sql);
+      try {
+        stmt.bind(normalizeBinds(params));
+        const rows: Array<Record<string, unknown>> = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        return rows;
+      } finally {
+        stmt.free();
+      }
+    },
+  };
+  try {
+    return work(handle);
+  } finally {
+    live.persist();
+  }
+}
+
+let live: Database | null = null;
+
 export default class Database {
   path: string;
-  private db: SqlJsDb;
+  readonly db: SqlJsDb;
 
   private constructor(path: string, db: SqlJsDb) {
     this.path = path;
@@ -173,6 +206,7 @@ export default class Database {
       }
     }
     const instance = new Database(path, db);
+    live = instance;
     // Test-only escape hatch: lets a spec plant a row shape the UI cannot
     // produce — e.g. a pre-0.4.6 cut group with `duplicates > 0` and no slides,
     // which is what the read-from-a-write viewer bug needs. This file is aliased
@@ -240,12 +274,13 @@ export default class Database {
   }
 
   async close(): Promise<boolean> {
+    if (live === this) live = null;
     this.persist();
     this.db.close();
     return true;
   }
 
-  private persist(): void {
+  persist(): void {
     try {
       writeShimFile(SHIM_DB_FILE, this.db.export());
     } catch {

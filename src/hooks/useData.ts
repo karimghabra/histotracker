@@ -42,6 +42,12 @@ import {
 } from "../lib/db";
 import type { NewSampleInput, StainRequestStatus } from "../lib/types";
 import { DEFAULT_SETTINGS, type AppSettings } from "../lib/settings";
+// A write from one of these dialogs goes in the write lane (writeLane.ts) like
+// every action: it takes its place in line when the user asks for it, so it can
+// never land between an action's journal mark and the action's own writes and be
+// undone as part of it. The session tables (users, settings) are not journaled
+// and need no slot.
+import { laned } from "../lib/writeLane";
 
 const KEYS = {
   projects: ["projects"] as const,
@@ -126,16 +132,16 @@ export function useAssayCatalog(includeInactive = false) {
 export function useAssayCatalogMutations() {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: ["assay-catalog"] });
-  const create = useMutation({ mutationFn: addAssay, onSuccess: invalidate });
+  const create = useMutation({ mutationFn: laned(addAssay), onSuccess: invalidate });
   const rename = useMutation({
-    mutationFn: ({ id, name }: { id: number; name: string }) => updateAssay(id, name),
+    mutationFn: laned(({ id, name }: { id: number; name: string }) => updateAssay(id, name)),
     onSuccess: invalidate,
   });
   const setEnabled = useMutation({
-    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) => setAssayActive(id, isActive),
+    mutationFn: laned(({ id, isActive }: { id: number; isActive: boolean }) => setAssayActive(id, isActive)),
     onSuccess: invalidate,
   });
-  const remove = useMutation({ mutationFn: deleteAssay, onSuccess: invalidate });
+  const remove = useMutation({ mutationFn: laned(deleteAssay), onSuccess: invalidate });
   return { create, rename, setEnabled, remove };
 }
 
@@ -217,8 +223,8 @@ export function useStainRequests(opts?: { status?: StainRequestStatus; requester
 export function useStainRequestMutations() {
   const qc = useQueryClient();
   const setStatus = useMutation({
-    mutationFn: ({ id, status, resolvedBy }: { id: number; status: StainRequestStatus; resolvedBy: string }) =>
-      setStainRequestStatus(id, status, resolvedBy),
+    mutationFn: laned(({ id, status, resolvedBy }: { id: number; status: StainRequestStatus; resolvedBy: string }) =>
+      setStainRequestStatus(id, status, resolvedBy)),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["stain-requests"] }),
   });
   return { setStatus };
@@ -287,25 +293,25 @@ export function useProjectMutations() {
   };
 
   const create = useMutation({
-    mutationFn: addProject,
+    mutationFn: laned(addProject),
     onSuccess: invalidate,
   });
   const setActive = useMutation({
-    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
-      setProjectActive(id, isActive),
+    mutationFn: laned(({ id, isActive }: { id: number; isActive: boolean }) =>
+      setProjectActive(id, isActive)),
     onSuccess: invalidate,
   });
   const update = useMutation({
-    mutationFn: ({
+    mutationFn: laned(({
       id,
       input,
     }: {
       id: number;
       input: { code: string; name: string; team_lead: string; lead_user_id: number };
-    }) => updateProject(id, input),
+    }) => updateProject(id, input)),
     onSuccess: invalidate,
   });
-  const remove = useMutation({ mutationFn: deleteProject, onSuccess: invalidate });
+  const remove = useMutation({ mutationFn: laned(deleteProject), onSuccess: invalidate });
 
   return { create, setActive, update, remove };
 }
@@ -318,25 +324,25 @@ export function useSampleMutations() {
   };
 
   const create = useMutation({
-    mutationFn: ({ input, projectCode }: { input: NewSampleInput; projectCode: string }) =>
-      addSample(input, projectCode),
+    mutationFn: laned(({ input, projectCode }: { input: NewSampleInput; projectCode: string }) =>
+      addSample(input, projectCode)),
     onSuccess: invalidate,
   });
 
   const move = useMutation({
-    mutationFn: ({ sampleId, stageKey }: { sampleId: number; stageKey: string }) =>
-      updateSampleStage(sampleId, stageKey),
+    mutationFn: laned(({ sampleId, stageKey }: { sampleId: number; stageKey: string }) =>
+      updateSampleStage(sampleId, stageKey)),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.openSamples }),
   });
 
   const updateDetails = useMutation({
-    mutationFn: ({
+    mutationFn: laned(({
       sampleId,
       input,
     }: {
       sampleId: number;
       input: Omit<NewSampleInput, "project_id">;
-    }) => updateSampleDetails(sampleId, input),
+    }) => updateSampleDetails(sampleId, input)),
     onSuccess: invalidate,
   });
 

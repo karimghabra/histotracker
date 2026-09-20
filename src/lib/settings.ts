@@ -7,9 +7,10 @@
  * no migration, so a 0.7.x build opens a 0.8 database unchanged and simply does
  * not read the extra keys).
  *
- * `app_settings` is also the one table `restoreDbPreservingSession` carries
- * ACROSS an undo/redo swap, which is the behaviour we want: changing a default
- * is configuration, not a lab event, so Ctrl+Z should not silently move it.
+ * `app_settings` is also a table undo never rewinds (it is not journaled, see
+ * `NOT_JOURNALED` in undoJournal.ts), and one `restoreDbPreservingSession`
+ * carries across a backup revert, which is the behaviour we want: changing a
+ * default is configuration, not a lab event, so Ctrl+Z should not silently move it.
  *
  * Everything here is pure and string-in/string-out, so it can be unit-tested
  * without a database and read identically by the app and by the test harness.
