@@ -150,3 +150,91 @@ it("gives unstamped glass its group's own cut date, and invents none", async () 
     "a stain request takes the back-filled extra rather than cutting the block again",
   ).toBe("extra");
 });
+
+/** Every slide's cut date, and the journal head, as one comparable record. */
+const recordOf = (app: App): string => {
+  const file = new DatabaseSync(app.machine.dbFile, { readOnly: true });
+  try {
+    const slides = file
+      .prepare(`SELECT id, stage_cut_at FROM slides ORDER BY id`)
+      .all() as Array<{ id: number; stage_cut_at: string | null }>;
+    const events = (
+      file.prepare(`SELECT COUNT(*) AS n FROM sample_timeline_events`).get() as Any
+    ).n as number;
+    const journal = (
+      file
+        .prepare(
+          `SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'undo_journal'), 0) AS head`,
+        )
+        .get() as Any
+    ).head as number;
+    return JSON.stringify({ slides, events, journal });
+  } finally {
+    file.close();
+  }
+};
+
+/** Close the lab, clear the marker so the repair runs again, and reopen. */
+async function repairAgain(app: App): Promise<App> {
+  const machine = app.machine;
+  await quit(app);
+  const file = new DatabaseSync(machine.dbFile);
+  try {
+    file.exec(`DELETE FROM schema_meta WHERE key = 'slide_cut_stamps_backfilled'`);
+  } finally {
+    file.close();
+  }
+  running = await launch(currentBuild(), machine);
+  return running;
+}
+
+it("repairs once and then has nothing left to say", async () => {
+  const lab = await openLab();
+  running = lab.app;
+  const block = await lab.sample("a block cut by an older build");
+  const { app } = await reopenWithLegacyRows(lab, block, [
+    {
+      stage: "stain_requested",
+      stamps: {
+        stage_needs_sectioning_at: "2023-01-01 09:00",
+        stage_sectioned_at: "2023-01-02 10:00",
+        stage_stain_requested_at: "2023-01-03 11:00",
+      },
+    },
+    { stage: "sectioned", stamps: {} },
+    { stage: "needs_sectioning", stamps: { stage_needs_sectioning_at: "2023-03-01 09:00" } },
+  ]);
+
+  // The first open is the repair. Everything after it is the second run.
+  const afterFirst = recordOf(app);
+  expect(afterFirst, "the first open did fill something in").toContain("2023-01-02 10:00");
+
+  // Not just the marker short-circuiting: the marker is cleared, so the repair
+  // itself runs a second time over rows it has already seen.
+  const second = await repairAgain(app);
+  expect(recordOf(second), "running the repair a second time changes nothing").toBe(afterFirst);
+});
+
+it("says nothing at all on a database with nothing to repair", async () => {
+  const lab = await openLab();
+  running = lab.app;
+  const block = await lab.sample("a block this build cut itself");
+  const [group] = await lab.db.createSectionRequests(block, [
+    { duplicates: 1, stains: "H&E", assay_type: "stain", assay_name: "H&E" },
+  ]);
+  await lab.db.updateSectionStage(group, "sectioned");
+  const before = recordOf(lab.app);
+
+  const reopened = await repairAgain(lab.app);
+
+  // Nothing to fill in, so nothing is written: no cut date moves, no timeline
+  // event is posted, and the undo journal does not grow — the technician who
+  // opens the app sees an ordinary launch and has nothing new to undo.
+  expect(recordOf(reopened), "the repair leaves a modern database exactly as it found it").toBe(
+    before,
+  );
+  expect(
+    (await reopened.db.listExtraSlides()) as Array<{ id: number }>,
+    "and the Extra slide inventory reads the same",
+  ).toEqual(await lab.db.listExtraSlides());
+});
