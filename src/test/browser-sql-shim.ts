@@ -206,6 +206,7 @@ function hatchDb(): SqlJsDb {
 export default class Database {
   path: string;
   readonly db: SqlJsDb;
+  private closed = false;
 
   private constructor(path: string, db: SqlJsDb) {
     this.path = path;
@@ -282,6 +283,7 @@ export default class Database {
     if (query.includes("pragma_database_list")) {
       return [{ file: SHIM_DB_FILE }] as unknown as T;
     }
+    this.assertOpen();
     const stmt = this.db.prepare(query);
     try {
       stmt.bind(normalizeBinds(bindValues));
@@ -294,6 +296,7 @@ export default class Database {
   }
 
   async execute(query: string, bindValues?: unknown[]): Promise<QueryResult> {
+    this.assertOpen();
     const stmt = this.db.prepare(query);
     try {
       stmt.bind(normalizeBinds(bindValues));
@@ -310,6 +313,7 @@ export default class Database {
 
   async close(): Promise<boolean> {
     await this.persist();
+    this.closed = true;
     if (live === this) {
       // Retire rather than free: the read hatch still has to answer while the
       // replacement opens (see `retired`).
@@ -329,7 +333,18 @@ export default class Database {
    * the next reload will not see, and a suite that carried on past that is what
    * reported destroyed rows for three nights running (shim-fs.ts).
    */
-  persist(): Promise<void> {
-    return writeShimFile(SHIM_DB_FILE, this.db.export());
+  async persist(): Promise<void> {
+    this.assertOpen();
+    await writeShimFile(SHIM_DB_FILE, this.db.export());
+  }
+
+  /**
+   * A closed connection refuses, as tauri-plugin-sql's does. Its sql.js handle
+   * may still be alive as `retired`, for the read hatch alone; were this instance
+   * to write through it, it would put the image a restore just replaced back
+   * over the restored file.
+   */
+  private assertOpen(): void {
+    if (this.closed) throw new Error("the database connection is closed");
   }
 }

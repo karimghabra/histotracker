@@ -1,5 +1,6 @@
 import { test as base, expect, type Page } from "@playwright/test";
 import { INVARIANTS } from "./invariants";
+import { SHIM_FS_LOST_KEY } from "../../src/test/shim-fs";
 
 /**
  * Harness v2 driver.
@@ -110,7 +111,14 @@ export async function callDb<T = unknown>(
   args: unknown[],
 ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   return (await page.evaluate(
-    async ([name, params]) => {
+    async ([name, params, lostKey]) => {
+      // A write the harness's filesystem lost is not the application declining
+      // an action: it fails the run, before and after the call alike.
+      const lost = () => {
+        const message = localStorage.getItem(lostKey as string);
+        if (message !== null) throw new Error(message);
+      };
+      lost();
       try {
         const mod = (await import("/src/lib/db.ts")) as unknown as Record<
           string,
@@ -121,12 +129,14 @@ export async function callDb<T = unknown>(
           return { ok: false as const, error: `db.ts has no export named ${name}` };
         }
         const value = await target(...(params as unknown[]));
+        lost();
         return { ok: true as const, value };
       } catch (e) {
+        lost();
         return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
       }
     },
-    [fn, args] as const,
+    [fn, args, SHIM_FS_LOST_KEY] as const,
   )) as { ok: true; value: T } | { ok: false; error: string };
 }
 

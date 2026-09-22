@@ -41,6 +41,14 @@
 // latched: from then on the whole virtual filesystem refuses to read or write,
 // naming the file it could not store and how large it was. A run that has lost a
 // write stops being a run.
+//
+// The latch is a short marker in localStorage, not module state. A page load is
+// a relaunch here, and a reload is the exact moment the old harness told its lie
+// (it reopened the last image it had managed to store), so a latch that died with
+// the page would guard only the one page that could already see the error. The
+// marker is a few hundred characters, not the database, so it carries none of the
+// quota risk above. Only `clearShimFs` (the `?freshdb=1` start) lifts it; a new
+// browser context starts with none.
 /**
  * The IndexedDB database and store the virtual filesystem lives in.
  *
@@ -56,31 +64,31 @@ export const SHIM_FS_VERSION = 1;
 const DB_NAME = SHIM_FS_DB_NAME;
 const STORE = SHIM_FS_STORE;
 
-/** The first write this filesystem could not make. Once set, nothing else runs. */
-let lost: Error | null = null;
+/**
+ * The localStorage key the latch lives under. Exported so a suite driver can
+ * tell a harness failure from the application refusing an action.
+ */
+export const SHIM_FS_LOST_KEY = "histometer-shim-fs-lost";
 
 function assertNothingLost(): void {
-  if (lost) throw lost;
+  const message = localStorage.getItem(SHIM_FS_LOST_KEY);
+  if (message !== null) throw new Error(message);
 }
 
 /**
  * Record a write that did not happen, and make it impossible to ignore: the
- * error is thrown at the caller and every later operation rethrows it.
+ * error is thrown at the caller and every later operation, on this page or any
+ * page loaded after it, rethrows it.
  */
 function loseWrite(path: string, bytes: number, cause: unknown): never {
   const reason = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
-  lost = new Error(
+  const lost = new Error(
     `[shim-fs] could not store "${path}" (${bytes.toLocaleString("en-US")} bytes): ${reason}. ` +
       `The harness has lost a write: the live database and the image a reload would open have ` +
       `diverged, so the virtual filesystem now refuses every operation rather than let the run ` +
       `report on a database that is no longer under test.`,
   );
-  // So a spec, or a person reading the console, can see it without catching it.
-  try {
-    (window as unknown as Record<string, unknown>).__SHIM_FS_LOST__ = lost.message;
-  } catch {
-    /* the message is on the thrown error either way */
-  }
+  localStorage.setItem(SHIM_FS_LOST_KEY, lost.message);
   throw lost;
 }
 
@@ -189,7 +197,7 @@ export async function listShimFiles(prefix = ""): Promise<Array<{ path: string; 
 }
 
 export async function clearShimFs(): Promise<void> {
-  assertNothingLost();
+  localStorage.removeItem(SHIM_FS_LOST_KEY);
   try {
     await transact<void>("readwrite", (store, done) => {
       store.clear();

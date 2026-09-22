@@ -146,11 +146,13 @@ Conventions in the specs, worth following rather than re-deriving:
   localStorage, which tops out near 3.7 MB and had its quota error swallowed, so a
   stress run's stored database froze around sixty blocks while the live one grew to
   ten megabytes, and `tests/stress3`'s reload read the frozen image back and
-  reported destroyed rows for three nights. A failed write now throws and latches,
-  so the filesystem refuses everything after it. Reach it from a spec through
+  reported destroyed rows for three nights. A failed write now throws and latches
+  (a localStorage marker, so it outlives a reload; only `?freshdb=1` lifts it), so the
+  filesystem refuses everything after it, and stress2's `callDb` fails the run on it
+  rather than counting a refusal. Reach it from a spec through
   `tests/helpers/shim-fs.ts` and never through storage keys, and plant an image with
   its `plantShimImage` - an `addInitScript` cannot, because Playwright does not wait
-  for one's promise. `tests/e2e/shim-fs.spec.ts` holds both guarantees.
+  for one's promise. `tests/e2e/shim-fs.spec.ts` holds these guarantees.
 - The shim copies the database file instantly, which hides any race that lives in a
   copy's duration. `window.__SNAPSHOT_IPC_MS__` gives `read_file`/`save_file` of the
   database the time they take on a lab-sized one (`tests/e2e/undo-races.spec.ts`).
