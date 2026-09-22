@@ -115,14 +115,8 @@ suite runs" below applies to running two heavy suites side by side.
 
 `pnpm verify` (without `--screenshot`) runs the first three in sequence, stopping at the first red one.
 
-The stress figures above were 702s and 363s, and `seedLarge` took 537s here for the board a CI
-runner seeded in 79s - slow enough to expire stress2's 900s per-test timeout during setup.
-This file used to record that as a WSL2 artefact to budget around, and it was not: the shims kept
-the database base64-encoded in localStorage, and every write past about sixty blocks still paid the
-encode of a growing multi-megabyte image before `setItem` threw the result away
-(`src/test/shim-fs.ts`).
-The harness was doing all the work of persisting and none of the persisting.
-Do not read a slow or timing-out stress run as this machine being this machine; measure it.
+A slow or timing-out stress run is not this machine being this machine; measure it
+(the harness once paid for writes it silently discarded, `src/test/shim-fs.ts`).
 
 **Never run the packaged desktop app or its suite on the lab machine.** It opens
 real windows on the desktop someone is working on. Browser suites are headless;
@@ -142,15 +136,12 @@ Conventions in the specs, worth following rather than re-deriving:
 - `page.goto("/?freshdb=1")` starts from a clean DB, honoured once per load, so a
   restore's reopen does not wipe itself (`src/test/browser-sql-shim.ts`).
 - **The shims' virtual filesystem is IndexedDB, it is asynchronous, and a write it
-  cannot make fails the run** (`src/test/shim-fs.ts`). It was base64 in
-  localStorage, which tops out near 3.7 MB and had its quota error swallowed, so a
-  stress run's stored database froze around sixty blocks while the live one grew to
-  ten megabytes, and `tests/stress3`'s reload read the frozen image back and
-  reported destroyed rows for three nights. A failed write now throws and latches
-  (a localStorage marker, so it outlives a reload; only `?freshdb=1` lifts it), so the
-  filesystem refuses everything after it. Every browser suite imports `test` from
+  cannot make fails the run** (`src/test/shim-fs.ts` says why). A failed write throws
+  and latches (a localStorage marker, so it outlives a reload; only `?freshdb=1` lifts
+  it), so the filesystem refuses everything after it. Every browser suite but `tests/render`
+  (which also serves the base tree) imports `test` from
   `tests/helpers/test.ts`, which fails a test that lost a write as a void run, not an
-  app defect, and stress2's `callDb` and invariant checkpoints do the same. Reach it from a spec through
+  app defect, and stress2's `callDb`, its invariant checkpoints and stress3's view checks do the same. Reach it from a spec through
   `tests/helpers/shim-fs.ts` and never through storage keys, and plant an image with
   its `plantShimImage` - an `addInitScript` cannot, because Playwright does not wait
   for one's promise. `tests/e2e/shim-fs.spec.ts` holds these guarantees.
