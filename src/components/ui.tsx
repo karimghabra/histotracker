@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -41,11 +41,29 @@ export function Modal({
   children: ReactNode;
   width?: string;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+  // Escape has to work from the moment the dialog is on screen, and it must not
+  // stop working while the page behind it re-renders.
+  //
+  // A plain `useEffect` keyed on `[onClose]` gave neither. Passive effects run
+  // AFTER paint, so the dialog was committed, visible and clickable for an
+  // interval in which nothing was listening for Escape, and a key pressed in
+  // that interval went nowhere. And every caller passes a fresh arrow
+  // (`onClose={() => setShowSettings(false)}`), so the subscription was torn
+  // down and rebuilt on every render of the page behind the dialog, repeating
+  // that exposure whenever anything upstream re-rendered.
+  //
+  // `useLayoutEffect` attaches before the browser paints, so the handler exists
+  // as soon as the dialog can be seen or clicked; the ref carries the latest
+  // `onClose` without making the subscription depend on its identity, so it
+  // attaches once per dialog. `useBackupScheduler.ts` holds its callback in a
+  // ref for the same reason.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useLayoutEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCloseRef.current();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
 
   return (
     <div
