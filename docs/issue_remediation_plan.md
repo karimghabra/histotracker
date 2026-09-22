@@ -102,6 +102,7 @@
 
 - **#150 · ✅ fixed.**
   At imaging, the rack drawer's slide selection (the tick list that moves, splits and removes) has **Mark N slides imaged**.
+  With more than one rack selected on the board, the drawer also has **Mark N Slides Imaged** beside Complete Imaging, covering every unimaged slide across the selected racks at imaging or past it (`listSlidesForStacks`), so no rack has to be opened on its own.
   `markSlidesImaged` in `db.ts` loops over `setSlidePicturesTaken`, so each slide gets its own stamp, audit record and group-state derivation, and every single-slide refusal applies to each.
   A refused slide stays ticked and is listed with its reason while the rest are marked; a slide already imaged is skipped, not re-stamped; signed out refuses the whole action.
   One undo step covers the lot.

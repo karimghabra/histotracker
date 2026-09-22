@@ -26,6 +26,31 @@ async function cutGroup(l: Lab, description: string, duplicates: number): Promis
   return { group, slides };
 }
 
+/** A block taken all the way to Ready for Imaging (one cut group per size given), the way the
+ *  bench does it: through the stain rack's own checklist, not by poking the section's stage
+ *  directly. Finishing the checklist is what SCATTERS the (cross-sample) stain rack into this
+ *  sample's own per-sample imaging stack, so this is what gives two different samples two
+ *  different racks the board can select between (#124's "cross-sample loading rack"). */
+async function rackAtImaging(l: Lab, description: string, groups: number[]): Promise<{ stackId: number; slides: number[]; groups: number[] }> {
+  const block = await l.sample(description);
+  const made: number[] = await l.db.createSectionRequests(
+    block,
+    groups.map((duplicates) => ({ duplicates, stains: "H&E", assay_type: "stain", assay_name: "H&E" })),
+  );
+  for (const group of made) {
+    await l.db.updateSectionStage(group, "sectioned");
+    await l.db.updateSectionStage(group, "stain_requested");
+  }
+  const placeholders = made.map(() => "?").join(", ");
+  const stainStackId = Number(
+    l.rows(`SELECT DISTINCT stack_id FROM slides WHERE section_request_id IN (${placeholders})`, made)[0].stack_id,
+  );
+  await l.db.syncAssayStackWorkflowStep(stainStackId, "stain", 0, true);
+  await l.db.syncAssayStackWorkflowStep(stainStackId, "stain", 1, true);
+  const rows = l.rows(`SELECT id, stack_id FROM slides WHERE section_request_id IN (${placeholders}) ORDER BY id`, made);
+  return { stackId: Number(rows[0].stack_id), slides: rows.map((r) => Number(r.id)), groups: made };
+}
+
 const slideRow = (l: Lab, id: number) =>
   l.rows(`SELECT current_stage, stage_pictures_taken_at FROM slides WHERE id = ?`, [id])[0];
 const groupRow = (l: Lab, id: number) =>
@@ -141,6 +166,61 @@ describe("#150: marking many slides as imaged", () => {
     for (const id of slides) {
       expect(slideRow(lab, id).stage_pictures_taken_at).toBeNull();
       expect(imagingAudit(lab, id)).toHaveLength(0);
+    }
+  });
+});
+
+// #150 follow-up: several RACKS marked imaged in one action, not just several slides ticked
+// within one open rack. `listSlidesForStacks` is the new gather this needs — the board can
+// select more than one Ready-for-Imaging rack, and the drawer must be able to mark every rack's
+// slides in the one call, with the same guarantees markSlidesImaged already gives a single rack.
+describe("#150: marking several selected racks as imaged", () => {
+  it("gathers every selected rack's slides, none from a rack left out of the selection", async () => {
+    lab = await openLab();
+    const a = await rackAtImaging(lab, "rack a", [2]);
+    const b = await rackAtImaging(lab, "rack b", [3]);
+    const c = await rackAtImaging(lab, "rack c, not selected", [1]);
+    expect(a.stackId).not.toBe(b.stackId);
+
+    const gathered = await lab.db.listSlidesForStacks([a.stackId, b.stackId]);
+
+    expect(gathered.map((s: { id: number }) => s.id).sort((x: number, y: number) => x - y)).toEqual(
+      [...a.slides, ...b.slides].sort((x, y) => x - y),
+    );
+    expect(gathered.some((s: { id: number }) => c.slides.includes(s.id)), "rack c stayed out").toBe(false);
+    expect(await lab.db.listSlidesForStacks([])).toEqual([]);
+  });
+
+  it("marks every slide across two gathered racks in one call, leaves a slide neither rack alone could image untouched, and reports it", async () => {
+    lab = await openLab();
+    const a = await rackAtImaging(lab, "rack a, all fine", [3]);
+    // Two cut groups on the same rack (as the single-rack refusal test uses), so patching only
+    // the smaller one leaves the rest of rack b fine alongside all of rack a.
+    const b = await rackAtImaging(lab, "rack b, one group never cut", [2, 1]);
+    const neverCutGroup = b.groups[1];
+    const refusedSlide = lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [neverCutGroup])[0].id;
+    // Plant the same defect the single-rack refusal test plants (#167): put that one group back
+    // to waiting to be cut, without the app's own gates in the way, so one slide on an otherwise
+    // fine, selected rack cannot be imaged even alone.
+    const db = await lab.db.getDb();
+    await db.execute(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [neverCutGroup]);
+
+    const gathered = await lab.db.listSlidesForStacks([a.stackId, b.stackId]);
+    const expectedIds = [...a.slides, ...b.slides].sort((x, y) => x - y);
+    expect(gathered.map((s: { id: number }) => s.id).sort((x: number, y: number) => x - y)).toEqual(expectedIds);
+
+    const result = await lab.db.markSlidesImaged(gathered.map((s: { id: number }) => s.id));
+
+    const fineSlides = b.slides.filter((id) => id !== Number(refusedSlide));
+    expect(result.marked.sort((x: number, y: number) => x - y)).toEqual(
+      [...a.slides, ...fineSlides].sort((x, y) => x - y),
+    );
+    expect(result.refused).toHaveLength(1);
+    expect(result.refused[0]).toMatchObject({ slideId: Number(refusedSlide) });
+    expect(result.refused[0].message).toMatch(/still waiting to be cut/);
+    expect(slideRow(lab, Number(refusedSlide)).stage_pictures_taken_at, "the refused slide is untouched").toBeNull();
+    for (const id of [...a.slides, ...fineSlides]) {
+      expect(slideRow(lab, id).current_stage, "the rest, across both racks, are marked").toBe("pictures_taken");
     }
   });
 });
