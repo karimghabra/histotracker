@@ -1,7 +1,9 @@
-import type { Page } from "@playwright/test";
+import type { Browser, BrowserContext, Page } from "@playwright/test";
 import {
   SHIM_FS_DB_NAME,
+  SHIM_FS_LIFTED_SIGNAL,
   SHIM_FS_LOST_KEY,
+  SHIM_FS_LOST_SIGNAL,
   SHIM_FS_STORE,
   SHIM_FS_VERSION,
 } from "../../src/test/shim-fs";
@@ -178,10 +180,70 @@ export async function assertShimFsIntact(page: Page, where = "this test"): Promi
       }
     }, SHIM_FS_LOST_KEY)
     .catch(() => null);
-  if (lost !== null) {
-    throw new Error(
-      `HARNESS FAILURE, NOT AN APPLICATION DEFECT: the test harness lost a write by ${where}, ` +
-        `so this run's result is void. ${lost}`,
-    );
-  }
+  if (lost !== null) throw harnessFailure(where, lost);
+}
+
+function harnessFailure(where: string, lost: string): Error {
+  return new Error(
+    `HARNESS FAILURE, NOT AN APPLICATION DEFECT: the test harness lost a write by ${where}, ` +
+      `so this run's result is void. ${lost}`,
+  );
+}
+
+export interface ShimFsWatch {
+  /** Fail, with the latched message, if any watched context lost a write. */
+  assertIntact(where: string): void;
+  /** The losses recorded so far, one per context still latched; the watch forgets them. */
+  takeLost(): string[];
+  /** Stop watching contexts created from here on. */
+  stop(): void;
+}
+
+/**
+ * Observe the virtual filesystem's latch in every context a test uses, as it is
+ * set, rather than sampling it at the end: by then a test may have closed the
+ * context that lost the write, and a closed context cannot be asked.
+ *
+ * The given contexts are watched from now, and so is every context `browser`
+ * creates until `stop()` (`browser.newPage()` goes through `newContext` too). A
+ * context's record follows its latch: a `?freshdb=1` start lifts both, closing
+ * the context lifts neither.
+ */
+export function watchShimFs(browser: Browser, ...contexts: BrowserContext[]): ShimFsWatch {
+  const lost = new Map<BrowserContext, string>();
+  const watch = (context: BrowserContext) => {
+    context.on("console", (message) => {
+      const text = message.text();
+      if (text.startsWith(SHIM_FS_LOST_SIGNAL)) {
+        if (!lost.has(context)) lost.set(context, text.slice(SHIM_FS_LOST_SIGNAL.length));
+      } else if (text === SHIM_FS_LIFTED_SIGNAL) {
+        lost.delete(context);
+      }
+    });
+  };
+  contexts.forEach(watch);
+
+  const shadowed = Object.prototype.hasOwnProperty.call(browser, "newContext");
+  const newContext = browser.newContext;
+  browser.newContext = async function (this: Browser, ...args: Parameters<Browser["newContext"]>) {
+    const context = await newContext.apply(this, args);
+    watch(context);
+    return context;
+  };
+
+  return {
+    assertIntact(where) {
+      const [first] = lost.values();
+      if (first !== undefined) throw harnessFailure(where, first);
+    },
+    takeLost() {
+      const taken = [...lost.values()];
+      lost.clear();
+      return taken;
+    },
+    stop() {
+      if (shadowed) browser.newContext = newContext;
+      else delete (browser as { newContext?: unknown }).newContext;
+    },
+  };
 }

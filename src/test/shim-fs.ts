@@ -70,6 +70,14 @@ const STORE = SHIM_FS_STORE;
  */
 export const SHIM_FS_LOST_KEY = "histometer-shim-fs-lost";
 
+/**
+ * What the latch announces on the console as it is set and lifted, so a suite
+ * can observe it as it happens: a latch sampled at the end of a test cannot be
+ * read in a context the test has already closed.
+ */
+export const SHIM_FS_LOST_SIGNAL = "[shim-fs:lost] ";
+export const SHIM_FS_LIFTED_SIGNAL = "[shim-fs:lifted]";
+
 function assertNothingLost(): void {
   const message = localStorage.getItem(SHIM_FS_LOST_KEY);
   if (message !== null) throw new Error(message);
@@ -89,6 +97,7 @@ function loseWrite(path: string, bytes: number, cause: unknown): never {
       `report on a database that is no longer under test.`,
   );
   localStorage.setItem(SHIM_FS_LOST_KEY, lost.message);
+  console.error(SHIM_FS_LOST_SIGNAL + lost.message);
   throw lost;
 }
 
@@ -198,6 +207,7 @@ export async function listShimFiles(prefix = ""): Promise<Array<{ path: string; 
 
 export async function clearShimFs(): Promise<void> {
   localStorage.removeItem(SHIM_FS_LOST_KEY);
+  console.info(SHIM_FS_LIFTED_SIGNAL);
   try {
     await transact<void>("readwrite", (store, done) => {
       store.clear();

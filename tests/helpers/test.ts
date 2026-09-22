@@ -1,5 +1,5 @@
 import { test as base } from "@playwright/test";
-import { assertShimFsIntact } from "./shim-fs";
+import { assertShimFsIntact, watchShimFs, type ShimFsWatch } from "./shim-fs";
 
 export * from "@playwright/test";
 
@@ -10,29 +10,34 @@ export * from "@playwright/test";
  * an ordinary failed action while the in-memory database carries on, so without
  * this a test could pass on a database no reload would ever open.
  *
- * It checks every context of the browser, not only the one the fixture hands
- * out. Several specs open their own with `browser.newContext()` - the sync pair,
- * the relaunch specs, the export specs - and a guard that covered only the
- * fixture's context would leave exactly those free to lose a write in silence.
+ * It watches the latch as it is set, in the fixture's context and in every one
+ * the test creates (`watchShimFs`), not by sampling the contexts still open at
+ * teardown: several specs open their own with `browser.newContext()` - the sync
+ * pair, the relaunch specs, the export specs - and close them before the body
+ * ends, which would take a lost write out of reach of any look afterwards.
  *
- * ## A closed target is not a violation
+ * The pages still open are sampled as well, for a loss whose announcement has
+ * not reached the watch by the time the body returns. A closed page is skipped
+ * there by construction (`page.isClosed()`), never by catching an error and
+ * guessing what it meant; the watch has already heard from it.
  *
- * The check must not become a source of flakes itself, so a context or page that
- * the test closed before teardown is excluded BY CONSTRUCTION rather than by
- * catching an error and guessing what it meant: `browser.contexts()` lists only
- * the contexts still open, and `page.isClosed()` skips a page that has gone.
- * Nothing here treats "this target is closed" and "this harness lost a write" as
- * the same event - the first is never reported, and the second always is.
+ * A spec that loses a write on purpose to test this machinery takes it back with
+ * `shimFs.takeLost()` and asserts on what it got.
  *
  * `context` stays in the dependency list so the fixture Playwright hands the
  * test is still open while this runs: fixtures tear down in reverse order, so
  * depending on it keeps it alive until after the check.
  */
-export const test = base.extend<{ shimFsIntact: void }>({
-  shimFsIntact: [
+export const test = base.extend<{ shimFs: ShimFsWatch }>({
+  shimFs: [
     async ({ browser, context }, use) => {
-      await use();
-      void context; // held open for the duration of the check; see above
+      const watch = watchShimFs(browser, context);
+      try {
+        await use(watch);
+      } finally {
+        watch.stop();
+      }
+      watch.assertIntact("the end of the test");
       for (const open of browser.contexts()) {
         for (const page of open.pages()) {
           if (page.isClosed()) continue;

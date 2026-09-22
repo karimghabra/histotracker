@@ -196,6 +196,27 @@ test("every browser test fails when a write was lost during it, even one it neve
   await loseAnAbsorbedWrite(page);
 });
 
+test("a lost write is caught even in a context the test closed before it ended", async ({
+  browser,
+  shimFs,
+}) => {
+  // The shape of the sync, relaunch and export specs: a context of the test's
+  // own, closed inside the body, so nothing looking at open contexts afterwards
+  // can reach it.
+  const own = await browser.newContext();
+  const page = await own.newPage();
+  await boot(page);
+  await loseAnAbsorbedWrite(page);
+  await own.close();
+  expect(browser.contexts(), "the context is gone before the test ends").not.toContain(own);
+
+  expect(() => shimFs.assertIntact("the end of the test")).toThrow(
+    /HARNESS FAILURE, NOT AN APPLICATION DEFECT.*by the end of the test.*result is void.*histometer-shim\.db/s,
+  );
+  // Taken back, so this test's own planted loss does not void it.
+  expect(shimFs.takeLost()).toHaveLength(1);
+});
+
 test("a lost write is still refused after a reload, until a fresh start lifts it", async ({
   page,
 }) => {
