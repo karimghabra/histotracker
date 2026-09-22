@@ -1,5 +1,10 @@
 import type { Page } from "@playwright/test";
-import { SHIM_FS_DB_NAME, SHIM_FS_STORE, SHIM_FS_VERSION } from "../../src/test/shim-fs";
+import {
+  SHIM_FS_DB_NAME,
+  SHIM_FS_LOST_KEY,
+  SHIM_FS_STORE,
+  SHIM_FS_VERSION,
+} from "../../src/test/shim-fs";
 
 /**
  * The suites' way into the browser shims' virtual filesystem (src/test/shim-fs.ts).
@@ -152,4 +157,31 @@ export async function waitForShimDatabase(page: Page): Promise<void> {
     undefined,
     { timeout: 30_000 },
   );
+}
+
+/**
+ * Fail, with the latched message, if the virtual filesystem has lost a write.
+ *
+ * A lost write is a harness failure, not an application one: from that point
+ * the live database and the image a reload would open have diverged, so no
+ * later observation is about the database under test. The message says so, so
+ * that nobody reads it as a defect in the app.
+ */
+export async function assertShimFsIntact(page: Page, where = "this test"): Promise<void> {
+  if (page.isClosed()) return;
+  const lost = await page
+    .evaluate((key) => {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    }, SHIM_FS_LOST_KEY)
+    .catch(() => null);
+  if (lost !== null) {
+    throw new Error(
+      `HARNESS FAILURE, NOT AN APPLICATION DEFECT: the test harness lost a write by ${where}, ` +
+        `so this run's result is void. ${lost}`,
+    );
+  }
 }

@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Page } from "../helpers/test";
 import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../helpers/images";
 import { readShimFile, SHIM_DB_FILE } from "../helpers/shim-fs";
 

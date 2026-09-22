@@ -2,7 +2,7 @@
 // The open list of a native <select> takes its colours from its <option>s, so the
 // assertion is on the computed text and background colour of those options and the
 // contrast between them, read through a 1x1 canvas colour parser. Nothing is looked at.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { setTheme } from "../helpers/app";
 import { addProject, addSample, boot } from "../helpers/lab";
 

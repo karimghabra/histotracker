@@ -3,7 +3,7 @@
 //
 // An open issue is marked `test.fail()` with a comment naming it: CI stays green while the bug is open, goes red the
 // day the fix lands, and whoever fixed it deletes the marker, which turns the test into a hard check.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openBackups, openSettings, setTheme } from "../helpers/app";
 import { DB, addProject, addSample, boot, signOutAndBackIn } from "../helpers/lab";
 

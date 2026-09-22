@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { cutBlockFor } from "../helpers/cut";
 import { addStainFromLogs } from "../helpers/stains";

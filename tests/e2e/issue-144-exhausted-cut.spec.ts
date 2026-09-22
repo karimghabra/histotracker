@@ -4,7 +4,7 @@
 // cut, with a record — so these assert on what the tech sees: the confirm names
 // the cancellation, the card leaves Needs Sectioning, the stain ask is refused,
 // a cut already off the microtome is untouched, and Undo puts everything back.
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogs } from "../helpers/stains";
 import { DB, addProject, addSample, boot } from "../helpers/lab";

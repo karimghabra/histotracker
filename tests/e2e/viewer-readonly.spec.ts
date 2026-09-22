@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 

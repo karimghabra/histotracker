@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../helpers/test";
 import { showRemoved } from "../helpers/app";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { addProject, addSample, boot, signOutAndBackIn } from "../helpers/lab";
 import { readShimTextBySuffix } from "../helpers/shim-fs";

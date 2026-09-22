@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage, openSettings, setTheme, showRemoved, closeDrawerIfOpen } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 

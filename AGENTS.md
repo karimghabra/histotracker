@@ -148,8 +148,9 @@ Conventions in the specs, worth following rather than re-deriving:
   ten megabytes, and `tests/stress3`'s reload read the frozen image back and
   reported destroyed rows for three nights. A failed write now throws and latches
   (a localStorage marker, so it outlives a reload; only `?freshdb=1` lifts it), so the
-  filesystem refuses everything after it, and stress2's `callDb` fails the run on it
-  rather than counting a refusal. Reach it from a spec through
+  filesystem refuses everything after it. Every browser suite imports `test` from
+  `tests/helpers/test.ts`, which fails a test that lost a write as a void run, not an
+  app defect, and stress2's `callDb` and invariant checkpoints do the same. Reach it from a spec through
   `tests/helpers/shim-fs.ts` and never through storage keys, and plant an image with
   its `plantShimImage` - an `addInitScript` cannot, because Playwright does not wait
   for one's promise. `tests/e2e/shim-fs.spec.ts` holds these guarantees.

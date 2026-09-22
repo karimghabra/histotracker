@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openBackups, openManage } from "../helpers/app";
 
 // End-to-end backup + revert against the real snapshot/restore rails (sql.js

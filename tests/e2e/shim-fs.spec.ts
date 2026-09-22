@@ -1,5 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
-import { listShimFiles, SHIM_DB_FILE } from "../helpers/shim-fs";
+import { test, expect, type Page } from "../helpers/test";
+import { assertShimFsIntact, listShimFiles, SHIM_DB_FILE } from "../helpers/shim-fs";
 
 /**
  * The harness's own instrument check.
@@ -144,6 +144,56 @@ test("a write the virtual filesystem cannot make fails the run instead of vanish
     }
   });
   expect(afterwards, "every later operation refuses too").toContain("lost a write");
+
+  // A deliberate fresh start, so this test's own lost write does not void it.
+  await boot(page);
+});
+
+/** Lose a write the way the UI path does: the caller absorbs the error. */
+async function loseAnAbsorbedWrite(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    IDBObjectStore.prototype.put = function put() {
+      throw new DOMException("simulated store failure", "QuotaExceededError");
+    } as unknown as typeof IDBObjectStore.prototype.put;
+    try {
+      await (window as unknown as { __SHIM_SQL__: (s: string) => Promise<void> }).__SHIM_SQL__(
+        `INSERT INTO projects (code, name, team_lead, is_active) VALUES ('AB', 'Absorbed', '', 1)`,
+      );
+    } catch {
+      /* what useActions does with it: an ordinary failed action */
+    }
+  });
+}
+
+test("a lost write the caller absorbed is reported as a void run, not an app defect", async ({
+  page,
+}) => {
+  await boot(page);
+  await loseAnAbsorbedWrite(page);
+
+  // The in-memory database applied the statement, so a read finds nothing wrong.
+  const rows = await select<{ n: number }>(page, `SELECT COUNT(*) AS n FROM projects WHERE code = 'AB'`);
+  expect(rows[0]?.n).toBe(1);
+
+  const verdict = await assertShimFsIntact(page, "the checkpoint").then(
+    () => null,
+    (err: Error) => err.message,
+  );
+  expect(verdict).toContain("HARNESS FAILURE, NOT AN APPLICATION DEFECT");
+  expect(verdict).toContain("by the checkpoint");
+  expect(verdict).toContain("result is void");
+  expect(verdict).toContain("histometer-shim.db");
+
+  await boot(page);
+});
+
+test("every browser test fails when a write was lost during it, even one it never noticed", async ({
+  page,
+}) => {
+  // The shared `test` fixture (tests/helpers/test.ts) fails this after the body.
+  test.fail();
+  await boot(page);
+  await loseAnAbsorbedWrite(page);
 });
 
 test("a lost write is still refused after a reload, until a fresh start lifts it", async ({
