@@ -91,3 +91,35 @@ export async function openNewSample(page: Page, projectCode?: string): Promise<v
   expect(value, `no project named ${projectCode} in the picker`).toBeTruthy();
   await picker.selectOption(value!);
 }
+
+/**
+ * Leave the board with no drawer over it.
+ *
+ * Several specs close the detail drawer after an action that may close it
+ * anyway, and used to do it like this:
+ *
+ * ```ts
+ * const close = page.locator("button:has(svg.lucide-x)").first();
+ * if (await close.isVisible().catch(() => false)) await close.click().catch(() => undefined);
+ * ```
+ *
+ * Both halves of that are a coin toss. The app closes the drawer itself as part
+ * of the follow-up to the action, so "is it open?" and "click it" answer about
+ * different moments: the button can be gone by the time the click lands. And the
+ * click carries no timeout, so when that happens it does not throw into the
+ * waiting `.catch` - it waits for the button to come back until the whole test
+ * dies sixty seconds later, which reads as the app hanging rather than as the
+ * race it is.
+ *
+ * So settle it: close the drawer if it is still there, and do not return until
+ * nothing is covering the board either way.
+ */
+export async function closeDrawerIfOpen(page: Page): Promise<void> {
+  const close = page.locator("button:has(svg.lucide-x)").first();
+  await expect(async () => {
+    if (await close.isVisible().catch(() => false)) {
+      await close.click({ timeout: 2_000 }).catch(() => undefined);
+    }
+    await expect(close).toHaveCount(0);
+  }).toPass({ timeout: 15_000 });
+}

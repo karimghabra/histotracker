@@ -104,6 +104,16 @@ async function seedRackAtImaging(page: Page, groups: number[] = [3], samples = 1
   for (const step of ["Stained", "Coverslipped"]) {
     await page.getByRole("button", { name: step, exact: true }).click();
   }
+  // Finishing the protocol hands the glass on, but that move is the app's own
+  // follow-up write and lands after the click returns. Wait for it here: the
+  // specs below plant rows that change what the move is allowed to do, and a
+  // plant that overtakes it leaves a slide behind in the stain rack — which
+  // reads exactly like the defect under test.
+  const imaging = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
+  await expect(imaging.getByText("EE-1", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(staining.getByText("H&E")).toHaveCount(0);
 }
 
 const drawer = (page: Page) =>
@@ -197,7 +207,7 @@ test("#150: a slide the single-slide rule refuses is left untouched and listed, 
   )) as Array<{ slide_code: string; section_request_id: number }>;
   await page.evaluate(
     (group) =>
-      (window as unknown as { __SHIM_SQL__: (s: string, p: unknown[]) => void }).__SHIM_SQL__(
+      (window as unknown as { __SHIM_SQL__: (s: string, p: unknown[]) => Promise<void> }).__SHIM_SQL__(
         `UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`,
         [group],
       ),

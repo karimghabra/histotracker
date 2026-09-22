@@ -88,7 +88,7 @@ export async function count(page: Page, query: string, params: unknown[] = []): 
 export async function write(page: Page, statement: string, params: unknown[] = []): Promise<void> {
   await page.evaluate(
     ([s, p]) =>
-      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void }).__SHIM_SQL__(
+      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void> }).__SHIM_SQL__(
         s as string,
         p as unknown[],
       ),

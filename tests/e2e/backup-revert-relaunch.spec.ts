@@ -1,6 +1,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openBackups, openManage } from "../helpers/app";
 import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../helpers/images";
+import {
+  readShimFile,
+  waitForShimDatabase,
+  writeShimFile,
+  SHIM_BACKUP_DIR,
+  SHIM_DB_FILE,
+} from "../helpers/shim-fs";
 
 // Reverting to a backup, then closing the app and opening it again.
 //
@@ -16,16 +23,14 @@ import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../hel
 // load: the shim runs the migrator on the first open of each page, as the
 // plugin does on the first open of each process (src/test/browser-sql-shim.ts).
 
-const LIVE = "histometer-shim-fs:histometer-shim.db";
-const BACKUPS = "histometer-shim-fs:backups/";
 const OLD_BACKUP = "histometer-backup-20250301-091500-scheduled.db";
 
 async function plantBackup(page: Page, name: string, b64: string): Promise<void> {
-  await page.evaluate(([key, value]) => window.localStorage.setItem(key, value), [BACKUPS + name, b64]);
+  await writeShimFile(page, SHIM_BACKUP_DIR + name, b64);
 }
 
 async function readBackup(page: Page, name: string): Promise<string> {
-  return page.evaluate((key) => window.localStorage.getItem(key) as string, BACKUPS + name);
+  return (await readShimFile(page, SHIM_BACKUP_DIR + name)) as string;
 }
 
 async function select<T>(page: Page, sql: string): Promise<T[]> {
@@ -56,6 +61,8 @@ async function workflowData(page: Page): Promise<Record<string, unknown[]>> {
 async function relaunch(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Open Histology Workflow" })).toBeVisible({ timeout: 20_000 });
+  // The shell paints before the database is open; this spec reads the database.
+  await waitForShimDatabase(page);
 }
 
 function backupRow(page: Page, name: string) {
@@ -144,7 +151,7 @@ test("a backup this build took reverts exactly as before", async ({ page }) => {
   const image = await readBackup(page, name);
   await page.keyboard.press("Escape");
 
-  await page.evaluate((q) => (window as unknown as { __SHIM_SQL__: (s: string) => void }).__SHIM_SQL__(q),
+  await page.evaluate((q) => (window as unknown as { __SHIM_SQL__: (s: string) => Promise<void> }).__SHIM_SQL__(q),
     `UPDATE samples SET sample_description = 'changed after the backup'`);
 
   await revertTo(page, name);
@@ -187,13 +194,13 @@ for (const [what, damage, refusal] of [
     await plantBackup(page, bad, damage(await readBackup(page, good)));
     await page.keyboard.press("Escape");
     const before = await workflowData(page);
-    const liveBefore = await page.evaluate((key) => window.localStorage.getItem(key), LIVE);
+    const liveBefore = await readShimFile(page, SHIM_DB_FILE);
 
     await revertTo(page, bad);
     await expect(page.getByRole("dialog", { name: "Database backups" }).getByText(refusal)).toBeVisible({
       timeout: 15_000,
     });
-    expect(await page.evaluate((key) => window.localStorage.getItem(key), LIVE)).toBe(liveBefore);
+    expect(await readShimFile(page, SHIM_DB_FILE)).toBe(liveBefore);
     // No safety backup either: nothing was about to change.
     await expect(page.getByRole("dialog", { name: "Database backups" }).getByText("Before revert")).toHaveCount(0);
 

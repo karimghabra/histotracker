@@ -20,6 +20,9 @@
 // (shim-fs) under SHIM_DB_FILE. That same path is what getDbFilePath() resolves
 // to here, so the core shim's read_file/save_file operate on this exact image,
 // which is what makes the real backup, revert and sync paths run unmodified.
+// The virtual filesystem is asynchronous (IndexedDB — see shim-fs.ts for why),
+// so persisting is awaited everywhere: a statement's effect reaches the file
+// before the call that made it resolves, exactly as SQLite's own write does.
 import initSqlJs, { type Database as SqlJsDb, type SqlJsStatic } from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { clearShimFs, readShimFile, writeShimFile } from "./shim-fs";
@@ -116,18 +119,17 @@ let SQL: SqlJsStatic | null = null;
 // performs, otherwise a revert would wipe the DB it just restored.
 let freshHandled = false;
 
-function shouldReset(): boolean {
+async function shouldReset(): Promise<boolean> {
   if (freshHandled) return false;
   freshHandled = true;
+  let fresh = false;
   try {
-    if (new URLSearchParams(window.location.search).get("freshdb") === "1") {
-      clearShimFs();
-      return true;
-    }
+    fresh = new URLSearchParams(window.location.search).get("freshdb") === "1";
   } catch {
-    /* ignore */
+    /* no location to read: not a fresh start */
   }
-  return false;
+  if (fresh) await clearShimFs();
+  return fresh;
 }
 
 function normalizeBinds(values: unknown[] | undefined): Array<number | string | Uint8Array | null> {
@@ -148,8 +150,11 @@ export interface QueryResult {
  * Run `work` on the live database and persist what it did: the shim's stand-in
  * for a Rust command that opens the database file itself (undo_journal.rs). The
  * sql.js database lives in memory, so "its own connection" is this one.
+ *
+ * `work` is synchronous, as the Rust command's transaction is; only the write to
+ * the virtual file is awaited, which is the command's own return to the caller.
  */
-export function withLiveDatabase<T>(work: (db: SqlHandle) => T): T {
+export async function withLiveDatabase<T>(work: (db: SqlHandle) => T): Promise<T> {
   if (!live) throw new Error("Could not open the database: no database is loaded");
   const db = live.db;
   const handle: SqlHandle = {
@@ -170,11 +175,33 @@ export function withLiveDatabase<T>(work: (db: SqlHandle) => T): T {
   try {
     return work(handle);
   } finally {
-    live.persist();
+    await live.persist();
   }
 }
 
 let live: Database | null = null;
+
+/**
+ * The connection that has just been closed, kept readable until its replacement
+ * is open.
+ *
+ * A restore closes the live connection, overwrites the file and opens another
+ * against the new bytes (db.ts: resetDb → save_file → getDb). The file is a
+ * virtual one here and holds no lock, so nothing needs the outgoing sql.js
+ * handle freed at that exact moment — but a spec polling the read hatch across
+ * the swap does need SOMETHING to read, and reaching a freed handle gets
+ * "out of memory" from sql.js rather than an answer. So the outgoing database is
+ * retired rather than destroyed: a read during the swap sees the lab as it stood
+ * before it, and the poll goes round again.
+ */
+let retired: SqlJsDb | null = null;
+
+/** The database the read hatch answers from: the live one, or the one being replaced. */
+function hatchDb(): SqlJsDb {
+  const db = live?.db ?? retired;
+  if (!db) throw new Error("__SHIM_SELECT__: no database has been opened on this page");
+  return db;
+}
 
 export default class Database {
   path: string;
@@ -188,7 +215,7 @@ export default class Database {
   static async load(path: string): Promise<Database> {
     if (!SQL) SQL = await initSqlJs({ locateFile: () => wasmUrl });
 
-    const saved = !shouldReset() ? readShimFile(SHIM_DB_FILE) : null;
+    const saved = (await shouldReset()) ? null : await readShimFile(SHIM_DB_FILE);
     const db = saved ? new SQL.Database(saved) : new SQL.Database();
     db.run("PRAGMA foreign_keys = ON;");
     if (migrationsPending) {
@@ -207,26 +234,34 @@ export default class Database {
     }
     const instance = new Database(path, db);
     live = instance;
-    // Test-only escape hatch: lets a spec plant a row shape the UI cannot
+    // The connection this replaces has served its last read; free it now.
+    retired?.close();
+    retired = null;
+    // Test-only escape hatches: they let a spec plant a row shape the UI cannot
     // produce — e.g. a pre-0.4.6 cut group with `duplicates > 0` and no slides,
-    // which is what the read-from-a-write viewer bug needs. This file is aliased
-    // in ONLY by vite.config.playwright.ts, so it never reaches a shipped build.
-    (window as unknown as Record<string, unknown>).__SHIM_SQL__ = (
+    // which is what the read-from-a-write viewer bug needs — and check the DATA
+    // after driving the UI, not just what the UI drew. Most of what goes wrong in
+    // a workflow app is invisible on screen: an orphaned slide, a rack left open
+    // with nothing in it, a code issued twice, and only a query finds it. This
+    // file is aliased in ONLY by vite.config.playwright.ts, so neither reaches a
+    // shipped build.
+    //
+    // They are installed here, at the end of opening, so their presence is what a
+    // spec waits on to know the database is up — but they resolve the connection
+    // at CALL time (`hatchDb`), never capturing this one.
+    (window as unknown as Record<string, unknown>).__SHIM_SQL__ = async (
       sql: string,
       params?: unknown[],
     ) => {
-      db.run(sql, normalizeBinds(params) as never);
-      instance.persist();
+      if (!live) throw new Error("__SHIM_SQL__: no database is open to write to");
+      live.db.run(sql, normalizeBinds(params) as never);
+      await live.persist();
     };
-    // The read counterpart, for the stress suite: it lets a spec check the DATA
-    // after driving the UI, not just what the UI drew. Most of what goes wrong
-    // in a workflow app is invisible on screen — an orphaned slide, a rack left
-    // open with nothing in it, a code issued twice — and only a query finds it.
     (window as unknown as Record<string, unknown>).__SHIM_SELECT__ = (
       sql: string,
       params?: unknown[],
     ) => {
-      const stmt = db.prepare(sql);
+      const stmt = hatchDb().prepare(sql);
       try {
         stmt.bind(normalizeBinds(params));
         const rows: unknown[] = [];
@@ -236,7 +271,7 @@ export default class Database {
         stmt.free();
       }
     };
-    instance.persist();
+    await instance.persist();
     return instance;
   }
 
@@ -269,22 +304,32 @@ export default class Database {
     const rowsAffected = this.db.getRowsModified();
     const idRes = this.db.exec("SELECT last_insert_rowid() AS id");
     const lastInsertId = Number(idRes[0]?.values?.[0]?.[0] ?? 0);
-    this.persist();
+    await this.persist();
     return { rowsAffected, lastInsertId };
   }
 
   async close(): Promise<boolean> {
-    if (live === this) live = null;
-    this.persist();
-    this.db.close();
+    await this.persist();
+    if (live === this) {
+      // Retire rather than free: the read hatch still has to answer while the
+      // replacement opens (see `retired`).
+      live = null;
+      retired?.close();
+      retired = this.db;
+    } else {
+      this.db.close();
+    }
     return true;
   }
 
-  persist(): void {
-    try {
-      writeShimFile(SHIM_DB_FILE, this.db.export());
-    } catch {
-      // Serialization failure: keep running in-memory only.
-    }
+  /**
+   * Write the live database through to the virtual file.
+   *
+   * Nothing is caught here. A database the harness could not store is a database
+   * the next reload will not see, and a suite that carried on past that is what
+   * reported destroyed rows for three nights running (shim-fs.ts).
+   */
+  persist(): Promise<void> {
+    return writeShimFile(SHIM_DB_FILE, this.db.export());
   }
 }

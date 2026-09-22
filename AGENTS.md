@@ -108,18 +108,21 @@ suite runs" below applies to running two heavy suites side by side.
 | --- | --- | --- |
 | `pnpm verify --only data` | 21s | tsc, harness, legacy, vitest, scenarios, compat, release, suites, E4 guard, G1 build+bundle |
 | `pnpm verify --only render` | 30s | 8 surfaces x 2 widths, base vs head |
-| `pnpm verify --only e2e` (= `npx playwright test`, retries 0) | 514s | 156 tests, `tests/e2e` |
+| `pnpm verify --only e2e` (= `npx playwright test`, retries 0) | 492s | 187 tests, `tests/e2e` |
 | `pnpm test:screenshot` | ~130s | 35 tests writing the 26 captures E4 moved here |
-| stress2 (nightly in CI) | 702s | 14 tests |
-| stress3 (nightly in CI) | 363s | 13 tests |
+| stress2 (nightly in CI) | 384s | 14 tests |
+| stress3 (nightly in CI) | 242s | 13 tests |
 
 `pnpm verify` (without `--screenshot`) runs the first three in sequence, stopping at the first red one.
 
-stress2's two big swarm tests are the exception to that table on a WSL2 host: `seedLarge` there has
-taken 537s for the 150-block board that a CI runner seeds in 79s, which expires the config's 900s
-per-test timeout during setup while CI passes the same test in 4.8m.
-A swarm timeout whose findings line shows a seeding time in the hundreds of seconds is that, not a
-defect; re-run the one test with `--timeout` raised before reading anything into it.
+The stress figures above were 702s and 363s, and `seedLarge` took 537s here for the board a CI
+runner seeded in 79s - slow enough to expire stress2's 900s per-test timeout during setup.
+This file used to record that as a WSL2 artefact to budget around, and it was not: the shims kept
+the database base64-encoded in localStorage, and every write past about sixty blocks still paid the
+encode of a growing multi-megabyte image before `setItem` threw the result away
+(`src/test/shim-fs.ts`).
+The harness was doing all the work of persisting and none of the persisting.
+Do not read a slow or timing-out stress run as this machine being this machine; measure it.
 
 **Never run the packaged desktop app or its suite on the lab machine.** It opens
 real windows on the desktop someone is working on. Browser suites are headless;
@@ -138,6 +141,16 @@ Conventions in the specs, worth following rather than re-deriving:
 
 - `page.goto("/?freshdb=1")` starts from a clean DB, honoured once per load, so a
   restore's reopen does not wipe itself (`src/test/browser-sql-shim.ts`).
+- **The shims' virtual filesystem is IndexedDB, it is asynchronous, and a write it
+  cannot make fails the run** (`src/test/shim-fs.ts`). It was base64 in
+  localStorage, which tops out near 3.7 MB and had its quota error swallowed, so a
+  stress run's stored database froze around sixty blocks while the live one grew to
+  ten megabytes, and `tests/stress3`'s reload read the frozen image back and
+  reported destroyed rows for three nights. A failed write now throws and latches,
+  so the filesystem refuses everything after it. Reach it from a spec through
+  `tests/helpers/shim-fs.ts` and never through storage keys, and plant an image with
+  its `plantShimImage` - an `addInitScript` cannot, because Playwright does not wait
+  for one's promise. `tests/e2e/shim-fs.spec.ts` holds both guarantees.
 - The shim copies the database file instantly, which hides any race that lives in a
   copy's duration. `window.__SNAPSHOT_IPC_MS__` gives `read_file`/`save_file` of the
   database the time they take on a lab-sized one (`tests/e2e/undo-races.spec.ts`).

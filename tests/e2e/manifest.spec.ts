@@ -161,12 +161,14 @@ test("#77: a change nobody was signed in for reads as Unsigned, not as somebody"
   // the only rows like this are ones written by a build older than 0.14.0. They
   // are still in the lab's database, so the manifest still has to render them,
   // and rendering them as somebody would be worse than the gap itself.
-  await page.evaluate(() => {
-    (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void }).__SHIM_SQL__(
+  await page.evaluate(() =>
+    (
+      window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void> }
+    ).__SHIM_SQL__(
       `INSERT INTO audit_events (user_id, action, entity_type, entity_id, summary, created_at)
        VALUES (NULL, 'update', 'sample', 1, 'Updated sample EE-0001 by an older build', '2019-07-02 03:11')`,
-    );
-  });
+    ),
+  );
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
   await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });

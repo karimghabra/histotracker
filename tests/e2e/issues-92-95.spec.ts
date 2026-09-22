@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage, openSettings, setTheme, showRemoved } from "../helpers/app";
+import { openManage, openSettings, setTheme, showRemoved, closeDrawerIfOpen } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -230,10 +230,8 @@ test("#95: a queued slide has no Cut step until the group is sectioned", async (
   // Actually section it.
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
-  const drawerClose = page.locator("button:has(svg.lucide-x)").first();
-  if (await drawerClose.isVisible().catch(() => false)) {
-    await drawerClose.click().catch(() => undefined);
-  }
+  // The drawer may close itself once the group moves on; settle it either way.
+  await closeDrawerIfOpen(page);
 
   // Now it is cut, and says so.
   expect(await slideTimelineHasCut()).toBe(true);

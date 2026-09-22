@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage, showRemoved } from "../helpers/app";
+import { openManage, showRemoved, closeDrawerIfOpen } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // #73 / #83 (removing slides without recycling their letters) and #74 (archiving
@@ -99,11 +99,8 @@ test("#73/#83: removing an extra does not recycle its slide letter", async ({ pa
   // The cut group has to leave Needs Sectioning before its extras are inventory.
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
-  // The drawer may close itself once the group moves on — only close it if it didn't.
-  const drawerClose = page.locator("button:has(svg.lucide-x)").first();
-  if (await drawerClose.isVisible().catch(() => false)) {
-    await drawerClose.click().catch(() => undefined);
-  }
+  // The drawer may close itself once the group moves on; settle it either way.
+  await closeDrawerIfOpen(page);
 
   // Open the Extras inventory and remove slide C (#83). Removal now demands a
   // reason and keeps the record — the old flow was a confirm() that deleted.

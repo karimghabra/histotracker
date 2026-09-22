@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openManage, showRemoved } from "../helpers/app";
+import { openManage, showRemoved, closeDrawerIfOpen } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -156,10 +156,8 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
   // what auto-splits the group's stain slides into an agent rack.
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
-  const drawerClose = page.locator("button:has(svg.lucide-x)").first();
-  if (await drawerClose.isVisible().catch(() => false)) {
-    await drawerClose.click().catch(() => undefined);
-  }
+  // The drawer may close itself once the group moves on; settle it either way.
+  await closeDrawerIfOpen(page);
   const staining = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Staining / IHC", exact: true }) });

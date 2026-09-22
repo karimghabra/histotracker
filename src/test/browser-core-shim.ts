@@ -9,9 +9,11 @@
 // read_file/save_file DO operate on the shared virtual filesystem (shim-fs) so
 // the real image paths (backups and their revert, the sync publish and pull):
 // snapshotDb() reads the DB file bytes and restoreDb() overwrites them, run
-// unmodified against a genuine "file". The undo journal's two Rust commands are
-// modelled in undoJournalCommands.ts and run on the live sql.js database.
-import { readShimFile, writeShimFile } from "./shim-fs";
+// unmodified against a genuine "file". That filesystem is IndexedDB-backed and
+// therefore asynchronous, which is all the awaits below are. The undo journal's
+// two Rust commands are modelled in undoJournalCommands.ts and run on the live
+// sql.js database.
+import { listShimFiles, readShimFile, removeShimFile, writeShimFile } from "./shim-fs";
 import { migrateImageBytes, SHIM_DB_FILE, withLiveDatabase } from "./browser-sql-shim";
 import { executeBatch, revertJournal } from "./undoJournalCommands";
 import { ImageRefused } from "./sqlx-migrator";
@@ -21,18 +23,11 @@ import { ImageRefused } from "./sqlx-migrator";
 const BACKUP_DIR = "backups/";
 const SQLITE_MAGIC = "SQLite format 3\0";
 
-function backupList(): Array<{ name: string; path: string; size: number }> {
-  const prefix = "histometer-shim-fs:" + BACKUP_DIR;
-  const out: Array<{ name: string; path: string; size: number }> = [];
-  for (let i = 0; i < window.localStorage.length; i += 1) {
-    const key = window.localStorage.key(i);
-    if (!key || !key.startsWith(prefix)) continue;
-    const name = key.slice(prefix.length);
-    const bytes = readShimFile(BACKUP_DIR + name);
-    out.push({ name, path: BACKUP_DIR + name, size: bytes?.length ?? 0 });
-  }
-  out.sort((a, b) => a.name.localeCompare(b.name));
-  return out;
+async function backupList(): Promise<Array<{ name: string; path: string; size: number }>> {
+  const files = await listShimFiles(BACKUP_DIR);
+  return files
+    .map((f) => ({ name: f.path.slice(BACKUP_DIR.length), path: f.path, size: f.size }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const SYNC_CONFIG = {
@@ -146,24 +141,26 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
     case "read_file": {
       // The bytes are read NOW, as std::fs::read does at the start of the Rust
       // command; only their delivery waits, as the JSON marshalling does.
-      const bytes = readShimFile(String(_args?.path ?? ""));
+      const bytes = await readShimFile(String(_args?.path ?? ""));
       await ipcCost(String(_args?.path ?? ""));
       return Array.from(bytes ?? new Uint8Array()) as unknown as T;
     }
     case "save_file": {
       const contents = (_args?.contents as number[] | undefined) ?? [];
       await ipcCost(String(_args?.path ?? ""));
-      writeShimFile(String(_args?.path ?? ""), Uint8Array.from(contents));
+      await writeShimFile(String(_args?.path ?? ""), Uint8Array.from(contents));
       return undefined as unknown as T;
     }
 
     // ---- Undo journal (undo_journal.rs), modelled in undoJournalCommands.ts ----
     case "undo_journal_revert":
-      return withLiveDatabase((db) =>
+      return (await withLiveDatabase((db) =>
         revertJournal(db, Number(_args?.from ?? 0), Number(_args?.to ?? 0)),
-      ) as unknown as T;
+      )) as unknown as T;
     case "undo_journal_install":
-      return withLiveDatabase((db) => executeBatch(db, (_args?.statements as string[]) ?? [])) as unknown as T;
+      return (await withLiveDatabase((db) =>
+        executeBatch(db, (_args?.statements as string[]) ?? []),
+      )) as unknown as T;
 
     // ---- Backups (backup.rs) against the virtual FS -----------------------
     case "backup_dir_path":
@@ -175,21 +172,17 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
       if (bytes.length < 16 || header !== SQLITE_MAGIC) {
         throw new Error("refusing to write a backup that is not a valid SQLite image");
       }
-      writeShimFile(BACKUP_DIR + name, bytes);
+      await writeShimFile(BACKUP_DIR + name, bytes);
       return { name, path: BACKUP_DIR + name, size: bytes.length } as unknown as T;
     }
     case "backup_list":
-      return backupList() as unknown as T;
+      return (await backupList()) as unknown as T;
     case "backup_read": {
-      const bytes = readShimFile(BACKUP_DIR + String(_args?.name ?? ""));
+      const bytes = await readShimFile(BACKUP_DIR + String(_args?.name ?? ""));
       return Array.from(bytes ?? new Uint8Array()) as unknown as T;
     }
     case "backup_delete": {
-      try {
-        window.localStorage.removeItem("histometer-shim-fs:" + BACKUP_DIR + String(_args?.name ?? ""));
-      } catch {
-        /* ignore */
-      }
+      await removeShimFile(BACKUP_DIR + String(_args?.name ?? ""));
       return undefined as unknown as T;
     }
     // migrate.rs: bring a backup or a pulled snapshot up to this build's
@@ -206,15 +199,9 @@ export async function invoke<T>(cmd: string, _args?: Record<string, unknown>): P
 
     case "backup_prune": {
       const keep = Number(_args?.keep ?? 48);
-      const all = backupList(); // ascending by name (oldest first)
+      const all = await backupList(); // ascending by name (oldest first)
       const doomed = all.slice(0, Math.max(0, all.length - keep));
-      for (const b of doomed) {
-        try {
-          window.localStorage.removeItem("histometer-shim-fs:" + b.path);
-        } catch {
-          /* ignore */
-        }
-      }
+      for (const b of doomed) await removeShimFile(b.path);
       return doomed.map((b) => b.name) as unknown as T;
     }
 

@@ -6,6 +6,7 @@ import { readSheet, readWorkbook } from "../helpers/xlsx";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findShimFileBySuffix, plantShimImage } from "../helpers/shim-fs";
 
 /**
  * The Excel side of the exports, driven through the app's own Save buttons.
@@ -48,17 +49,9 @@ async function newSample(
 
 /** The bytes of the most recently saved file whose path ends with `suffix`. */
 async function savedFile(page: Page, suffix: string): Promise<Uint8Array> {
-  const b64 = await page.evaluate((end) => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(end)) {
-        return localStorage.getItem(k) as string;
-      }
-    }
-    return "";
-  }, suffix);
-  expect(b64, `nothing was saved ending in ${suffix}`).not.toBe("");
-  return Uint8Array.from(Buffer.from(b64, "base64"));
+  const b64 = await findShimFileBySuffix(page, suffix);
+  expect(b64, `nothing was saved ending in ${suffix}`).not.toBeNull();
+  return Uint8Array.from(Buffer.from(b64 as string, "base64"));
 }
 
 test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)", async ({
@@ -235,11 +228,10 @@ test("a populated database from before #137 gains embedding notes with its rows 
     "utf8",
   ).trim();
   const context = await browser.newContext();
-  await context.addInitScript(
-    ([key, image]: [string, string]) => window.localStorage.setItem(key, image),
-    ["histometer-shim-fs:histometer-shim.db", b64] as [string, string],
-  );
   const page = await context.newPage();
+  // The virtual filesystem is IndexedDB, so the image is planted from a page on
+  // this origin rather than from an init script (tests/helpers/shim-fs.ts).
+  await plantShimImage(page, b64);
   const pageErrors: string[] = [];
   page.on("pageerror", (e) => pageErrors.push(e.message));
 

@@ -2,6 +2,26 @@ import { test, expect, type Page } from "@playwright/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
+import { findShimFileBySuffix, readShimTextBySuffix } from "../helpers/shim-fs";
+
+/** A board column, scoped by its own heading. */
+const boardColumn = (page: Page, title: string) =>
+  page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+
+/**
+ * The "N slides" line on the Needs Sectioning card.
+ *
+ * Never `page.getByText("3 slides")`: that matches this card AND the open sample
+ * drawer's "Awaiting cut - 3 slides", so which one `.first()` picks depends on
+ * which has rendered. A click meant for the card lands on the drawer, opens Edit
+ * plan instead of the section, and the Mark Sectioned button it was after never
+ * comes - sixty seconds of waiting that reads as the app hanging.
+ */
+const sectioningCard = (page: Page, text = "3 slides") =>
+  boardColumn(page, "Needs Sectioning").getByText(text);
+
 
 // Real end-to-end drive of the lab workflow in the actual app, used to verify
 // the sectioning/processing issues (#35, #36, #40, #41, #42, #37) against the
@@ -114,21 +134,21 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
 
   // Mark Sectioned → the section leaves Needs Sectioning and a stain rack tile
   // ("Alcian Blue") is minted in Staining.
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
   const staining = page
     .locator("div.rounded-lg")
     .filter({ has: page.getByRole("heading", { name: "Staining / IHC" }) });
   await expect(staining.getByText("Alcian Blue").first()).toBeVisible(); // rack minted in Staining
-  await expect(page.getByText("3 slides")).toHaveCount(0); // section left Needs Sectioning
+  await expect(sectioningCard(page)).toHaveCount(0); // section left Needs Sectioning
 
   // Undo the transfer → the minted tile must disappear from Staining (no ghost)
   // and the Needs Sectioning card must return. Replaying the action's journal range
   // takes back the row that minted the rack with the rest, so nothing is left behind.
   await page.getByTitle("Undo (Ctrl+Z)").click({ force: true });
   await expect(staining.getByText("Alcian Blue")).toHaveCount(0); // no ghost tile in Staining
-  await expect(page.getByText("3 slides").first()).toBeVisible(); // section restored
+  await expect(sectioningCard(page).first()).toBeVisible(); // section restored
 });
 
 test("a planned run's sample list is editable in the drawer (#32)", async ({ page }) => {
@@ -191,10 +211,10 @@ test("sectioning: per-slide cutting, no stale plan tag, slide-count button (#35/
 
   // Send the default cut → a Needs Sectioning card appears for the sample.
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await expect(page.getByText("3 slides").first()).toBeVisible();
+  await expect(sectioningCard(page).first()).toBeVisible();
 
   // #40: the Mark Sectioned button counts SLIDES (3), not stain types (0).
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await expect(page.getByRole("button", { name: "Mark Sectioned (3)" })).toBeVisible();
 });
 
@@ -231,7 +251,7 @@ test("needs-sectioning card exposes a real multi-select checkbox (#37)", async (
   await page.getByText("EE-1", { exact: true }).first().click();
   await page.getByRole("button", { name: /Send for Cutting/ }).click();
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await expect(page.getByText("3 slides").first()).toBeVisible();
+  await expect(sectioningCard(page).first()).toBeVisible();
 
   // The card's checkbox is a real input that toggles selection on click.
   // Scope to the Needs Sectioning column (the block also sits in Embedded
@@ -268,7 +288,7 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
 
   // Mark Sectioned → a stain rack ("Alcian Blue") is minted in Staining.
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
   const staining = page
@@ -308,7 +328,15 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
     await expect(boxes.first()).toBeVisible();
     for (let i = 0; i < (await boxes.count()); i += 1) {
       const box = boxes.nth(i);
-      if (!(await box.isChecked())) await box.check();
+      // click + wait, not check(): this box is controlled by the record, so the
+      // click's own tick is undone by the next render and only comes back once
+      // the write has landed and the query refetched. `check()` reads the state
+      // immediately after clicking and so depends on that render being slower
+      // than Playwright, which it is not obliged to be.
+      if (!(await box.isChecked())) {
+        await box.click();
+        await expect(box).toBeChecked();
+      }
     }
   }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
@@ -340,7 +368,7 @@ test("Logs status partition + CSV export", async ({ page }) => {
     .first()
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   const staining = page
@@ -365,7 +393,11 @@ test("Logs status partition + CSV export", async ({ page }) => {
     await expect(boxes.first()).toBeVisible();
     for (let i = 0; i < (await boxes.count()); i += 1) {
       const box = boxes.nth(i);
-      if (!(await box.isChecked())) await box.check();
+      // click + wait, not check(): see the note on the first of these.
+      if (!(await box.isChecked())) {
+        await box.click();
+        await expect(box).toBeChecked();
+      }
     }
   }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();
@@ -396,13 +428,7 @@ test("Logs status partition + CSV export", async ({ page }) => {
   // Export CSV (no stage filter) → confirmation + the file lands in the virtual FS.
   await page.getByRole("button", { name: "CSV", exact: true }).click();
   await expect(page.getByText("Exported.")).toBeVisible();
-  const csv = await page.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".csv")) return atob(localStorage.getItem(k) as string);
-    }
-    return null;
-  });
+  const csv = await readShimTextBySuffix(page, ".csv");
   expect(csv).toContain("Sample ID");
   expect(csv).toContain("EE-1-A");
   expect(csv).toContain("Alcian Blue");
@@ -411,13 +437,7 @@ test("Logs status partition + CSV export", async ({ page }) => {
   // Export XLSX too → a .xlsx lands in the virtual FS.
   await page.getByRole("button", { name: "Excel", exact: true }).click();
   await expect(page.getByText("Exported.")).toBeVisible();
-  const hasXlsx = await page.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".xlsx")) return true;
-    }
-    return false;
-  });
+  const hasXlsx = (await findShimFileBySuffix(page, ".xlsx")) !== null;
   expect(hasXlsx).toBe(true);
 });
 
@@ -438,7 +458,7 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
   // not just the first cut group's one slide. A queued group is still editable
   // (#116), so on the workstation they appear as editor rows rather than the
   // read-only list a viewer sees.
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await expect(page.getByLabel("Purpose for EE-1-A")).toBeVisible();
   await expect(page.getByLabel("Purpose for EE-1-B")).toBeVisible();
 });
@@ -455,7 +475,7 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
@@ -490,7 +510,7 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
     .selectOption({ index: 1 });
   await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
-  await page.getByText("3 slides").first().click();
+  await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
