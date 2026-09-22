@@ -1,5 +1,6 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Page } from "../helpers/test";
 import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../helpers/images";
+import { readShimFile, SHIM_DB_FILE } from "../helpers/shim-fs";
 
 // A viewer pulls the workstation's snapshot, then is closed and opened again.
 //
@@ -17,7 +18,6 @@ import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../hel
 // a new page load: the shim runs the migrator on the first open of each page,
 // as the plugin does on the first open of each process.
 
-const LIVE = "histometer-shim-fs:histometer-shim.db";
 const LAST_SYNCED = "histometer-shim-last-version";
 
 /** Publish `b64` as the workstation's latest snapshot, stamped `version`. */
@@ -126,7 +126,7 @@ test("a snapshot from a newer version is refused out loud, and the viewer's copy
   await publish(page, ns, preMigrationImage(), "2026-01-01T00:00:00.000Z");
   await page.goto("/?freshdb=1");
   await showsTheLab(page, "after the first pull");
-  const live = (await stored(page, LIVE))!;
+  const live = (await readShimFile(page, SHIM_DB_FILE))!;
   const lastSynced = await stored(page, LAST_SYNCED);
   expect(lastSynced).toBe("2026-01-01T00:00:00.000Z");
 
@@ -145,7 +145,7 @@ test("a snapshot from a newer version is refused out loud, and the viewer's copy
   await expect(page.getByRole("button", { name: "Request stain" })).toBeInViewport({ ratio: 1 });
   // …and it stays on the sync pill once that notice has gone.
   await expect(page.getByText("Sync error", { exact: true })).toHaveAttribute("title", refusal);
-  expect(await stored(page, LIVE)).toBe(live);
+  expect(await readShimFile(page, SHIM_DB_FILE)).toBe(live);
   // Not marked as pulled, so the viewer takes it once it can open it.
   expect(await stored(page, LAST_SYNCED)).toBe(lastSynced);
 

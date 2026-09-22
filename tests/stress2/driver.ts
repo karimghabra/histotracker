@@ -1,5 +1,6 @@
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Page } from "../helpers/test";
 import { INVARIANTS } from "./invariants";
+import { assertShimFsIntact } from "../helpers/shim-fs";
 
 /**
  * Harness v2 driver.
@@ -88,7 +89,7 @@ export async function count(page: Page, query: string, params: unknown[] = []): 
 export async function write(page: Page, statement: string, params: unknown[] = []): Promise<void> {
   await page.evaluate(
     ([s, p]) =>
-      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void }).__SHIM_SQL__(
+      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void> }).__SHIM_SQL__(
         s as string,
         p as unknown[],
       ),
@@ -109,7 +110,10 @@ export async function callDb<T = unknown>(
   fn: string,
   args: unknown[],
 ): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  return (await page.evaluate(
+  // A write the harness's filesystem lost is not the application declining an
+  // action: it fails the run, before and after the call alike.
+  await assertShimFsIntact(page, `calling ${fn}`);
+  const result = (await page.evaluate(
     async ([name, params]) => {
       try {
         const mod = (await import("/src/lib/db.ts")) as unknown as Record<
@@ -128,6 +132,8 @@ export async function callDb<T = unknown>(
     },
     [fn, args] as const,
   )) as { ok: true; value: T } | { ok: false; error: string };
+  await assertShimFsIntact(page, `calling ${fn}`);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +201,7 @@ export async function checkInvariants(
   findings: Finding[],
   where: string,
 ): Promise<number> {
+  await assertShimFsIntact(page, where);
   let broken = 0;
   for (const inv of INVARIANTS) {
     const rows = await sql(page, inv.query);
@@ -340,6 +347,7 @@ export async function checkInvariantsFast(
   findings: Finding[],
   where: string,
 ): Promise<number> {
+  await assertShimFsIntact(page, where);
   const results = (await page.evaluate((invs) => {
     const select = (window as unknown as { __SHIM_SELECT__: (s: string) => unknown[] })
       .__SHIM_SELECT__;

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../helpers/test";
 import { openManage } from "../helpers/app";
 
 // Undo and redo through the real UI: a mutation, an undo that replays the undo

@@ -69,7 +69,7 @@ async function openRack(page: import("@playwright/test").Page, assay: string): P
 async function planted(page: import("@playwright/test").Page, statement: string, params: unknown[]) {
   await page.evaluate(
     ([s, p]) =>
-      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void }).__SHIM_SQL__(
+      (window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void> }).__SHIM_SQL__(
         s as string,
         p as unknown[],
       ),

@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "../helpers/test";
 import { boot, addProject, addSample } from "../helpers/lab";
 import { settleAfterDrop } from "../helpers/drag";
 

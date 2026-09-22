@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { sql, type Finding } from "../stress2/driver";
+import { assertShimFsIntact } from "../helpers/shim-fs";
 
 /**
  * "The view tells the truth about the data" — as an invariant.
@@ -142,6 +143,7 @@ export async function checkViewsAgainstData(
   // would throw away the React-side undo stack the test is measuring.
   opts: { refresh?: boolean } = {},
 ): Promise<number> {
+  await assertShimFsIntact(page, where);
   let bad = 0;
   const report = (detail: string, corroboration: string) => {
     bad += 1;

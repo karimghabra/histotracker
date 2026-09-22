@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "../helpers/test";
 import { openManage, setTheme } from "../helpers/app";
 import { contrastRatio } from "../../src/lib/theme";
 

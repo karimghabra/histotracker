@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../helpers/test";
 import { openManage } from "../helpers/app";
 
 // A real drive-through of the write path: add a lab user, sign in, create a

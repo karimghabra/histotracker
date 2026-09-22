@@ -495,7 +495,7 @@ test("swarm: the invariants still bind on a large board", async ({ page, finding
 
     await page.evaluate(
       (statement) =>
-        (window as unknown as { __SHIM_SQL__: (q: string) => void }).__SHIM_SQL__(statement),
+        (window as unknown as { __SHIM_SQL__: (q: string) => Promise<void> }).__SHIM_SQL__(statement),
       poison.sql,
     );
     const caught: Finding[] = [];
@@ -503,17 +503,19 @@ test("swarm: the invariants still bind on a large board", async ({ page, finding
     if (!caught.some((f) => f.detail.includes(poison.id))) blind.push(poison.id);
 
     await page.evaluate(
-      ([rows, stacks]) => {
-        const w = window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void };
-        w.__SHIM_SQL__("DELETE FROM slides");
+      async ([rows, stacks]) => {
+        const w = window as unknown as {
+          __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void>;
+        };
+        await w.__SHIM_SQL__("DELETE FROM slides");
         for (const row of rows as Array<Record<string, unknown>>) {
           const cols = Object.keys(row);
-          w.__SHIM_SQL__(
+          await w.__SHIM_SQL__(
             `INSERT INTO slides (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
             cols.map((c) => row[c]),
           );
         }
-        w.__SHIM_SQL__(
+        await w.__SHIM_SQL__(
           `DELETE FROM slide_stacks WHERE id NOT IN (SELECT id FROM slide_stacks ORDER BY id LIMIT ?)`,
           [stacks as number],
         );

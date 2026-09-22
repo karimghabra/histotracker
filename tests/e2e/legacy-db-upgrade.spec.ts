@@ -1,8 +1,9 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../helpers/test";
 import { showRemoved } from "../helpers/app";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { plantShimImage } from "../helpers/shim-fs";
 
 // The update must not compromise a database that is already in use. This loads a
 // REAL pre-0023 image (built by scripts/make-legacy-db.mjs from migrations
@@ -24,16 +25,10 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY_B64 = readFileSync(join(HERE, "..", "fixtures", "legacy-pre-0023.b64"), "utf8").trim();
 
-// The shim's virtual FS key (see src/test/shim-fs.ts + browser-sql-shim.ts).
-const SHIM_KEY = "histometer-shim-fs:histometer-shim.db";
-
-test.beforeEach(async ({ context }) => {
-  await context.addInitScript(
-    ([key, b64]: [string, string]) => {
-      window.localStorage.setItem(key, b64);
-    },
-    [SHIM_KEY, LEGACY_B64] as [string, string],
-  );
+// The image is planted in the shim's virtual filesystem, which is IndexedDB and
+// so cannot be written from an init script (tests/helpers/shim-fs.ts explains).
+test.beforeEach(async ({ page }) => {
+  await plantShimImage(page, LEGACY_B64);
 });
 
 test("an existing pre-0023 database opens in the new build with no data loss", async ({ page }) => {

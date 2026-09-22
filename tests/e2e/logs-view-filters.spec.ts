@@ -1,6 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { addProject, addSample, boot, signOutAndBackIn } from "../helpers/lab";
+import { readShimTextBySuffix } from "../helpers/shim-fs";
 
 /**
  * The Logs view's project scope and its defaults:
@@ -42,13 +43,7 @@ async function setProjectActive(page: Page, name: string, active: boolean) {
 async function exportedCsv(page: Page): Promise<string> {
   await page.getByRole("button", { name: "CSV", exact: true }).click();
   await expect(page.getByText("Exported.")).toBeVisible();
-  const csv = await page.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".csv")) return atob(localStorage.getItem(k) as string);
-    }
-    return null;
-  });
+  const csv = await readShimTextBySuffix(page, ".csv");
   expect(csv).not.toBeNull();
   return csv as string;
 }

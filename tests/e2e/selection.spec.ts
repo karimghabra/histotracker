@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 
 // #61 — a tile can be de-selected by clicking it again (or its checkbox), and

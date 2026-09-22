@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage, openNewSample } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
@@ -157,7 +157,15 @@ test("#85: emptying a filtered project leaves a legible empty queue, not a lying
     await expect(boxes.first()).toBeVisible();
     for (let i = 0; i < (await boxes.count()); i += 1) {
       const box = boxes.nth(i);
-      if (!(await box.isChecked())) await box.check();
+      // click + wait, not check(): this box is controlled by the record, so the
+      // click's own tick is undone by the next render and only comes back once
+      // the write has landed and the query refetched. `check()` reads the state
+      // immediately after clicking and so depends on that render being slower
+      // than Playwright, which it is not obliged to be.
+      if (!(await box.isChecked())) {
+        await box.click();
+        await expect(box).toBeChecked();
+      }
     }
   }
   await page.getByRole("button", { name: /Complete Imaging/ }).click();

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../helpers/test";
 
 // Verifies the sql.js Tauri shim actually boots the real app in Chromium:
 // migrations run, the board renders past the loading spinner and setup gate,

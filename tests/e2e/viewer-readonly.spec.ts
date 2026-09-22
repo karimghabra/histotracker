@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
@@ -398,17 +398,17 @@ test("#72: an uninitialised sibling cut group does not blank the viewer's slide 
   // Plant the pre-0.4.6 shape the UI cannot produce any more: one cut group
   // holding real slides, and a sibling with duplicates > 0 and no slides at all.
   // (ensureSlidesForSectionRequest exists precisely to serve those legacy rows.)
-  await ws.evaluate(() => {
+  await ws.evaluate(async () => {
     const sql = (window as unknown as Record<string, unknown>).__SHIM_SQL__ as (
       q: string,
       p?: unknown[],
-    ) => void;
-    sql(
+    ) => Promise<void>;
+    await sql(
       `INSERT INTO section_requests (id, sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
        VALUES (901, 1, 2, 'H&E', 'needs_sectioning', '2026-01-01 09:00:00')`,
     );
     for (const [ordinal, code] of [[1, "EE-1-A"], [2, "EE-1-B"]] as Array<[number, string]>) {
-      sql(
+      await sql(
         `INSERT INTO slides (section_request_id, slide_ordinal, slide_code, purpose, stain_name,
                              assay_type, assay_name, assignment_saved, current_stage)
          VALUES (901, ?, ?, 'stain', 'H&E', 'stain', 'H&E', 1, 'assigned')`,
@@ -416,7 +416,7 @@ test("#72: an uninitialised sibling cut group does not blank the viewer's slide 
       );
     }
     // The sibling: legacy, never initialised, still claims a plan.
-    sql(
+    await sql(
       `INSERT INTO section_requests (id, sample_id, duplicates, stains, current_stage, stage_needs_sectioning_at)
        VALUES (902, 1, 1, '', 'needs_sectioning', '2026-01-01 09:00:00')`,
     );

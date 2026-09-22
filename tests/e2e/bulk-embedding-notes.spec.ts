@@ -1,8 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { openBlockDrawer } from "../helpers/stains";
 import { readSheet } from "../helpers/xlsx";
 import { contrastRatio } from "../../src/lib/theme";
+import { findShimFileBySuffix } from "../helpers/shim-fs";
 
 /** The New Sample dialog must be fully on screen, not clipped by the viewport. */
 async function expectDialogInViewport(page: Page): Promise<void> {
@@ -54,17 +55,9 @@ async function startBatch(page: Page) {
 
 /** The bytes of the most recently saved file whose path ends with `suffix`. */
 async function savedFile(page: Page, suffix: string): Promise<Uint8Array> {
-  const b64 = await page.evaluate((end) => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(end)) {
-        return localStorage.getItem(k) as string;
-      }
-    }
-    return "";
-  }, suffix);
-  expect(b64, `nothing was saved ending in ${suffix}`).not.toBe("");
-  return Uint8Array.from(Buffer.from(b64, "base64"));
+  const b64 = await findShimFileBySuffix(page, suffix);
+  expect(b64, `nothing was saved ending in ${suffix}`).not.toBeNull();
+  return Uint8Array.from(Buffer.from(b64 as string, "base64"));
 }
 
 /** Split a CSV line on commas that are not inside a quoted cell. */

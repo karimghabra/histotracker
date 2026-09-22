@@ -442,7 +442,7 @@ test("fuzz: the invariant catalogue can actually fail", async ({ page, findings 
     const snapshot = await sql<Record<string, unknown>>(page, `SELECT * FROM slides`);
     await page.evaluate(
       ([statement]) =>
-        (window as unknown as { __SHIM_SQL__: (q: string) => void }).__SHIM_SQL__(statement as string),
+        (window as unknown as { __SHIM_SQL__: (q: string) => Promise<void> }).__SHIM_SQL__(statement as string),
       [poison.sql] as const,
     );
     const caught: Finding[] = [];
@@ -452,12 +452,14 @@ test("fuzz: the invariant catalogue can actually fail", async ({ page, findings 
 
     // Put it back.
     await page.evaluate(
-      ([rows]) => {
-        const w = window as unknown as { __SHIM_SQL__: (q: string, b?: unknown[]) => void };
-        w.__SHIM_SQL__("DELETE FROM slides");
+      async ([rows]) => {
+        const w = window as unknown as {
+          __SHIM_SQL__: (q: string, b?: unknown[]) => Promise<void>;
+        };
+        await w.__SHIM_SQL__("DELETE FROM slides");
         for (const row of rows as Array<Record<string, unknown>>) {
           const cols = Object.keys(row);
-          w.__SHIM_SQL__(
+          await w.__SHIM_SQL__(
             `INSERT INTO slides (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
             cols.map((c) => row[c]),
           );

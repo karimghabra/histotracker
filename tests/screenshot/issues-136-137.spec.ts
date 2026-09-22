@@ -1,8 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "../helpers/test";
 import { openManage } from "../helpers/app";
 import { addStainFromLogs, openBlockDrawer } from "../helpers/stains";
 import { cutBlockFor } from "../helpers/cut";
 import { readSheet } from "../helpers/xlsx";
+import { findShimFileBySuffix, readShimTextBySuffix } from "../helpers/shim-fs";
 
 /**
  * #136 - "when Stains are assigned they do not show up on the log until they
@@ -58,17 +59,9 @@ async function newSample(
 async function exportedLogsCsv(page: Page): Promise<string> {
   await page.getByRole("button", { name: "CSV" }).click();
   await expect(page.getByText("Exported.")).toBeVisible({ timeout: 15000 });
-  const csv = await page.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("histometer-shim-fs:histometer-logs-") && k.endsWith(".csv")) {
-        return atob(localStorage.getItem(k) as string);
-      }
-    }
-    return "";
-  });
-  expect(csv).not.toBe("");
-  return csv;
+  const csv = await readShimTextBySuffix(page, ".csv", "histometer-logs-");
+  expect(csv).not.toBeNull();
+  return csv as string;
 }
 
 /** Split a CSV line on commas that are not inside a quoted cell. */
@@ -245,16 +238,7 @@ test("#136: a block removed before it was cut owes nothing, on screen or exporte
   expect(csvCol(removedCsv[0], "Slide Stage")).toBe("");
 
   await page.getByRole("button", { name: "Excel", exact: true }).click();
-  const savedXlsx = () =>
-    page.evaluate(() => {
-      for (let i = 0; i < localStorage.length; i += 1) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith("histometer-shim-fs:") && k.endsWith(".xlsx")) {
-          return localStorage.getItem(k) as string;
-        }
-      }
-      return "";
-    });
+  const savedXlsx = async () => (await findShimFileBySuffix(page, ".xlsx")) ?? "";
   await expect.poll(savedXlsx, { timeout: 15000 }).not.toBe("");
   const b64 = await savedXlsx();
   const grid = readSheet(Uint8Array.from(Buffer.from(b64, "base64")));

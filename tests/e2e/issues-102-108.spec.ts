@@ -1,5 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
-import { openManage, openNewSample } from "../helpers/app";
+import { test, expect, type Page } from "../helpers/test";
+import { openManage, openNewSample, closeDrawerIfOpen } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -309,10 +309,8 @@ test("#102: imaging tiles carry the description and the agents", async ({ page }
   // Section it, which splits the agent slide into a rack…
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
-  const drawerClose = page.locator("button:has(svg.lucide-x)").first();
-  if (await drawerClose.isVisible().catch(() => false)) {
-    await drawerClose.click().catch(() => undefined);
-  }
+  // The drawer may close itself once the group moves on; settle it either way.
+  await closeDrawerIfOpen(page);
 
   // …then run the protocol, which is what actually scatters the rack into
   // Ready for Imaging (dragging it there does not).
