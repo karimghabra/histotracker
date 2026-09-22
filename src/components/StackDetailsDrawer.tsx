@@ -1,7 +1,7 @@
 import { CheckCircle2, ListChecks, Layers, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useStackSlides } from "../hooks/useData";
+import { useAssayCatalog, useStackSlides, useStacksSlides } from "../hooks/useData";
 import { describeImagingResult, syncAssayStackWorkflowStep } from "../lib/db";
 import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
@@ -72,6 +72,16 @@ export function StackDetailsDrawer({
   const analysisIds = activeStacks
     .filter((candidate) => candidate.current_stage === "pictures_taken")
     .map((candidate) => candidate.id);
+  // Every selected rack at imaging or past it (#150) — the same two stages the
+  // single-rack "Select slides" tick list already offers imaging on, just
+  // spanning the whole selection instead of only the open rack.
+  const imagingEligibleIds = [...imagingIds, ...analysisIds];
+  const { data: multiStackSlides = [] } = useStacksSlides(
+    activeStacks.length > 1 ? imagingEligibleIds : [],
+  );
+  const multiStackUnimaged = multiStackSlides.filter(
+    (slide) => slide.current_stage !== "removed" && !slide.stage_pictures_taken_at,
+  );
   const assayTypes = useMemo(
     () => [...new Set(slides.map((slide) => slide.assay_type))]
       .filter((value): value is "stain" | "ihc" => value === "stain" || value === "ihc"),
@@ -501,6 +511,25 @@ export function StackDetailsDrawer({
           ) : (
             <Button variant="primary" className="flex-1" onClick={() => void run(() => moveSlideStacks(analysisIds, "analyzed"))}>
               <CheckCircle2 size={15} /> {analysisIds.length > 1 ? `Mark Analyzed (${analysisIds.length})` : "Mark Analyzed"}
+            </Button>
+          )}
+          {/* Imaging across several selected racks at once (#150). The tick list
+              above marks imaged within the one open rack; this is its counterpart
+              for a multi-rack selection, the same way Complete Imaging already
+              spans every selected rack rather than just this one. */}
+          {activeStacks.length > 1 && multiStackUnimaged.length > 0 && (
+            <Button
+              title="Mark every unimaged slide across the selected racks as imaged"
+              onClick={() =>
+                void run(async () => {
+                  const result = await markSlidesImaged(multiStackUnimaged.map((slide) => slide.id));
+                  if (result.refused.length > 0 || result.alreadyImaged.length > 0) {
+                    setNotice(describeImagingResult(result));
+                  }
+                })
+              }
+            >
+              <CheckCircle2 size={15} /> Mark {multiStackUnimaged.length} Slide{multiStackUnimaged.length === 1 ? "" : "s"} Imaged
             </Button>
           )}
           {activeStacks.length > 1 && (

@@ -3700,6 +3700,26 @@ export async function listSlidesForStack(stackId: number): Promise<Slide[]> {
   );
 }
 
+/** Slides across several racks at once — the board can select more than one
+ *  rack from Ready for Imaging, and marking them imaged in one action needs
+ *  every rack's slides, not just the one whose drawer happens to be open (#150). */
+export async function listSlidesForStacks(stackIds: number[]): Promise<Slide[]> {
+  if (stackIds.length === 0) return [];
+  const db = await getDb();
+  const placeholders = stackIds.map(() => "?").join(", ");
+  return db.select<Slide[]>(
+    `SELECT sl.*, s.sample_code AS parent_code,
+            p.code AS project_code, p.name AS project_name
+       FROM slides sl
+       JOIN section_requests sr ON sr.id = sl.section_request_id
+       JOIN samples s ON s.id = sr.sample_id
+       JOIN projects p ON p.id = s.project_id
+      WHERE sl.stack_id IN (${placeholders})
+      ORDER BY p.code, s.project_sample_number, sl.slide_ordinal, sl.id`,
+    stackIds,
+  );
+}
+
 export async function updateSlideStackStage(stackId: number, stageKey: string): Promise<number> {
   const column = STACK_STAGE_COLUMNS[stageKey];
   if (!column) throw new Error(`Unknown slide-stack stage: ${stageKey}`);
