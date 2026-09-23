@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.18.3 - 2026-09-22
+
+No schema change: no new column and no new migration, so a 0.18.2 instance opens a 0.18.3 database unchanged, and the reverse holds too.
+
+- **Marking slides imaged now spans a multi-rack selection (#188, issue #150).**
+  #173 gave the rack drawer's own tick list a bulk "mark imaged", but that list only ever covered the one rack whose drawer happened to be open.
+  Selecting several racks together on the board, the same selection Complete Imaging already spans, still meant opening each rack in turn and ticking its slides one rack at a time.
+  The drawer now shows a **Mark N Slides Imaged** action beside Complete Imaging once more than one rack is selected, covering every unimaged slide across the selection.
+  Each slide gets its own stamp and audit record exactly as if marked alone.
+  A slide the single-slide rule refuses is left untouched and named in a notice, and the rest of the selection is still marked.
+  The whole action is one undo step.
+
+- **A dialog's Escape key no longer goes quiet (#189).**
+  Escape could be ignored when pressed just as a background query settled, closing nothing and giving no sign why.
+  The handler now attaches before the dialog is ever painted instead of after, so there is no longer a gap where a dialog is on screen and nothing is listening for Escape.
+  This was found while chasing an unrelated flaky browser test; it fixes a real defect on its own merits, but is not shown to be the cause of that flake.
+
+- **The browser test harness now keeps its files in IndexedDB instead of a size-limited localStorage slot, and fails loudly on a lost write (#189).**
+  Internal test infrastructure only; no effect on the app.
+
 ## 0.18.2 - 2026-09-20
 
 No schema change: no new column and no new migration, so a 0.18.1 instance opens a 0.18.2 database unchanged, and the reverse holds too.
