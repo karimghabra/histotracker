@@ -16,6 +16,12 @@ export async function boot(page: Page, user = "Alex Rivera"): Promise<void> {
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
   await page.getByLabel("Signed-in user").selectOption({ label: user });
+  // Wait for the sign-in to be RECORDED, not merely chosen.
+  // `activeUser` is read back from `app_settings.active_user_id`, so the Sign out
+  // button appears only once the write has landed. Until it has, the data layer
+  // refuses every write with "Sign in before making modifications" - which a
+  // following `page.evaluate` seed hits on a loaded host and never on an idle one.
+  await expect(page.getByTitle("Sign out")).toBeVisible({ timeout: 15_000 });
 }
 
 export async function addProject(page: Page, code: string, name: string): Promise<void> {

@@ -7,10 +7,17 @@ import { type ImagedSlide, usePendingImaging } from "./usePendingImaging";
 const KEY = ["stack-slides", 1] as const;
 const STAMP = "2026-09-28 10:00:00";
 
-/** A drawer's view of a two-slide rack: the query that feeds the boxes, over a record the test owns. */
+/**
+ * A drawer's view of a two-slide rack: the query that feeds the boxes, over a
+ * record the test owns.
+ *
+ * A read snapshots the record when it STARTS, so a read held open answers with
+ * what was true before whatever happened while it was in flight - which is the
+ * whole class of race this hook exists to be immune to.
+ */
 async function rack(initial: Record<number, string | null> = { 10: null, 11: null }) {
   const record = new Map(Object.entries(initial).map(([id, at]) => [Number(id), at]));
-  let gate: Promise<unknown> = Promise.resolve();
+  let hold: Promise<void> | null = null;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: qc }, children);
@@ -20,7 +27,7 @@ async function rack(initial: Record<number, string | null> = { 10: null, 11: nul
         queryKey: KEY,
         queryFn: async (): Promise<ImagedSlide[]> => {
           const rows = [...record].map(([id, at]) => ({ id, stage_pictures_taken_at: at }));
-          await gate;
+          if (hold) await hold;
           return rows;
         },
       });
@@ -35,15 +42,20 @@ async function rack(initial: Record<number, string | null> = { 10: null, 11: nul
       result.current.imaging.imaged(result.current.slides.find((slide) => slide.id === id)!),
     mark: (id: number, value: boolean, write: () => Promise<unknown>) =>
       result.current.imaging.mark(id, value, write),
-    /** Start a read of the record as it is now, and hold its answer until `release`. */
-    readHeld: () => {
+    /** Every read from now on hangs until the returned release is called. */
+    holdReads: () => {
       let release!: () => void;
-      gate = new Promise<void>((resolve) => (release = resolve));
-      void qc.invalidateQueries({ queryKey: KEY });
-      return release;
+      hold = new Promise<void>((resolve) => (release = resolve));
+      return () => {
+        const pending = hold;
+        hold = null;
+        release();
+        return pending;
+      };
     },
-    /** The action's own invalidation, or anything else's, landing. */
+    /** Anything else's invalidation landing: an undo, the board, another rack. */
     refetch: () => act(() => qc.invalidateQueries({ queryKey: KEY })),
+    startRead: () => void qc.invalidateQueries({ queryKey: KEY }),
   };
 }
 
@@ -56,8 +68,12 @@ function held() {
   return { write: () => done, land: () => settle(true), refuse: () => settle(false) };
 }
 
+const settle = () => act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 describe("usePendingImaging (#191)", () => {
-  it("shows the tick while the write is in flight, and until the record is re-read", async () => {
+  it("shows the tick from the click until the record has been re-read", async () => {
     const view = await rack();
     expect(view.shown(10)).toBe(false);
 
@@ -66,24 +82,30 @@ describe("usePendingImaging (#191)", () => {
     act(() => {
       marked = view.mark(10, true, writing.write);
     });
+    // The click itself, before anything has been written anywhere.
     expect(view.shown(10)).toBe(true);
     // Its neighbour is untouched.
     expect(view.shown(11)).toBe(false);
 
-    // The write lands, but the query that feeds the box has not refetched yet.
+    // The write lands, but the read that would prove it has not come back.
+    const release = view.holdReads();
     await act(async () => {
       view.record.set(10, STAMP);
       writing.land();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(view.shown(10)).toBe(true);
+
+    await act(async () => {
+      release();
       await marked;
     });
     expect(view.shown(10)).toBe(true);
 
-    await view.refetch();
-    expect(view.shown(10)).toBe(true);
     // From here the record is the answer: an undo elsewhere is followed.
     view.record.set(10, null);
     await view.refetch();
-    expect(view.shown(10)).toBe(false);
+    await waitFor(() => expect(view.shown(10)).toBe(false));
   });
 
   it("hands the box back to the record when the write is refused, and rethrows", async () => {
@@ -107,38 +129,47 @@ describe("usePendingImaging (#191)", () => {
   it("unticking is shown at once the same way", async () => {
     const view = await rack({ 10: STAMP });
     expect(view.shown(10)).toBe(true);
-    await act(() => view.mark(10, false, async () => view.record.set(10, null)));
+    await act(() => view.mark(10, false, async () => void view.record.set(10, null)));
     expect(view.shown(10)).toBe(false);
   });
 
-  it("a tick taken back before the refetch leaves nothing to override a later change", async () => {
+  it("a tick taken back before the record moved leaves nothing to override a later change", async () => {
     const view = await rack();
-    await act(() => view.mark(10, true, async () => view.record.set(10, STAMP)));
-    await act(() => view.mark(10, false, async () => view.record.set(10, null)));
-    // The row is back where it started, so the refetch reads the same rows.
-    await view.refetch();
+    await act(() => view.mark(10, true, async () => void view.record.set(10, STAMP)));
+    await act(() => view.mark(10, false, async () => void view.record.set(10, null)));
     expect(view.shown(10)).toBe(false);
 
-    // Then the record turns imaged from elsewhere (an undo, the bulk action).
+    // The record ends where it began, so nothing about it CHANGED - and the box
+    // must still follow it when it turns imaged from elsewhere.
     view.record.set(10, STAMP);
     await view.refetch();
-    expect(view.shown(10)).toBe(true);
+    await waitFor(() => expect(view.shown(10)).toBe(true));
   });
 
-  it("a tick that lands but is undone before the refetch follows the record", async () => {
+  it("a tick that lands but is undone before the re-read follows the record", async () => {
     const view = await rack();
-    await act(() => view.mark(10, true, async () => view.record.set(10, STAMP)));
-    expect(view.shown(10)).toBe(true);
-    // Ctrl+Z replays before the tick's own refetch has come back.
-    view.record.set(10, null);
-    await view.refetch();
+    const writing = held();
+    let marked!: Promise<void>;
+    act(() => {
+      marked = view.mark(10, true, writing.write);
+    });
+    await act(async () => {
+      view.record.set(10, STAMP);
+      writing.land();
+      // Ctrl+Z replays before this tick's own re-read has run.
+      view.record.set(10, null);
+      await marked;
+    });
     expect(view.shown(10)).toBe(false);
   });
 
-  it("a read already in flight when the box is ticked does not land on the tick", async () => {
+  it("a read already in flight when the box is ticked cannot answer for the tick", async () => {
     const view = await rack();
-    // Another action's refetch has read the record, and not come back yet.
-    const release = view.readHeld();
+    // Another action's read has snapshotted the record, and not come back yet.
+    const release = view.holdReads();
+    view.startRead();
+    await settle();
+
     const writing = held();
     let marked!: Promise<void>;
     act(() => {
@@ -147,17 +178,62 @@ describe("usePendingImaging (#191)", () => {
     expect(view.shown(10)).toBe(true);
 
     await act(async () => {
-      release();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-    expect(view.shown(10)).toBe(true);
-
-    await act(async () => {
       view.record.set(10, STAMP);
       writing.land();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      release();
       await marked;
     });
-    await view.refetch();
     expect(view.shown(10)).toBe(true);
+  });
+
+  it("a slower earlier tick on the same slide does not take down a later one", async () => {
+    const view = await rack();
+    const first = held();
+    const second = held();
+    let firstMark!: Promise<void>;
+    let secondMark!: Promise<void>;
+    act(() => {
+      firstMark = view.mark(10, true, first.write);
+    });
+    act(() => {
+      secondMark = view.mark(10, false, second.write);
+    });
+    expect(view.shown(10)).toBe(false);
+
+    // The first tick finishes last, against a record that still reads imaged
+    // because the second write has not run yet.
+    await act(async () => {
+      view.record.set(10, STAMP);
+      first.land();
+      await firstMark;
+    });
+    expect(view.shown(10)).toBe(false);
+
+    await act(async () => {
+      view.record.set(10, null);
+      second.land();
+      await secondMark;
+    });
+    expect(view.shown(10)).toBe(false);
+  });
+
+  it("moving the drawer to another rack abandons what was outstanding", async () => {
+    const record = new Map<number, string | null>([[10, null]]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    const { result, rerender } = renderHook(
+      ({ stackId }: { stackId: number }) => usePendingImaging(["stack-slides", stackId]),
+      { wrapper, initialProps: { stackId: 1 } },
+    );
+    const slide = { id: 10, stage_pictures_taken_at: record.get(10) ?? null };
+    const writing = held();
+    act(() => {
+      void result.current.mark(10, true, writing.write).catch(() => undefined);
+    });
+    expect(result.current.imaged(slide)).toBe(true);
+    rerender({ stackId: 2 });
+    expect(result.current.imaged(slide)).toBe(false);
   });
 });
