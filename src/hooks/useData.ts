@@ -165,10 +165,12 @@ export function useSectionsSlides(sectionIds: number[]) {
   });
 }
 
+export const imagingSlidesKey = (sectionIds: number[]) =>
+  ["imaging-slides", [...sectionIds].sort((a, b) => a - b)] as const;
+
 export function useImagingSlides(sectionIds: number[]) {
-  const key = [...sectionIds].sort((a, b) => a - b);
   return useQuery({
-    queryKey: ["imaging-slides", key],
+    queryKey: imagingSlidesKey(sectionIds),
     queryFn: () => listStainSlidesForSections(sectionIds),
     enabled: sectionIds.length > 0,
   });
@@ -206,9 +208,11 @@ export function useOpenSlideStacks() {
   return useQuery({ queryKey: ["open-slide-stacks"], queryFn: listOpenSlideStacks });
 }
 
+export const stackSlidesKey = (stackId: number | null) => ["stack-slides", stackId] as const;
+
 export function useStackSlides(stackId: number | null) {
   return useQuery({
-    queryKey: ["stack-slides", stackId],
+    queryKey: stackSlidesKey(stackId),
     queryFn: () => listSlidesForStack(stackId as number),
     enabled: stackId !== null,
   });

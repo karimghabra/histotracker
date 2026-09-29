@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useReducer } from "react";
+import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { nowTimestamp } from "../lib/utils";
 
 /** All the pending view needs of a slide: which one it is, and whether the record says imaged. */
 export interface ImagedSlide {
@@ -6,16 +8,8 @@ export interface ImagedSlide {
   stage_pictures_taken_at: string | null;
 }
 
-interface Intent {
-  value: boolean;
-  /** What the record said when the intent was made; once it says anything else, it has caught up. */
-  from: boolean;
-}
-
-const recorded = (slide: ImagedSlide) => Boolean(slide.stage_pictures_taken_at);
-
 /**
- * The imaging tick a technician has just made, shown until the record catches
+ * The imaging tick a technician has just made, shown before the record catches
  * up with it (#191).
  *
  * "Images captured" is the only checkbox in the app whose truth is a database
@@ -28,68 +22,46 @@ const recorded = (slide: ImagedSlide) => Boolean(slide.stage_pictures_taken_at);
  * other writes queued ahead of it. It reads as a control that ignored the click,
  * and a second click inside the window records the opposite of what was meant.
  *
- * So the intent is shown while the record is still behind it, and dropped the
- * moment the record agrees - not when the write resolves, because the action
- * fires its invalidation without awaiting it and returns while the refetch is
- * still in flight. A write that does not land gives the box straight back to the
- * truth, and rethrows, so the caller still shows the refusal.
- *
- * `scopeKey` is whatever the checklist is a checklist OF (the open rack, the
- * open cut group): changing it means these intents are about slides no longer on
- * screen, so they are abandoned rather than carried across.
+ * So the tick is written into the cached rows of `queryKey`, the query that
+ * feeds the box, in the change handler itself: an optimistic update, with no
+ * second copy of the intent to outlive it. The next read of the query, whether
+ * the action's own invalidation or an undo's, replaces it with the record. The
+ * box reads that cache directly and re-renders from the handler, because the
+ * query's own observers hear of the change only on a later tick, after React has
+ * already put the box back. A
+ * write that does not land puts the row back and re-reads it, and rethrows, so
+ * the caller still shows the refusal.
  */
-export function usePendingImaging(slides: ImagedSlide[], scopeKey: number) {
-  const [pending, setPending] = useState<ReadonlyMap<number, Intent>>(() => new Map());
-  const slidesRef = useRef(slides);
-  slidesRef.current = slides;
-
-  useEffect(() => {
-    setPending((current) => (current.size === 0 ? current : new Map()));
-  }, [scopeKey]);
-
-  useEffect(() => {
-    setPending((current) => {
-      if (current.size === 0) return current;
-      const next = new Map(current);
-      for (const slide of slides) {
-        const intent = next.get(slide.id);
-        if (intent && recorded(slide) !== intent.from) next.delete(slide.id);
-      }
-      return next.size === current.size ? current : next;
-    });
-  }, [slides]);
+export function usePendingImaging(queryKey: QueryKey) {
+  const qc = useQueryClient();
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
 
   /** Show `value` for this slide at once, and write it; a write that fails gives the box back. */
-  const mark = useCallback(
-    async (slideId: number, value: boolean, write: (value: boolean) => Promise<unknown>) => {
-      const slide = slidesRef.current.find((s) => s.id === slideId);
-      const from = slide ? recorded(slide) : !value;
-      setPending((current) => {
-        const next = new Map(current);
-        if (value === from) next.delete(slideId);
-        else next.set(slideId, { value, from });
-        return next;
-      });
-      try {
-        await write(value);
-      } catch (reason) {
-        setPending((current) => {
-          if (!current.has(slideId)) return current;
-          const next = new Map(current);
-          next.delete(slideId);
-          return next;
-        });
-        throw reason;
-      }
-    },
-    [],
-  );
+  const mark = async (slideId: number, value: boolean, write: (value: boolean) => Promise<unknown>) => {
+    const setRow = (at: string | null) =>
+      qc.setQueryData<ImagedSlide[]>(queryKey, (rows) =>
+        rows?.map((row) => (row.id === slideId ? { ...row, stage_pictures_taken_at: at } : row)),
+      );
+    const was =
+      qc.getQueryData<ImagedSlide[]>(queryKey)?.find((row) => row.id === slideId)
+        ?.stage_pictures_taken_at ?? null;
+    setRow(value ? nowTimestamp() : null);
+    rerender();
+    try {
+      await write(value);
+    } catch (reason) {
+      setRow(was);
+      rerender();
+      void qc.invalidateQueries({ queryKey, exact: true });
+      throw reason;
+    }
+  };
 
   return {
-    /** What this slide's checkbox should show: the outstanding intent, or the record. */
+    /** What this slide's checkbox should show. */
     imaged: (slide: ImagedSlide) => {
-      const intent = pending.get(slide.id);
-      return intent && recorded(slide) === intent.from ? intent.value : recorded(slide);
+      const cached = qc.getQueryData<ImagedSlide[]>(queryKey)?.find((row) => row.id === slide.id);
+      return Boolean((cached ?? slide).stage_pictures_taken_at);
     },
     mark,
   };

@@ -4,7 +4,7 @@ import type { SectionRequest, Slide, SlidePurpose } from "../lib/types";
 import { SECTION_STAGES } from "../lib/stages";
 import { Button } from "./ui";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
+import { imagingSlidesKey, useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
 import { usePendingImaging } from "../hooks/usePendingImaging";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
@@ -178,10 +178,11 @@ export function SectionDetailsDrawer({
     .map((candidate) => candidate.id);
   // Imaging checkboxes span every grouped Ready-for-Imaging section for this
   // sample, so a separately-stained extra also gets a checkbox (issue #14).
-  const { data: imagingSlides = [] } = useImagingSlides(showImagingChecklist ? imagingBatchIds : []);
+  const imagingSectionIds = showImagingChecklist ? imagingBatchIds : [];
+  const { data: imagingSlides = [] } = useImagingSlides(imagingSectionIds);
   // The checklist writes to the database, so it shows the tick a beat before the
   // record does (#191, usePendingImaging).
-  const imaging = usePendingImaging(imagingSlides, section.id);
+  const imaging = usePendingImaging(imagingSlidesKey(imagingSectionIds));
   const imagedImagingSlides = imagingSlides.filter((slide) => imaging.imaged(slide));
   const dirtyCount = Object.keys(drafts).length;
   const assayTypes = [...new Set(slides.filter((slide) => slide.purpose === "stain").map((slide) => slide.assay_type))]

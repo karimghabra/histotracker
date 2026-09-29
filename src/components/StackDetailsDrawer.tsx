@@ -1,7 +1,7 @@
 import { CheckCircle2, ListChecks, Layers, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useStackSlides, useStacksSlides } from "../hooks/useData";
+import { stackSlidesKey, useAssayCatalog, useStackSlides, useStacksSlides } from "../hooks/useData";
 import { usePendingImaging } from "../hooks/usePendingImaging";
 import { describeImagingResult, syncAssayStackWorkflowStep } from "../lib/db";
 import { SECTION_STAGES } from "../lib/stages";
@@ -50,7 +50,7 @@ export function StackDetailsDrawer({
   const { data: slides = [] } = useStackSlides(stack.id);
   // The tick list writes to the database, so it shows the tick a beat before the
   // record does (#191, usePendingImaging).
-  const imaging = usePendingImaging(slides, stack.id);
+  const imaging = usePendingImaging(stackSlidesKey(stack.id));
   const { data: catalog = [] } = useAssayCatalog();
   // A viewer reads the rack and its protocol progress; it cannot drive them (#72).
   const readOnly = useReadOnly();
