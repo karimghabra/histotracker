@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * Racks as physical objects: a fixed capacity (#123), split and merge (#124),
@@ -33,7 +33,7 @@ async function boot(page: Page): Promise<void> {
   await expect(overlay).toHaveCount(0);
   // Signing in FIRST, because since #128 nothing below it would be allowed to
   // write anything.
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 /** N blocks, each cut for one H&E slide and sent into staining. */
@@ -88,7 +88,7 @@ async function seedStainedBlocks(page: Page, count: number): Promise<void> {
   // Query — reload rather than assert against a cache filled before the seed.
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 /** The rack panel. Scoped, because the board cards carry "Select EE-1" too. */
@@ -254,7 +254,7 @@ test("racks are numbered per agent, and the number does not move", async ({ page
     await db.closeSlideStackIfEmpty(1);
   });
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await page.waitForTimeout(400);
 
   // The two survivors keep the numbers they had. Under open-only counting they

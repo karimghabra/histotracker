@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * The two 0.14.0 issues that shipped with no automated coverage at all.
@@ -33,7 +33,7 @@ async function boot(page: Page): Promise<void> {
   await expect(overlay).toHaveCount(0);
   // Signed in before anything is written — since #128 an unsigned session is a
   // viewer, so a seed run before this line would be refused, not merely slow.
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 /**
@@ -92,7 +92,7 @@ async function seedStainedBlocks(page: Page, count: number): Promise<void> {
   // rather than assert against a cache filled before the seed existed.
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 test("#121: the Logs offer no way to refile a slide onto another block", async ({ page }) => {

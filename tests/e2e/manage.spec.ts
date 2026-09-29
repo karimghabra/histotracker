@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 // The tabbed Manage dialog: users (implicitly covered by every seed helper),
 // projects, and the stain/IHC catalog.
@@ -10,7 +10,7 @@ async function seed(page: Page) {
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.getByTitle("Add project").click();
   await page.locator('input[placeholder="EE"]').fill("EE");
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Enthesis Engineering");

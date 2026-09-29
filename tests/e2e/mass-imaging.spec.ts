@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * #150: several slides marked imaged in one action.
@@ -11,6 +11,9 @@ import { openManage } from "../helpers/app";
  *
  * The rack is built through `db.ts`; the rest is driven the way a user drives it. Every
  * assertion is on text or on rows, never on a picture.
+ *
+ * The per-row "Images captured" checkbox the bulk action was built beside is here too (#191):
+ * it is the same rack, the same drawer and the same data-layer call, one slide at a time.
  */
 
 const USER = "Alex Rivera";
@@ -35,7 +38,7 @@ async function boot(page: Page): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 /** One or more blocks cut into H&E slides (one cut group per size given, one block per entry
@@ -91,7 +94,7 @@ async function seedRackAtImaging(page: Page, groups: number[] = [3], samples = 1
   );
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 
   // Run the stain protocol the way the bench does. Finishing it moves the rack to Ready for
   // Imaging, which is what hands the glass to a per-sample imaging rack (as in workflow.spec.ts).
@@ -126,6 +129,16 @@ async function openImagingRack(page: Page): Promise<void> {
   await imaging.getByText("EE-1", { exact: true }).first().click();
   await expect(page.getByText("Assay slides").first()).toBeVisible();
   await page.getByRole("button", { name: "Select slides" }).click();
+}
+
+/** Open the rack's drawer WITHOUT entering the tick-list selection, which is where each row
+ *  carries its own "Images captured" checkbox. */
+async function openImagingRackRows(page: Page): Promise<void> {
+  const imaging = page
+    .locator("div.rounded-lg")
+    .filter({ has: page.getByRole("heading", { name: "Ready for Imaging", exact: true }) });
+  await imaging.getByText("EE-1", { exact: true }).first().click();
+  await expect(page.getByText("Assay slides").first()).toBeVisible();
 }
 
 /** Ctrl-click several Ready-for-Imaging racks together, the board's own multi-select gesture
@@ -214,7 +227,7 @@ test("#150: a slide the single-slide rule refuses is left untouched and listed, 
     section_request_id,
   );
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await openImagingRack(page);
 
   const boxes = drawer(page).locator('input[type="checkbox"][aria-label^="Select EE-"]');
@@ -324,7 +337,7 @@ test("#150: across several selected racks, a slide the single-slide rule refuses
     section_request_id,
   );
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await selectImagingRacks(page, ["EE-1", "EE-2"]);
 
   await drawer(page).getByRole("button", { name: /Mark \d+ Slides? Imaged/ }).click();
@@ -342,4 +355,70 @@ test("#150: across several selected racks, a slide the single-slide rule refuses
   await drawer(page).getByRole("button", { name: "Mark 1 Slide Imaged" }).click();
   await expect(drawer(page)).toContainText("1 refused and left untouched");
   expect((await picked(page)).filter((r) => r.at)).toHaveLength(5);
+});
+
+/**
+ * #191: the row checkbox shows the tick the moment it is clicked.
+ *
+ * "Images captured" is controlled by `slides.stage_pictures_taken_at`, and that column is only
+ * true once the write has been through the lane, journalled its undo entry and had its query
+ * refetched. React restores a controlled input to its prop as soon as the change event returns,
+ * so the box a technician has just ticked used to show UNTICKED for the length of that round
+ * trip - ~70 ms on an empty database, longer on a lab one with writes queued ahead of it. It
+ * reads as a control that ignored the click, and a second click inside the window records the
+ * opposite of what was meant.
+ *
+ * `check()` clicks and then reads the state straight back with no retry, which is exactly the
+ * assertion the technician makes with their eyes; it is what caught this on the nightly stress
+ * run once that harness stopped being fast enough to hide it.
+ */
+test("#191: the row checkbox shows its tick at once, and the record follows", async ({ page }) => {
+  await boot(page);
+  await seedRackAtImaging(page);
+  await openImagingRackRows(page);
+
+  const box = drawer(page).getByRole("checkbox", { name: /^Images captured for EE-/ }).first();
+  await box.check();
+  await expect(drawer(page)).toContainText("1/3 imaged");
+  await expect(async () => {
+    expect((await picked(page)).filter((r) => r.at)).toHaveLength(1);
+  }).toPass({ timeout: 15_000 });
+
+  // The images were poor, so untick and re-take: the same gesture the other way.
+  await box.uncheck();
+  await expect(drawer(page)).toContainText("0/3 imaged");
+  await expect(async () => {
+    expect((await picked(page)).filter((r) => r.at)).toHaveLength(0);
+  }).toPass({ timeout: 15_000 });
+
+  await box.check();
+  await expect(async () => {
+    expect((await picked(page)).filter((r) => r.at)).toHaveLength(1);
+  }).toPass({ timeout: 15_000 });
+});
+
+/** #191: showing the tick early must never outlive a write that was refused - the box goes back
+ *  to what the record says, and the drawer says why. */
+test("#191: a tick the data layer refuses goes back, and the drawer says why", async ({ page }) => {
+  await boot(page);
+  await seedRackAtImaging(page);
+  // The UI cannot put glass that was never cut in an imaging rack, so plant it, exactly as the
+  // bulk refusal above does: the cut group goes back to waiting to be cut (#167).
+  await page.evaluate(() =>
+    (window as unknown as { __SHIM_SQL__: (s: string, p: unknown[]) => Promise<void> }).__SHIM_SQL__(
+      `UPDATE section_requests SET current_stage = 'needs_sectioning'
+        WHERE id = (SELECT section_request_id FROM slides WHERE purpose = 'stain' ORDER BY id LIMIT 1)`,
+      [],
+    ),
+  );
+  await page.goto("/");
+  await signInAs(page, USER);
+  await openImagingRackRows(page);
+
+  const box = drawer(page).getByRole("checkbox", { name: /^Images captured for EE-/ }).first();
+  await box.click();
+  await expect(drawer(page)).toContainText("still waiting to be cut");
+  await expect(box).not.toBeChecked();
+  await expect(drawer(page)).toContainText("0/3 imaged");
+  expect((await picked(page)).filter((r) => r.at)).toHaveLength(0);
 });

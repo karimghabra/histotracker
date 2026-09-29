@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * An unsigned session has a viewer's privileges (#128), and the checklist says
@@ -32,7 +32,7 @@ async function signIn(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByLabel("Signed-in user").locator("option", { hasText: USER })).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 async function addProject(page: Page, code: string): Promise<void> {
@@ -97,7 +97,7 @@ test("#128: an unsigned session cannot change the record, and can still sign in"
   await expect(page.getByPlaceholder("Alex Rivera")).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await expect(page.getByRole("button", { name: "New Sample" })).toBeEnabled();
 
   // And the work it refused a moment ago now goes through.

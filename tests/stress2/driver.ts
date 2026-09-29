@@ -1,6 +1,7 @@
 import { test as base, expect, type Page } from "../helpers/test";
 import { INVARIANTS } from "./invariants";
 import { assertShimFsIntact } from "../helpers/shim-fs";
+import { signInAs } from "../helpers/app";
 
 /**
  * Harness v2 driver.
@@ -261,7 +262,7 @@ export async function boot(page: Page, user = "Alex Rivera"): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: user });
+  await signInAs(page, user);
 }
 
 /**

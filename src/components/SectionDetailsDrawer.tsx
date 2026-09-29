@@ -4,7 +4,8 @@ import type { SectionRequest, Slide, SlidePurpose } from "../lib/types";
 import { SECTION_STAGES } from "../lib/stages";
 import { Button } from "./ui";
 import { useActions } from "../hooks/useActions";
-import { useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
+import { imagingSlidesKey, useAssayCatalog, useImagingSlides, useSectionsSlides } from "../hooks/useData";
+import { usePendingImaging } from "../hooks/usePendingImaging";
 import { syncAssayWorkflowStep } from "../lib/db";
 import { ProtocolChecklist } from "./ProtocolChecklist";
 import { RemovalReasonDialog } from "./RemovalReasonDialog";
@@ -177,8 +178,12 @@ export function SectionDetailsDrawer({
     .map((candidate) => candidate.id);
   // Imaging checkboxes span every grouped Ready-for-Imaging section for this
   // sample, so a separately-stained extra also gets a checkbox (issue #14).
-  const { data: imagingSlides = [] } = useImagingSlides(showImagingChecklist ? imagingBatchIds : []);
-  const imagedImagingSlides = imagingSlides.filter((slide) => Boolean(slide.stage_pictures_taken_at));
+  const imagingSectionIds = showImagingChecklist ? imagingBatchIds : [];
+  const { data: imagingSlides = [] } = useImagingSlides(imagingSectionIds);
+  // The checklist writes to the database, so it shows the tick a beat before the
+  // record does (#191, usePendingImaging).
+  const imaging = usePendingImaging(imagingSlidesKey(imagingSectionIds));
+  const imagedImagingSlides = imagingSlides.filter((slide) => imaging.imaged(slide));
   const dirtyCount = Object.keys(drafts).length;
   const assayTypes = [...new Set(slides.filter((slide) => slide.purpose === "stain").map((slide) => slide.assay_type))]
     .filter((value): value is "stain" | "ihc" => value === "stain" || value === "ihc");
@@ -414,7 +419,7 @@ export function SectionDetailsDrawer({
             </p>
             <div className="space-y-1.5">
               {imagingSlides.map((slide) => {
-                const complete = Boolean(slide.stage_pictures_taken_at);
+                const complete = imaging.imaged(slide);
                 return (
                   <label
                     key={slide.id}
@@ -423,7 +428,13 @@ export function SectionDetailsDrawer({
                     <input
                       type="checkbox"
                       checked={complete}
-                      onChange={() => void run(() => setSlidePicturesTaken(slide.id, !complete))}
+                      onChange={() =>
+                        void run(() =>
+                          imaging.mark(slide.id, !complete, (value) =>
+                            setSlidePicturesTaken(slide.id, value),
+                          ),
+                        )
+                      }
                       className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
                     />
                     <span className="min-w-0 flex-1">

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from "../helpers/test";
-import { openManage, setTheme } from "../helpers/app";
+import { openManage, setTheme, signInAs } from "../helpers/app";
 import { contrastRatio } from "../../src/lib/theme";
 
 /** The colour actually painted behind an element: its own and its ancestors'
@@ -54,7 +54,7 @@ async function boot(page: Page) {
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 async function addProject(page: Page, code: string, name: string) {

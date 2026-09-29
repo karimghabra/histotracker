@@ -42,6 +42,9 @@ first red one:
    side by side in the same run, the same small lab built on both, ARIA
    structure diffed and layout/contrast audited at two widths - the screenshot
    comparison without a screenshot or a stored baseline.
+   It rebuilds "this tree" from `git archive HEAD` plus `git diff HEAD`, which
+   does not see an untracked file, so **`git add` a new source file before
+   running this layer** or it serves a tree the new import cannot resolve.
 3. **e2e**: `tests/e2e` at retries 0, a smoke set first (`smoke`, `workflow`,
    `sync`, `sync-pull-relaunch`), then the rest.
 4. **screenshot** (`--screenshot`, CI only, never on a lab machine): the
@@ -157,6 +160,18 @@ Conventions in the specs, worth following rather than re-deriving:
   once the sidebar list loads.
 - Reuse a spec's own `seedSample`/`dragOnto` helpers: `dragOnto` clears dnd-kit's 5px
   activation threshold, which a hand-rolled drag does not.
+- **Sign in with `signInAs` (`tests/helpers/app.ts`), never with a bare `selectOption`.**
+  Choosing a name in "Signed-in user" is a WRITE, and `selectOption` returns long before
+  `app_settings.active_user_id` has landed; until it has, the data layer refuses every
+  write with "Sign in before making modifications", which the `page.evaluate` seed that
+  usually follows hits on a loaded host and never on an idle one. `signInAs` waits for
+  the picker, which the record read back drives, to settle on the name asked for (the
+  Sign out button proves nothing on a switch between users). Every browser suite but
+  `tests/render` goes through it.
+- The same shape, generally: **wait for the postcondition, never for a fixed interval.**
+  A control the record drives still shows the old value a fixed wait later on a loaded
+  host, so the next pass clicks it again and undoes it (`runProtocolSteps` in
+  `tests/stress/lib.ts`).
 
 ## The test harness — keep it green, keep it in sync
 

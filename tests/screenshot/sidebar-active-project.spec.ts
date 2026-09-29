@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage, setTheme } from "../helpers/app";
+import { openManage, setTheme, signInAs } from "../helpers/app";
 
 // #84 - the active project drives which project a new sample lands in, so it has
 // to be obvious at a glance. Three projects, so "which one is selected?" is a
@@ -17,7 +17,7 @@ async function boot(page: Page) {
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 async function addProject(page: Page, code: string, name: string) {

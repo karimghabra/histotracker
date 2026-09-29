@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage, setTheme, openNewSample } from "../helpers/app";
+import { openManage, openNewSample, setTheme, signInAs } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogs } from "../helpers/stains";
 
@@ -20,7 +20,7 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.getByTitle("Add project").click();
   await expect(page.getByRole("heading", { name: "Add Project" })).toBeVisible();
   await page.locator('input[placeholder="EE"]').fill(code);

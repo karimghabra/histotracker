@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { openManage, openNewSample } from "./app";
+import { openManage, openNewSample, signInAs } from "./app";
 
 // Held in a variable so only the page resolves it (a browser-absolute path).
 export const DB = "/src/lib/db.ts";
@@ -15,7 +15,7 @@ export async function boot(page: Page, user = "Alex Rivera"): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: user });
+  await signInAs(page, user);
 }
 
 export async function addProject(page: Page, code: string, name: string): Promise<void> {

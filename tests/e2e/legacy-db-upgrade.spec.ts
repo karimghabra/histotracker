@@ -1,5 +1,5 @@
 import { test, expect } from "../helpers/test";
-import { showRemoved } from "../helpers/app";
+import { showRemoved, signInAs } from "../helpers/app";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,7 +92,7 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
   // old database already holds. That the legacy directory still populates that
   // picker is part of what "the update must not compromise a database that is
   // already in use" means.
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 
   // #74 — archive a pre-existing sample, then bring it back.
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();

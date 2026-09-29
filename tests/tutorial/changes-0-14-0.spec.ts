@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * Screenshots of what 0.14.0 changed (#121–#128). Not part of CI:
@@ -31,7 +31,7 @@ async function boot(page: Page): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 async function seed(page: Page, count: number): Promise<void> {
@@ -79,7 +79,7 @@ async function seed(page: Page, count: number): Promise<void> {
   }, count);
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await page.waitForTimeout(400);
 }
 

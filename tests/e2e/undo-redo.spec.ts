@@ -1,5 +1,5 @@
 import { test, expect } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 // Undo and redo through the real UI: a mutation, an undo that replays the undo
 // journal back to the action's mark and must fully revert the database, and a
@@ -15,7 +15,7 @@ async function signInAndSeedUser(page: import("@playwright/test").Page) {
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 async function createProject(page: import("@playwright/test").Page, code: string, name: string) {
@@ -142,7 +142,7 @@ async function seedAStainRackPerAgent(page: import("@playwright/test").Page) {
   }, AGENTS);
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 test("a step ticked across a range of racks can be undone and redone", async ({ page }) => {

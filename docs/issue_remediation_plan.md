@@ -44,6 +44,25 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #191 — the imaging checkbox un-ticked itself after the click
+
+- **#191 · ✅ fixed.**
+  The nightly stress run went red on `tests/stress/07-bench-reality.spec.ts`, "bench: re-imaging, and losing a slide after it was analyzed", with `locator.check: Clicking the checkbox did not change its state`.
+  Not a harness flake and not a stale test: the "Images captured" checkbox really did read UNTICKED for a moment after a user ticked it, measured at ~70 ms in headless Chromium on an empty database.
+  It is the only checkbox in the app whose truth is a database column rather than local state.
+  `setSlidePicturesTaken` goes through the write lane, journals its undo entry and then invalidates the query that feeds the box, and React restores a controlled input to its prop as soon as the change event returns - so the box was actively put back to the stale record and stayed there until the refetch landed.
+  It reads as a control that ignored the click, and a second click inside that window records the opposite of what was meant.
+  Longstanding, and nothing to do with #150 or the multi-rack action; what changed was that the browser harness stopped being fast enough to hide it once its virtual filesystem moved to IndexedDB (#189, which flagged the flicker and left it).
+  `usePendingImaging` (`src/hooks/`) holds the tick as an overlay the checkbox reads in front of the record, and the whole of the hook is knowing when that overlay can be lifted.
+  Three tempting rules are all wrong, and each was tried: "when the record agrees" never fires if the record ends up where it began (ticked, then unticked to correct a mis-click), leaving the overlay to override the next real change; "when the record changes" misses that same round trip made by an undo landing between the write and the read; "when the write resolves" is too early, because the invalidation is fired without being awaited, so the read is still in flight and the box hands itself back to the stale record and flickers again.
+  So the overlay is lifted by a read the hook starts ITSELF once the write has committed: its `refetchQueries` cancels a read already in flight, so what answers cannot be a read that began before the write, and whatever those rows say is the truth - this write, or the truth after an undo that overtook it.
+  That promise resolving is not a read landing (a later invalidation that cancels it resolves it empty), so the hook waits until the query has actually taken data since, re-asking a bounded number of times so an invalidation storm cannot hold the overlay up for good.
+  Nothing is inferred by watching the record, so no sequence of reads landing out of order can stick an overlay on, and a per-slide token stops a slower earlier tick lifting the overlay a later one has put up.
+  A refused write lifts the overlay at once and rethrows, so the drawer still shows the refusal.
+  Both surfaces that carry the checkbox use it: the rack drawer's slide rows (`StackDetailsDrawer`) and the cut group's imaging checklist (`SectionDetailsDrawer`), counts included, so "1/3 imaged" no longer disagrees with the box beside it.
+  *Test:* `src/hooks/usePendingImaging.test.ts`, and `tests/e2e/mass-imaging.spec.ts` (`#191`), which fails with the nightly's own error without the fix; the stress spec that found it is unchanged and green.
+
+
 ## #182 — a slide reached a staining rack without ever being cut
 
 - **#182 · ✅ fixed.**

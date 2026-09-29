@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage, openNewSample } from "../helpers/app";
+import { openManage, openNewSample, signInAs } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 /**
@@ -19,7 +19,7 @@ async function signInAndProject(page: Page, code = "EE", name = "Enthesis Engine
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await addProject(page, code, name);
 }
 

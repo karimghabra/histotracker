@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage, openNewSample } from "../helpers/app";
+import { openManage, openNewSample, signInAs } from "../helpers/app";
+import { DB } from "../helpers/lab";
 
 /**
  * #77 — "Manifest should show who made what changes."
@@ -23,7 +24,7 @@ async function boot(page: Page, user: string): Promise<void> {
     timeout: 20_000,
   });
   await addUser(page, user);
-  await page.getByLabel("Signed-in user").selectOption({ label: user });
+  await signInAs(page, user);
 }
 
 async function addUser(page: Page, name: string): Promise<void> {
@@ -80,7 +81,14 @@ test("#77: each change is attributed to the person who was signed in for it", as
 
   // A second person takes over the workstation.
   await addUser(page, "Bo Chen");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Bo Chen" });
+  await signInAs(page, "Bo Chen");
+  // signInAs returning is the promise that the switch is on the record, so a write
+  // made straight after it lands under Bo, not under Alex, who was signed in before.
+  const recorded = await page.evaluate(async (path) => {
+    const db = (await import(/* @vite-ignore */ path)) as { getActiveUser: () => Promise<{ name: string } | null> };
+    return (await db.getActiveUser())?.name ?? "nobody";
+  }, DB);
+  expect(recorded).toBe("Bo Chen");
   await addSample(page, "bo block", "EE");
 
   await openManifest(page);
@@ -118,7 +126,7 @@ test("#77: the manifest filters by person and by action", async ({ page }) => {
   await addProject(page, "EE", "Enthesis Engineering");
   await addSample(page, "alex block", "EE");
   await addUser(page, "Bo Chen");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Bo Chen" });
+  await signInAs(page, "Bo Chen");
   await addSample(page, "bo block", "EE");
 
   await openManifest(page);
@@ -171,7 +179,7 @@ test("#77: a change nobody was signed in for reads as Unsigned, not as somebody"
   );
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 
   await openManifest(page);
   await expect(async () => {
