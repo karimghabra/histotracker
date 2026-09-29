@@ -76,6 +76,24 @@ describe("usePendingImaging (#191)", () => {
     expect(result.current.imaged(imaged)).toBe(false);
   });
 
+  it("a tick taken back before the refetch leaves nothing to override a later change", async () => {
+    const slides = [slide(10)];
+    const { result, rerender } = renderHook(
+      ({ slides }) => usePendingImaging(slides, 1),
+      { initialProps: { slides } },
+    );
+    await act(() => result.current.mark(10, true, async () => undefined));
+    await act(() => result.current.mark(10, false, async () => undefined));
+    // The row is back where it started, so the refetch hands back the same array.
+    rerender({ slides });
+    expect(result.current.imaged(slide(10))).toBe(false);
+
+    // Then the record turns imaged from elsewhere (an undo, the bulk action).
+    const imaged = slide(10, "2026-09-28 10:00:00");
+    rerender({ slides: [imaged] });
+    expect(result.current.imaged(imaged)).toBe(true);
+  });
+
   it("abandons intents when the drawer moves to another rack", async () => {
     const { result, rerender } = renderHook(
       ({ scope }) => usePendingImaging([slide(10)], scope),

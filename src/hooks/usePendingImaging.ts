@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /** All the pending view needs of a slide: which one it is, and whether the record says imaged. */
 export interface ImagedSlide {
   id: number;
   stage_pictures_taken_at: string | null;
 }
+
+interface Intent {
+  value: boolean;
+  /** What the record said when the intent was made; once it says anything else, it has caught up. */
+  from: boolean;
+}
+
+const recorded = (slide: ImagedSlide) => Boolean(slide.stage_pictures_taken_at);
 
 /**
  * The imaging tick a technician has just made, shown until the record catches
@@ -31,7 +39,9 @@ export interface ImagedSlide {
  * screen, so they are abandoned rather than carried across.
  */
 export function usePendingImaging(slides: ImagedSlide[], scopeKey: number) {
-  const [pending, setPending] = useState<ReadonlyMap<number, boolean>>(() => new Map());
+  const [pending, setPending] = useState<ReadonlyMap<number, Intent>>(() => new Map());
+  const slidesRef = useRef(slides);
+  slidesRef.current = slides;
 
   useEffect(() => {
     setPending((current) => (current.size === 0 ? current : new Map()));
@@ -42,7 +52,8 @@ export function usePendingImaging(slides: ImagedSlide[], scopeKey: number) {
       if (current.size === 0) return current;
       const next = new Map(current);
       for (const slide of slides) {
-        if (next.get(slide.id) === Boolean(slide.stage_pictures_taken_at)) next.delete(slide.id);
+        const intent = next.get(slide.id);
+        if (intent && recorded(slide) !== intent.from) next.delete(slide.id);
       }
       return next.size === current.size ? current : next;
     });
@@ -51,7 +62,14 @@ export function usePendingImaging(slides: ImagedSlide[], scopeKey: number) {
   /** Show `value` for this slide at once, and write it; a write that fails gives the box back. */
   const mark = useCallback(
     async (slideId: number, value: boolean, write: (value: boolean) => Promise<unknown>) => {
-      setPending((current) => new Map(current).set(slideId, value));
+      const slide = slidesRef.current.find((s) => s.id === slideId);
+      const from = slide ? recorded(slide) : !value;
+      setPending((current) => {
+        const next = new Map(current);
+        if (value === from) next.delete(slideId);
+        else next.set(slideId, { value, from });
+        return next;
+      });
       try {
         await write(value);
       } catch (reason) {
@@ -69,7 +87,10 @@ export function usePendingImaging(slides: ImagedSlide[], scopeKey: number) {
 
   return {
     /** What this slide's checkbox should show: the outstanding intent, or the record. */
-    imaged: (slide: ImagedSlide) => pending.get(slide.id) ?? Boolean(slide.stage_pictures_taken_at),
+    imaged: (slide: ImagedSlide) => {
+      const intent = pending.get(slide.id);
+      return intent && recorded(slide) === intent.from ? intent.value : recorded(slide);
+    },
     mark,
   };
 }
