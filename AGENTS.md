@@ -169,8 +169,8 @@ Conventions in the specs, worth following rather than re-deriving:
   do this; the specs that sign in by hand mostly do not yet.
 - The same shape, generally: **wait for the postcondition, never for a fixed interval.**
   A control the record drives still shows the old value a fixed wait later on a loaded
-  host, so the next pass clicks it again and undoes it. That is what made
-  `runProtocolSteps` leave a rack in Staining under load.
+  host, so the next pass clicks it again and undoes it (`runProtocolSteps` in
+  `tests/stress/lib.ts`).
 
 ## The test harness — keep it green, keep it in sync
 
