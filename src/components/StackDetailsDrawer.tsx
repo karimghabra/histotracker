@@ -2,6 +2,7 @@ import { CheckCircle2, ListChecks, Layers, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useActions } from "../hooks/useActions";
 import { useAssayCatalog, useStackSlides, useStacksSlides } from "../hooks/useData";
+import { usePendingImaging } from "../hooks/usePendingImaging";
 import { describeImagingResult, syncAssayStackWorkflowStep } from "../lib/db";
 import { SECTION_STAGES } from "../lib/stages";
 import type { SlideStack } from "../lib/types";
@@ -47,6 +48,9 @@ export function StackDetailsDrawer({
     mergeSlideStacks,
   } = useActions();
   const { data: slides = [] } = useStackSlides(stack.id);
+  // The tick list writes to the database, so it shows the tick a beat before the
+  // record does (#191, usePendingImaging).
+  const imaging = usePendingImaging(slides, stack.id);
   const { data: catalog = [] } = useAssayCatalog();
   // A viewer reads the rack and its protocol progress; it cannot drive them (#72).
   const readOnly = useReadOnly();
@@ -87,7 +91,7 @@ export function StackDetailsDrawer({
       .filter((value): value is "stain" | "ihc" => value === "stain" || value === "ihc"),
     [slides],
   );
-  const imagedCount = slides.filter((slide) => Boolean(slide.stage_pictures_taken_at)).length;
+  const imagedCount = slides.filter((slide) => imaging.imaged(slide)).length;
 
   // Can the selected racks be poured into one (#124)?
   //
@@ -405,7 +409,7 @@ export function StackDetailsDrawer({
           )}
           <div className="space-y-1.5">
             {slides.map((slide) => {
-              const imaged = Boolean(slide.stage_pictures_taken_at);
+              const imaged = imaging.imaged(slide);
               const showImaging = ["ready_for_imaging", "pictures_taken"].includes(stack.current_stage);
               return (
                 <div key={slide.id} className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-2">
@@ -427,7 +431,13 @@ export function StackDetailsDrawer({
                       type="checkbox"
                       checked={imaged}
                       aria-label={`Images captured for ${displayCode(slide.slide_code)}`}
-                      onChange={() => void run(() => setSlidePicturesTaken(slide.id, !imaged))}
+                      onChange={() =>
+                        void run(() =>
+                          imaging.mark(slide.id, !imaged, (value) =>
+                            setSlidePicturesTaken(slide.id, value),
+                          ),
+                        )
+                      }
                       className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
                     />
                   )}

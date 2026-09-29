@@ -42,6 +42,9 @@ first red one:
    side by side in the same run, the same small lab built on both, ARIA
    structure diffed and layout/contrast audited at two widths - the screenshot
    comparison without a screenshot or a stored baseline.
+   It rebuilds "this tree" from `git archive HEAD` plus `git diff HEAD`, which
+   does not see an untracked file, so **`git add` a new source file before
+   running this layer** or it serves a tree the new import cannot resolve.
 3. **e2e**: `tests/e2e` at retries 0, a smoke set first (`smoke`, `workflow`,
    `sync`, `sync-pull-relaunch`), then the rest.
 4. **screenshot** (`--screenshot`, CI only, never on a lab machine): the

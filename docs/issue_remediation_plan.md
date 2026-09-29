@@ -44,6 +44,21 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #191 — the imaging checkbox un-ticked itself after the click
+
+- **#191 · ✅ fixed.**
+  The nightly stress run went red on `tests/stress/07-bench-reality.spec.ts`, "bench: re-imaging, and losing a slide after it was analyzed", with `locator.check: Clicking the checkbox did not change its state`.
+  Not a harness flake and not a stale test: the "Images captured" checkbox really did read UNTICKED for a moment after a user ticked it, measured at ~70 ms in headless Chromium on an empty database.
+  It is the only checkbox in the app whose truth is a database column rather than local state.
+  `setSlidePicturesTaken` goes through the write lane, journals its undo entry and then invalidates the query that feeds the box, and React restores a controlled input to its prop as soon as the change event returns - so the box was actively put back to the stale record and stayed there until the refetch landed.
+  It reads as a control that ignored the click, and a second click inside that window records the opposite of what was meant.
+  Longstanding, and nothing to do with #150 or the multi-rack action; what changed was that the browser harness stopped being fast enough to hide it once its virtual filesystem moved to IndexedDB (#189, which flagged the flicker and left it).
+  `usePendingImaging` (`src/hooks/`) holds the tick a technician has just made and shows it while the record is still behind, dropping it the moment the record agrees - not when the action resolves, because the action fires its invalidation without awaiting it.
+  A refused write hands the box straight back to the truth, and moving the drawer to another rack abandons whatever was outstanding.
+  Both surfaces that carry the checkbox use it: the rack drawer's slide rows (`StackDetailsDrawer`) and the cut group's imaging checklist (`SectionDetailsDrawer`), counts included, so "1/3 imaged" no longer disagrees with the box beside it.
+  *Test:* `src/hooks/usePendingImaging.test.ts`, and `tests/e2e/mass-imaging.spec.ts` (`#191`), which fails with the nightly's own error without the fix; the stress spec that found it is unchanged and green.
+
+
 ## #182 — a slide reached a staining rack without ever being cut
 
 - **#182 · ✅ fixed.**
