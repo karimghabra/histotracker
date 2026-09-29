@@ -35,9 +35,9 @@ export interface ImagedSlide {
  *     box would hand itself back to the stale record and flicker again.
  *
  * The overlay is therefore lifted by a read this hook starts ITSELF, after the
- * write has committed, and awaits: `refetchQueries` cancels a read already in
- * flight (`cancelRefetch` defaults to true), so what answers cannot be a read
- * that began before the write. Whatever those rows say is then the truth - this
+ * write has committed, and awaits until a read has landed: the first
+ * `refetchQueries` cancels a read already in flight, so what answers cannot be a
+ * read that began before the write. Whatever those rows say is then the truth - this
  * write, or the truth after an undo that overtook it - and the box follows the
  * record again. Nothing is inferred by watching the record, so no sequence of
  * reads landing out of order can stick an overlay on. A write that does not land
@@ -47,6 +47,8 @@ export interface ImagedSlide {
  * drawer moves to another rack it changes, and overlays about slides no longer on
  * screen are abandoned rather than carried across.
  */
+const REREADS = 5;
+
 export function usePendingImaging(queryKey: QueryKey) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ReadonlyMap<number, boolean>>(() => new Map());
@@ -92,7 +94,19 @@ export function usePendingImaging(queryKey: QueryKey) {
     // A read that fails leaves the record wherever it already was, which the box
     // should show either way, so it lifts the overlay rather than surfacing as
     // though the write had been refused.
-    await qc.refetchQueries({ queryKey, exact: true }).catch(() => undefined);
+    //
+    // The awaited promise resolving is not a read landing: a later fetch that
+    // cancels this one resolves it empty. So it is asked again until the query
+    // has taken data since, joining the read now in flight - which began after
+    // this one, so after the write - rather than cancelling it. The attempts are
+    // bounded so an invalidation storm cannot hold the overlay up for good.
+    const landed = () => qc.getQueryState(queryKey)?.dataUpdateCount ?? 0;
+    const before = landed();
+    for (let attempt = 0; attempt < REREADS && landed() === before; attempt += 1) {
+      await qc
+        .refetchQueries({ queryKey, exact: true }, { cancelRefetch: attempt === 0 })
+        .catch(() => undefined);
+    }
     lift();
   };
 

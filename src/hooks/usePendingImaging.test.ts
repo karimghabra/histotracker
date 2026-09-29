@@ -187,6 +187,38 @@ describe("usePendingImaging (#191)", () => {
     expect(view.shown(10)).toBe(true);
   });
 
+  it("a tick whose own re-read is cancelled by a later one stays up until a read lands", async () => {
+    const view = await rack();
+    const release = view.holdReads();
+    let markA!: Promise<void>;
+    await act(async () => {
+      markA = view.mark(10, true, async () => void view.record.set(10, STAMP));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(view.shown(10)).toBe(true);
+
+    // The next tick's write invalidates the query, cancelling A's re-read
+    // before it can land.
+    let markB!: Promise<void>;
+    await act(async () => {
+      markB = view.mark(11, true, async () => {
+        view.record.set(11, STAMP);
+        view.startRead();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await settle();
+    expect(view.shown(10)).toBe(true);
+    expect(view.shown(11)).toBe(true);
+
+    await act(async () => {
+      release();
+      await Promise.all([markA, markB]);
+    });
+    expect(view.shown(10)).toBe(true);
+    expect(view.shown(11)).toBe(true);
+  });
+
   it("a slower earlier tick on the same slide does not take down a later one", async () => {
     const view = await rack();
     const first = held();
