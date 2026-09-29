@@ -135,12 +135,20 @@ export async function closeDrawerIfOpen(page: Page): Promise<void> {
  * never on an idle one. It reddened `browser-tests` on CI while passing every
  * local run.
  *
- * The Sign out button is rendered from `activeUser`, which is read back out of
- * that row, so its arrival is the proof the sign-in is on the record. Every
- * sign-in goes through here for that reason; a spec that signs in by hand is one
- * more chance for the same failure to come back somewhere new.
+ * The picker is controlled by `activeUser`, which is read back out of that row,
+ * so React puts the selection back to whoever the record still names after the
+ * change event, and it only settles on `name` once the write has landed and been
+ * read back. That holds for a first sign-in and for a switch from someone else
+ * alike, where the Sign out button is already on screen and proves nothing.
+ * Every sign-in goes through here for that reason; a spec that signs in by hand
+ * is one more chance for the same failure to come back somewhere new.
  */
 export async function signInAs(page: Page, name: string): Promise<void> {
-  await page.getByLabel("Signed-in user").selectOption({ label: name });
-  await expect(page.getByTitle("Sign out")).toBeVisible({ timeout: 15_000 });
+  const picker = page.getByLabel("Signed-in user");
+  await picker.selectOption({ label: name });
+  await expect
+    .poll(() => picker.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]?.label ?? ""), {
+      timeout: 15_000,
+    })
+    .toBe(name);
 }

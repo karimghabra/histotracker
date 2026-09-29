@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "../helpers/test";
 import { openManage, openNewSample, signInAs } from "../helpers/app";
+import { DB } from "../helpers/lab";
 
 /**
  * #77 — "Manifest should show who made what changes."
@@ -81,6 +82,13 @@ test("#77: each change is attributed to the person who was signed in for it", as
   // A second person takes over the workstation.
   await addUser(page, "Bo Chen");
   await signInAs(page, "Bo Chen");
+  // signInAs returning is the promise that the switch is on the record, so a write
+  // made straight after it lands under Bo, not under Alex, who was signed in before.
+  const recorded = await page.evaluate(async (path) => {
+    const db = (await import(/* @vite-ignore */ path)) as { getActiveUser: () => Promise<{ name: string } | null> };
+    return (await db.getActiveUser())?.name ?? "nobody";
+  }, DB);
+  expect(recorded).toBe("Bo Chen");
   await addSample(page, "bo block", "EE");
 
   await openManifest(page);

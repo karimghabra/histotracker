@@ -165,8 +165,8 @@ Conventions in the specs, worth following rather than re-deriving:
   `app_settings.active_user_id` has landed; until it has, the data layer refuses every
   write with "Sign in before making modifications", which the `page.evaluate` seed that
   usually follows hits on a loaded host and never on an idle one. `signInAs` waits for
-  the Sign out button, which is rendered from the record read back. Every suite goes
-  through it.
+  the picker, which the record read back drives, to settle on the name asked for (the
+  Sign out button proves nothing on a switch between users). Every suite goes through it.
 - The same shape, generally: **wait for the postcondition, never for a fixed interval.**
   A control the record drives still shows the old value a fixed wait later on a loaded
   host, so the next pass clicks it again and undoes it (`runProtocolSteps` in
