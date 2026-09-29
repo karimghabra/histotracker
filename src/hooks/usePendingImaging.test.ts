@@ -10,6 +10,7 @@ const STAMP = "2026-09-28 10:00:00";
 /** A drawer's view of a two-slide rack: the query that feeds the boxes, over a record the test owns. */
 async function rack(initial: Record<number, string | null> = { 10: null, 11: null }) {
   const record = new Map(Object.entries(initial).map(([id, at]) => [Number(id), at]));
+  let gate: Promise<unknown> = Promise.resolve();
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: qc }, children);
@@ -17,8 +18,11 @@ async function rack(initial: Record<number, string | null> = { 10: null, 11: nul
     () => {
       const { data = [] } = useQuery({
         queryKey: KEY,
-        queryFn: async (): Promise<ImagedSlide[]> =>
-          [...record].map(([id, at]) => ({ id, stage_pictures_taken_at: at })),
+        queryFn: async (): Promise<ImagedSlide[]> => {
+          const rows = [...record].map(([id, at]) => ({ id, stage_pictures_taken_at: at }));
+          await gate;
+          return rows;
+        },
       });
       return { slides: data, imaging: usePendingImaging(KEY) };
     },
@@ -31,6 +35,13 @@ async function rack(initial: Record<number, string | null> = { 10: null, 11: nul
       result.current.imaging.imaged(result.current.slides.find((slide) => slide.id === id)!),
     mark: (id: number, value: boolean, write: () => Promise<unknown>) =>
       result.current.imaging.mark(id, value, write),
+    /** Start a read of the record as it is now, and hold its answer until `release`. */
+    readHeld: () => {
+      let release!: () => void;
+      gate = new Promise<void>((resolve) => (release = resolve));
+      void qc.invalidateQueries({ queryKey: KEY });
+      return release;
+    },
     /** The action's own invalidation, or anything else's, landing. */
     refetch: () => act(() => qc.invalidateQueries({ queryKey: KEY })),
   };
@@ -122,5 +133,31 @@ describe("usePendingImaging (#191)", () => {
     view.record.set(10, null);
     await view.refetch();
     expect(view.shown(10)).toBe(false);
+  });
+
+  it("a read already in flight when the box is ticked does not land on the tick", async () => {
+    const view = await rack();
+    // Another action's refetch has read the record, and not come back yet.
+    const release = view.readHeld();
+    const writing = held();
+    let marked!: Promise<void>;
+    act(() => {
+      marked = view.mark(10, true, writing.write);
+    });
+    expect(view.shown(10)).toBe(true);
+
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(view.shown(10)).toBe(true);
+
+    await act(async () => {
+      view.record.set(10, STAMP);
+      writing.land();
+      await marked;
+    });
+    await view.refetch();
+    expect(view.shown(10)).toBe(true);
   });
 });

@@ -25,7 +25,8 @@ export interface ImagedSlide {
  * So the tick is written into the cached rows of `queryKey`, the query that
  * feeds the box, in the change handler itself: an optimistic update, with no
  * second copy of the intent to outlive it. The next read of the query, whether
- * the action's own invalidation or an undo's, replaces it with the record. The
+ * the action's own invalidation or an undo's, replaces it with the record; a read
+ * already in flight began before this write and is cancelled, not let land. The
  * box reads that cache directly and re-renders from the handler, because the
  * query's own observers hear of the change only on a later tick, after React has
  * already put the box back. A
@@ -45,6 +46,7 @@ export function usePendingImaging(queryKey: QueryKey) {
     const was =
       qc.getQueryData<ImagedSlide[]>(queryKey)?.find((row) => row.id === slideId)
         ?.stage_pictures_taken_at ?? null;
+    void qc.cancelQueries({ queryKey, exact: true }, { revert: false });
     setRow(value ? nowTimestamp() : null);
     rerender();
     try {
