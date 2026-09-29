@@ -1,5 +1,5 @@
 import { test, expect } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 // A real drive-through of the write path: add a lab user, sign in, create a
 // project. Exercises INSERTs, lastInsertId, and React Query refetch through the
@@ -22,7 +22,7 @@ test("add user, sign in, create a project", async ({ page }) => {
   await page.keyboard.press("Escape");
 
   // --- Sign in as that user ---
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 
   // --- Create a project ---
   await page.getByTitle("Add project").click();

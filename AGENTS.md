@@ -160,13 +160,13 @@ Conventions in the specs, worth following rather than re-deriving:
   once the sidebar list loads.
 - Reuse a spec's own `seedSample`/`dragOnto` helpers: `dragOnto` clears dnd-kit's 5px
   activation threshold, which a hand-rolled drag does not.
-- **Signing in is a write, so wait for it to be recorded before the next one.**
-  `selectOption` on "Signed-in user" returns long before `app_settings.active_user_id`
-  has landed, and until it has, the data layer refuses every write with "Sign in before
-  making modifications" - which a following `page.evaluate` seed hits on a loaded host
-  and never on an idle one. Wait for the Sign out button, which is rendered from the
-  record that was read back. The shared helpers (`tests/helpers/lab.ts`, `tests/stress/lib.ts`)
-  do this; the specs that sign in by hand mostly do not yet.
+- **Sign in with `signInAs` (`tests/helpers/app.ts`), never with a bare `selectOption`.**
+  Choosing a name in "Signed-in user" is a WRITE, and `selectOption` returns long before
+  `app_settings.active_user_id` has landed; until it has, the data layer refuses every
+  write with "Sign in before making modifications", which the `page.evaluate` seed that
+  usually follows hits on a loaded host and never on an idle one. `signInAs` waits for
+  the Sign out button, which is rendered from the record read back. Every suite goes
+  through it.
 - The same shape, generally: **wait for the postcondition, never for a fixed interval.**
   A control the record drives still shows the old value a fixed wait later on a loaded
   host, so the next pass clicks it again and undoes it (`runProtocolSteps` in

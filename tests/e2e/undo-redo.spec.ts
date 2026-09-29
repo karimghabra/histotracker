@@ -1,5 +1,5 @@
 import { test, expect } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 // Undo and redo through the real UI: a mutation, an undo that replays the undo
 // journal back to the action's mark and must fully revert the database, and a
@@ -15,13 +15,7 @@ async function signInAndSeedUser(page: import("@playwright/test").Page) {
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
-  // Wait for the sign-in to be RECORDED, not merely chosen.
-  // `activeUser` is read back from `app_settings.active_user_id`, so the Sign out
-  // button appears only once the write has landed. Until it has, the data layer
-  // refuses every write with "Sign in before making modifications" - which the
-  // `page.evaluate` seed below hits on a loaded host and never on an idle one.
-  await expect(page.getByTitle("Sign out")).toBeVisible({ timeout: 15_000 });
+  await signInAs(page, "Alex Rivera");
 }
 
 async function createProject(page: import("@playwright/test").Page, code: string, name: string) {
@@ -148,7 +142,7 @@ async function seedAStainRackPerAgent(page: import("@playwright/test").Page) {
   }, AGENTS);
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 test("a step ticked across a range of racks can be undone and redone", async ({ page }) => {

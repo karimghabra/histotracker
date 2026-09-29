@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 // #61 — a tile can be de-selected by clicking it again (or its checkbox), and
 // de-selecting must NOT re-open the right-hand detail panel.
@@ -15,7 +15,7 @@ async function boot(page: Page) {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.getByTitle("Add project").click();
   await page.locator('input[placeholder="EE"]').fill("EE");
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Enthesis Engineering");

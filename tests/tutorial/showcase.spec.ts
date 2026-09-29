@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openBackups, openManage } from "../helpers/app";
+import { openBackups, openManage, signInAs } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // Walks the whole Histometer pipeline and captures screenshots for the tutorial
@@ -52,7 +52,7 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 
   await page.getByTitle("Add project").click();
   await expect(page.getByRole("heading", { name: "Add Project" })).toBeVisible();

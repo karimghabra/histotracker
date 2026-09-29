@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from "../helpers/test";
+import { signInAs } from "../helpers/app";
 
 /**
  * Stress-suite scaffolding.
@@ -152,13 +153,7 @@ export async function addUser(page: Page, name: string): Promise<void> {
 }
 
 export async function signIn(page: Page, name: string): Promise<void> {
-  await page.getByLabel("Signed-in user").selectOption({ label: name });
-  // Wait for the sign-in to be RECORDED, not merely chosen.
-  // `activeUser` is read back from `app_settings.active_user_id`, so the Sign out
-  // button appears only once the write has landed. Until it has, the data layer
-  // refuses every write with "Sign in before making modifications" - which a
-  // following `page.evaluate` seed hits on a loaded host and never on an idle one.
-  await expect(page.getByTitle("Sign out")).toBeVisible({ timeout: 15_000 });
+  await signInAs(page, name);
 }
 
 export async function boot(page: Page, user = "Alex Rivera"): Promise<void> {

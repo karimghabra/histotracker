@@ -1,5 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 
 // #72 — a viewer should SEE cutting plans and existing tags, and nothing more.
@@ -82,7 +82,7 @@ async function seedWorkstation(ws: Page) {
   await ws.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await ws.getByRole("button", { name: "Add", exact: true }).click();
   await ws.keyboard.press("Escape");
-  await ws.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(ws, "Alex Rivera");
   await ws.getByTitle("Add project").click();
   await ws.locator('input[placeholder="EE"]').fill("EE");
   await ws.locator('input[placeholder="Enthesis Engineering"]').fill("Enthesis Engineering");

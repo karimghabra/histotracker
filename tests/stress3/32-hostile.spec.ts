@@ -1,6 +1,7 @@
 import { test, expect, boot, seedLarge, checkInvariantsFast, callDb, sql } from "../stress2/driver";
 import { checkStructure, fingerprint, fingerprintDiff } from "./driver3";
 import { checkViewsAgainstData } from "./views";
+import { signInAs } from "../helpers/app";
 
 /**
  * The things the app is not expecting.
@@ -416,7 +417,7 @@ test("nobody signed in means nobody writes, at the data layer", async ({ page, f
   ).toEqual([]);
 
   // The gate opens again — signing back in restores the workstation.
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.waitForTimeout(300);
   const allowed = await callDb(page, "setSampleDescription", [1, "written by Alex"]);
   expect(allowed.ok, "a signed-in user can work again").toBe(true);

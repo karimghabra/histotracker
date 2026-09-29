@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openBackups, openManage } from "../helpers/app";
+import { openBackups, openManage, signInAs } from "../helpers/app";
 import { MIGRATIONS, NEWEST, fromANewerVersion, preMigrationImage } from "../helpers/images";
 import {
   readShimFile,
@@ -83,7 +83,7 @@ async function freshLab(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" })).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.getByTitle("Add project").click();
   await page.locator('input[placeholder="EE"]').fill("NB");
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("New Build");

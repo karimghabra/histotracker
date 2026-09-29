@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * The four issues raised against 0.14.x.
@@ -25,7 +25,7 @@ async function boot(page: Page): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 async function addProject(page: Page, code: string, name: string): Promise<void> {
@@ -188,7 +188,7 @@ test("#131: the sidebar selection filters the whole dashboard, and All Projects 
   });
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 
   const extras = page
     .locator("div.rounded-lg")
@@ -309,7 +309,7 @@ async function seedEmbedded(page: Page): Promise<void> {
   });
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 test("#129: Embedded Inventory sorts by what needs cutting", async ({ page }) => {
@@ -373,7 +373,7 @@ test("#133: slides can be reassigned and removed from the Logs", async ({ page }
   });
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
   const sampleCell = page.getByRole("cell", { name: "EE-1", exact: true });
@@ -496,7 +496,7 @@ test("#134: a block past the processor is not offered the switch", async ({ page
   });
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 
   await page.getByText("EE-1", { exact: true }).first().click();
   // The drawer is open on a block that has been through the machine…

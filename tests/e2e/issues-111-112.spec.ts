@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage, openNewSample } from "../helpers/app";
+import { openManage, openNewSample, signInAs } from "../helpers/app";
 import { settleAfterDrop } from "../helpers/drag";
 import { addStainFromLogsAndReturn, openBlockDrawer } from "../helpers/stains";
 
@@ -20,7 +20,7 @@ async function signIn(page: Page) {
     page.getByLabel("Signed-in user").locator("option", { hasText: "Alex Rivera" }),
   ).toHaveCount(1);
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 }
 
 async function addProject(page: Page, code: string, name: string) {

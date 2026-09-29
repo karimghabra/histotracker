@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 
 /**
  * #150: several slides marked imaged in one action.
@@ -38,7 +38,7 @@ async function boot(page: Page): Promise<void> {
   const overlay = page.locator("div.fixed.inset-0.z-50");
   if (await overlay.count()) await overlay.first().click({ position: { x: 5, y: 5 } });
   await expect(overlay).toHaveCount(0);
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 }
 
 /** One or more blocks cut into H&E slides (one cut group per size given, one block per entry
@@ -94,7 +94,7 @@ async function seedRackAtImaging(page: Page, groups: number[] = [3], samples = 1
   );
   await page.goto("/");
   await expect(page.getByLabel("Signed-in user")).toBeVisible({ timeout: 20_000 });
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
 
   // Run the stain protocol the way the bench does. Finishing it moves the rack to Ready for
   // Imaging, which is what hands the glass to a per-sample imaging rack (as in workflow.spec.ts).
@@ -227,7 +227,7 @@ test("#150: a slide the single-slide rule refuses is left untouched and listed, 
     section_request_id,
   );
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await openImagingRack(page);
 
   const boxes = drawer(page).locator('input[type="checkbox"][aria-label^="Select EE-"]');
@@ -337,7 +337,7 @@ test("#150: across several selected racks, a slide the single-slide rule refuses
     section_request_id,
   );
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await selectImagingRacks(page, ["EE-1", "EE-2"]);
 
   await drawer(page).getByRole("button", { name: /Mark \d+ Slides? Imaged/ }).click();
@@ -412,7 +412,7 @@ test("#191: a tick the data layer refuses goes back, and the drawer says why", a
     ),
   );
   await page.goto("/");
-  await page.getByLabel("Signed-in user").selectOption({ label: USER });
+  await signInAs(page, USER);
   await openImagingRackRows(page);
 
   const box = drawer(page).getByRole("checkbox", { name: /^Images captured for EE-/ }).first();

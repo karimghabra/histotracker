@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "../helpers/test";
-import { openManage } from "../helpers/app";
+import { openManage, signInAs } from "../helpers/app";
 import { addStainFromLogs } from "../helpers/stains";
 import { cutBlockFor } from "../helpers/cut";
 import { readSheet, readWorkbook } from "../helpers/xlsx";
@@ -25,7 +25,7 @@ async function boot(page: Page) {
   await page.getByPlaceholder("Alex Rivera").fill("Alex Rivera");
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await page.keyboard.press("Escape");
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
   await page.getByTitle("Add project").click();
   await page.locator('input[placeholder="EE"]').fill("EE");
   await page.locator('input[placeholder="Enthesis Engineering"]').fill("Enthesis Engineering");
@@ -232,7 +232,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
   await page.locator("aside").getByText("Enthesis Engineering").click();
   // The image already carries the lab user; sign in as them, which is what the
   // New Sample button waits for.
-  await page.getByLabel("Signed-in user").selectOption({ label: "Alex Rivera" });
+  await signInAs(page, "Alex Rivera");
 
   // The three blocks that were already in the database are still there…
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
