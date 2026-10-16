@@ -44,6 +44,22 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #193 — the nightly read a rack's protocol before it had loaded
+
+- **#193 · ✅ fixed in the stress harness; the issue closes once a night is green.**
+  The nightly's stress1 job went red on three of the sixteen nights run at `c19fc6f`, on the test #191 was found on: `tests/stress/07-bench-reality.spec.ts`, "bench: re-imaging, and losing a slide after it was analyzed", now with `locator.click: Timeout 20000ms exceeded` waiting for a card in Ready for Imaging.
+  A harness defect, not an app one.
+  The rack drawer opens before its protocol checklist does, because the steps come from a query, and `runProtocolSteps` counted the unticked steps with `count()`, which never waits.
+  It read zero in that moment, returned having ticked nothing, and the test closed the drawer with the rack still in Staining; the failure then surfaced twenty seconds later as Ready for Imaging having no card to open.
+  The traces of the Oct 12 and Oct 15 runs show exactly that sequence (the Sep 30 artifact had expired): drawer open, step count zero, drawer closed, timeout.
+  It never failed here on an idle or a CPU-loaded host, but a 300 ms delay on checklist reads in the browser shim reproduced it every time, with the nightly's own error.
+  Under that delay the same test then failed one line later on a second race of the same shape: the drawer closes itself once the rack's last step is ticked, and `closeDrawer` counted it open, then clicked a close button that was already gone and waited out the action timeout for it.
+  `waitForProtocolSteps` (`tests/stress/lib.ts`) waits for the checklist's first step, ticked or not, before anything counts them; `runProtocolSteps` and the B5 block of the same spec go through it, which also covers `06-durability`'s undo chain.
+  `closeDrawer` now waits for the drawer to be gone and retries the click only while it is still there.
+  The re-imaging test asserts that both H&E steps were ticked, so a silent no-op fails where it happens instead of a line that only looks related.
+  *Test:* with that delay in place, the re-imaging test failed 3 of 3 before the change and stress1 passed 9 of 9 after it; the delay hook was a probe and is not committed.
+
+
 ## #191 — the imaging checkbox un-ticked itself after the click
 
 - **#191 · ✅ fixed.**

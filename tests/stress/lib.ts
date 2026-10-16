@@ -82,13 +82,23 @@ export const column = (page: Page, title: string) =>
 export const drawer = (page: Page) =>
   page.locator("div.border-l").filter({ has: page.getByRole("heading", { name: "Timeline" }) });
 
-/** Close whatever drawer is open, if one is. */
+/**
+ * Close whatever drawer is open, if one is.
+ *
+ * A drawer can also close ITSELF while this runs: a rack whose last protocol
+ * step has just been ticked moves to Ready for Imaging and its drawer goes with
+ * it. A click aimed at the close button then waits out the whole action timeout
+ * for a button that is not coming back (#193). So what is waited for is the
+ * drawer being gone, and the click is retried only while it is still there.
+ */
 export async function closeDrawer(page: Page): Promise<void> {
   const panel = drawer(page);
-  if (await panel.count()) {
-    await panel.locator("button:has(svg.lucide-x)").first().click();
-    await expect(panel).toHaveCount(0);
-  }
+  await expect(async () => {
+    if (await panel.count()) {
+      await panel.locator("button:has(svg.lucide-x)").first().click({ timeout: 2_000 });
+    }
+    await expect(panel).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
 }
 
 /**
@@ -322,6 +332,24 @@ export async function markSectioned(page: Page, cardText: string): Promise<void>
 }
 
 /**
+ * Wait until the open drawer's protocol checklist has drawn its steps (#193).
+ *
+ * The drawer opens before its checklist does: the steps come from a query, so
+ * for a moment the drawer is open with no step in it, and a `count()` - which
+ * never waits - taken in that moment reads zero. `runProtocolSteps` used to take
+ * that zero as "nothing left to tick", return having ticked nothing, and leave
+ * the rack in Staining; the nightly then failed twenty seconds later on Ready for
+ * Imaging having no card to open. Every step is a button, ticked or not, so the
+ * first one being drawn means the list is.
+ */
+export async function waitForProtocolSteps(page: Page): Promise<void> {
+  await expect(
+    drawer(page).locator("ol li button").first(),
+    "the drawer's protocol checklist never drew its steps",
+  ).toBeVisible({ timeout: 15_000 });
+}
+
+/**
  * Tick every outstanding step of whatever protocol the open drawer shows.
  *
  * Deliberately generic: a stain rack's steps are "Stained → Coverslipped" but
@@ -331,6 +359,7 @@ export async function markSectioned(page: Page, cardText: string): Promise<void>
  * Returns how many steps it completed.
  */
 export async function runProtocolSteps(page: Page, operator = "Alex"): Promise<number> {
+  await waitForProtocolSteps(page);
   let done = 0;
   for (let guard = 0; guard < 12; guard += 1) {
     const pending = drawer(page).locator("ol li button:not(:has(svg.lucide-check))");

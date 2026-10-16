@@ -12,6 +12,7 @@ import {
   runBatch,
   sendForCutting,
   runProtocolSteps,
+  waitForProtocolSteps,
   checkIntegrity,
   storedCode,
 } from "./lib";
@@ -270,6 +271,7 @@ test("bench: a mis-tick, and a rack step re-ticked over an older stain date", as
     // database on every load, so reloading here would wipe the very state just
     // planted. The planted row is already in the image the app is querying.
     if (await openRack(page, "H&E")) {
+      await waitForProtocolSteps(page);
       const pending = drawer(page).locator("ol li button:not(:has(svg.lucide-check))").first();
       if (!(await pending.count())) {
         findings.push({ where: "B5 overwritten date", detail: "no pending protocol step to tick" });
@@ -316,7 +318,10 @@ test("bench: re-imaging, and losing a slide after it was analyzed", async ({
   await cutAndSection(page, "IM-1", ["stain::H&E", "extra"]);
 
   expect(await openRack(page, "H&E")).toBe(true);
-  await runProtocolSteps(page);
+  // H&E's protocol is two steps, Stained and Coverslipped. Ticking fewer leaves
+  // the rack in Staining, which would otherwise surface only below, as Ready for
+  // Imaging having no card to open (#193).
+  expect(await runProtocolSteps(page), "protocol steps ticked on the H&E rack").toBe(2);
   await closeDrawer(page);
 
   const imaging = column(page, "Ready for Imaging");
