@@ -72,7 +72,7 @@ export function SettingsDialog({
 
   return (
     <Modal title="Settings" onClose={onClose} width="max-w-lg">
-      <Section title="Cutting defaults">
+      <Section title="Sectioning defaults">
         <p className="mb-2 text-[11px] text-ink-faint">
           Applied when a newly embedded block is auto-planned, and as the starting
           point in the sectioning plan dialog. Existing plans are not touched.

@@ -36,15 +36,15 @@ async function seedSampleWithSlides(page: Page) {
   await drag(page, "Batch 1", "Needs Embedding");
   await drag(page, "EE-1", "Embedded Inventory");
 
-  // Send for cutting with one stained slide (index 1 = first catalog stain).
+  // Send for sectioning with one stained slide (index 1 = first catalog stain).
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
 }
 
@@ -98,11 +98,14 @@ test("Logs: table, drill-down, and stain filter", async ({ page }) => {
   await sampleNotes.blur();
   await expect(sampleNotes).toHaveText("Block looks good");
 
-  // Expand the slide → its own (separate) panel. No Cut step yet: this group is
-  // still sitting in Needs Sectioning, and a queued slide has not been cut
-  // (#95). It used to claim a Cut stamped when the group was merely created.
+  // Expand the slide → its own (separate) panel. No Sectioned step yet: this
+  // group is still sitting in Needs Sectioning, and a queued slide has not been
+  // sectioned (#95). It used to claim one stamped when the group was merely
+  // created. Scoped to the slide, because the sample's phase uses the same word.
   await slideRow.click();
-  await expect(page.getByText("Cut", { exact: true })).toHaveCount(0);
+  const slidePanel = page.getByRole("region", { name: "Slide EE-1-A details" });
+  await expect(slidePanel).toBeVisible();
+  await expect(slidePanel.getByText("Sectioned", { exact: true })).toHaveCount(0);
 
   // Slide notes persist too.
   const slideNotes = page.getByPlaceholder("Notes about this slide…");

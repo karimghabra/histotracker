@@ -24,12 +24,12 @@ const groupStage = (l: Lab, group: number) =>
   String(l.rows(`SELECT current_stage FROM section_requests WHERE id = ?`, [group])[0].current_stage);
 
 describe("Needs Sectioning straight to Ready for Imaging", () => {
-  it("is refused at the data layer, saying the group must be cut first, and changes nothing", async () => {
+  it("is refused at the data layer, saying the group must be sectioned first, and changes nothing", async () => {
     lab = await openLab();
     const group = await queuedGroup(lab, "skips the cut");
     const before = lab.rows(`SELECT id, current_stage, stage_cut_at, stage_ready_for_imaging_at FROM slides WHERE section_request_id = ?`, [group]);
 
-    await expect(lab.db.updateSectionStage(group, "ready_for_imaging")).rejects.toThrow(/must be cut first/i);
+    await expect(lab.db.updateSectionStage(group, "ready_for_imaging")).rejects.toThrow(/must be sectioned first/i);
 
     expect(groupStage(lab, group)).toBe("needs_sectioning");
     expect(lab.rows(`SELECT id, current_stage, stage_cut_at, stage_ready_for_imaging_at FROM slides WHERE section_request_id = ?`, [group])).toEqual(before);

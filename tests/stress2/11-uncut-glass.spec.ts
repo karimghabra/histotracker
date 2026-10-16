@@ -105,7 +105,7 @@ test("uncut glass: can a stain request pull an extra that has not been cut?", as
           severity: "defect",
           detail:
             `…and one rack tick later ${after[0].code} is recorded as STAINED on ` +
-            `${after[0].stained} with no cut date. This is exactly the fuzzer's step-87 state.`,
+            `${after[0].stained} with no sectioning date. This is exactly the fuzzer's step-87 state.`,
           corroboration: "reproduced deterministically from a saved-but-unsent cutting plan",
         });
       }
@@ -158,7 +158,7 @@ test("uncut glass: can a reassignment put an uncut slide into a live rack?", asy
       findings,
       "uncut slide reassigned into a rack",
       `reassignSlide moved ${after[0].code} into staining rack ${after[0].stack} while it was ` +
-        `still a planned, uncut slide — its stage is now "${after[0].stage}" with no cut date.`,
+        `still a planned, uncut slide — its stage is now "${after[0].stage}" with no sectioning date.`,
       async () => {
         // Second route: does the BOARD show it in Staining? A row in a rack that
         // the board does not draw would be a different (smaller) problem.

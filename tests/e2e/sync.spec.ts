@@ -212,13 +212,13 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
 
   // 5. Needs Sectioning (send for cutting with one stain).
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).click();
   await ws
     .locator("select")
     .filter({ has: ws.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await expect(column(ws, "Needs Sectioning").getByText("Alcian Blue")).toBeVisible({ timeout: 15000 });
   await streamTo(ws, vw, column(vw, "Needs Sectioning").getByText("Alcian Blue"));
@@ -294,7 +294,7 @@ test("every workflow step syncs workstation → viewer", async ({ browser }) => 
 });
 
 // A viewer's stain request should raise the SAME formal request the bench does:
-// the workstation drains it and flags the block (⚑ needs cut, #110), and that flag
+// the workstation drains it and flags the block (⚑ needs sectioning, #110), and that flag
 // streams back to the viewer — not just a passive inbox note.
 test("viewer stain request formally flags the block on the workstation", async ({ browser }) => {
   const { ws, vw, wsCtx, vwCtx } = await openPair(browser, `req-${Date.now()}`);
@@ -330,10 +330,10 @@ test("viewer stain request formally flags the block on the workstation", async (
   await vw.getByRole("button", { name: /Send request/ }).click();
 
   // Workstation drains it → the block is flagged "needs cut" (formal request):
-  // the slide that will carry the stain has not been cut yet (#110).
+  // the slide that will carry the stain has not been sectioned yet (#110).
   await expect(async () => {
     await syncNow(ws);
-    await expect(column(ws, "Embedded Inventory").getByText("⚑ needs cut")).toBeVisible({ timeout: 3000 });
+    await expect(column(ws, "Embedded Inventory").getByText("⚑ needs sectioning")).toBeVisible({ timeout: 3000 });
   }).toPass({ timeout: 40000 });
 
   // The request also lands in the workstation inbox.
@@ -342,7 +342,7 @@ test("viewer stain request formally flags the block on the workstation", async (
   await ws.keyboard.press("Escape");
 
   // The flag streams back to the viewer, and the viewer tracks its request.
-  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("⚑ needs cut"));
+  await streamTo(ws, vw, column(vw, "Embedded Inventory").getByText("⚑ needs sectioning"));
   await vw.getByRole("button", { name: /My requests/ }).click();
   await expect(vw.getByText("EE-1").first()).toBeVisible();
   // Exactly the one request the viewer sent, for the block it named, on screen
@@ -369,8 +369,8 @@ test("viewer request auto-pulls an available extra into Staining and acknowledge
   await embedBlockWs(ws);
   // Cut EE-1 as all extras (default plan) → extras land in inventory.
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await ws.getByText("3 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();

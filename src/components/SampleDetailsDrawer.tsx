@@ -283,7 +283,7 @@ export function SampleDetailsDrawer({
               </p>
             )}
             <p className="rounded-md border border-line bg-surface px-2 py-1.5 text-[11px] text-ink-faint">
-              {readOnlyNotice(reason, "Read-only viewer — cutting and stain requests are made on the workstation.")}
+              {readOnlyNotice(reason, "Read-only viewer — sectioning and stain requests are made on the workstation.")}
               {/* Viewers only. "Use Request stain in the header" is advice for
                   somebody on a mirror who wants to ask the workstation for
                   something; an unsigned user cannot raise a request either, and
@@ -304,18 +304,18 @@ export function SampleDetailsDrawer({
         <>
         <div className="mb-4">
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-faint">
-            Cutting
+            Sectioning
           </h3>
           {/* "Send for Cutting" only where you can actually send (#98): in the
               Embedded Inventory. Everywhere earlier the same dialog is a plan
               you are drafting for later, and calling it a send made technicians
               click it expecting a cut. */}
           <Button variant="subtle" className="w-full justify-center" onClick={() => setShowSectioning(true)}>
-            <Scissors size={13} /> {isEmbedded ? "Send for Cutting" : "Cutting Plan"}
+            <Scissors size={13} /> {isEmbedded ? "Send for Sectioning" : "Sectioning Plan"}
           </Button>
           {sample.pending_stains && (
             <p className="mt-1 text-[11px] text-brand">
-              Stains preselected ({pendingStainNames(sample.pending_stains)}) — the cut is prefilled and ready.
+              Stains preselected ({pendingStainNames(sample.pending_stains)}) — the sectioning plan is prefilled and ready.
             </p>
           )}
           {/* A plan already sent for cutting is still editable until somebody
@@ -331,7 +331,7 @@ export function SampleDetailsDrawer({
               className="mt-1 flex w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-2 py-1.5 text-left text-[11px] text-ink-soft transition hover:border-brand/50 hover:bg-brand/5 disabled:pointer-events-none disabled:opacity-60"
             >
               <span>
-                Awaiting cut · {group.count} slide{group.count === 1 ? "" : "s"}
+                Awaiting sectioning · {group.count} slide{group.count === 1 ? "" : "s"}
               </span>
               <span className="shrink-0 font-medium text-brand">Edit plan</span>
             </button>
@@ -399,10 +399,10 @@ export function SampleDetailsDrawer({
                     parts.push(`${pulled.length} pulled from an extra slide → now in Staining`);
                   }
                   if (joined.length) {
-                    parts.push(`${joined.length} added to the cut already waiting — no second cut`);
+                    parts.push(`${joined.length} added to the sectioning group already waiting — no second group`);
                   }
                   if (added.length) {
-                    parts.push(`${added.length} flagged on the block — a new cut is needed`);
+                    parts.push(`${added.length} flagged on the block — it needs sectioning`);
                   }
                   if (failed.length) parts.push(`${failed.length} refused: ${failed[0].message}`);
                   setRequestFlash(`${assayName}: ${parts.join("; ")}`);
@@ -574,13 +574,13 @@ export function SampleDetailsDrawer({
           <Button
             variant="subtle"
             className="flex-1"
-            title="Block is out of sample to cut — remove from Embedded Inventory"
+            title="Block is out of sample to section — remove from Embedded Inventory"
             onClick={() => {
               const count = selectedEmbedded.length || 1;
               const message =
                 count === 1
-                  ? `Mark ${sample.sample_code} exhausted? It leaves Embedded Inventory, and a cut still waiting for it in Needs Sectioning is cancelled - its planned slides are removed.`
-                  : `Mark ${count} selected samples exhausted? They leave Embedded Inventory, and any cut still waiting in Needs Sectioning for those ${count} blocks is cancelled - its planned slides are removed.`;
+                  ? `Mark ${sample.sample_code} exhausted? It leaves Embedded Inventory, and a sectioning group still waiting for it in Needs Sectioning is cancelled - its planned slides are removed.`
+                  : `Mark ${count} selected samples exhausted? They leave Embedded Inventory, and any sectioning group still waiting in Needs Sectioning for those ${count} blocks is cancelled - its planned slides are removed.`;
               if (confirm(message)) {
                 if (selectedEmbedded.length > 1) setExhaustedSamples(selectedEmbedded.map((selected) => selected.id), true);
                 else setExhausted(sample.id, true);
@@ -692,8 +692,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * or a staining stage there would claim work nobody has done.
  */
 function slideStatus(slide: Slide): string {
-  if (slide.section_stage === "needs_sectioning") return "Awaiting cut";
-  if (slide.current_stage === "assigned") return "Cut — awaiting staining";
+  if (slide.section_stage === "needs_sectioning") return "Awaiting sectioning";
+  if (slide.current_stage === "assigned") return "Sectioned — awaiting staining";
   return (
     SECTION_STAGE_LABELS[slide.current_stage] ??
     STAGE_LABELS[slide.current_stage] ??
@@ -703,7 +703,7 @@ function slideStatus(slide: Slide): string {
 
 /** Requested / in progress / done — the three buckets the panel is asked for. */
 function statusTone(label: string): string {
-  if (label === "Awaiting cut" || label === "Requested") return "text-amber-600";
+  if (label === "Awaiting sectioning" || label === "Requested") return "text-amber-600";
   if (label === "Analyzed" || label === "Pictures Taken") return "text-ink-faint";
   return "text-brand";
 }

@@ -295,7 +295,7 @@ test("#102: imaging tiles carry the description and the agents", async ({ page }
   await toNeedsEmbedding(page, "EE-1", "Batch 1");
   await dragOnto(page, "EE-1", "Embedded Inventory");
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
   const assay = page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
@@ -303,7 +303,7 @@ test("#102: imaging tiles carry the description and the agents", async ({ page }
   await assay.selectOption({ index: 1 });
   const agentName = (await assay.locator("option:checked").textContent())?.trim() ?? "";
   expect(agentName).not.toBe("");
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Section it, which splits the agent slide into a rack…

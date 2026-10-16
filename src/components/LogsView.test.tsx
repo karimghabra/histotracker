@@ -184,10 +184,10 @@ describe("LogsView — a block removed before it was cut", () => {
     expect(removedCell.textContent).not.toMatch(/Safranin O|assigned/);
 
     await userEvent.click(screen.getByText("EE-5"));
-    expect(screen.getAllByText(/Assigned — not cut yet/)).toHaveLength(1);
+    expect(screen.getAllByText(/Assigned — not sectioned yet/)).toHaveLength(1);
     await userEvent.click(screen.getByText("EE-5"));
     await userEvent.click(screen.getByText("EE-6"));
-    expect(screen.queryByText(/Assigned — not cut yet/)).toBeNull();
+    expect(screen.queryByText(/Assigned — not sectioned yet/)).toBeNull();
   });
 });
 
@@ -225,7 +225,7 @@ describe("LogsView — the Assay Type filter", () => {
 describe("LogsView — correcting a sample's notes", () => {
   const FOUR: Array<[string, string, string]> = [
     ["Embedding Notes", "embedding_notes", "cut face down"],
-    ["Sectioning / Cut Notes", "cut_notes", "10 um"],
+    ["Sectioning Notes", "cut_notes", "10 um"],
     ["Slide Notes", "slide_notes", "two sections per slide"],
     ["General Notes", "overall_notes", "decal ran long"],
   ];
@@ -258,10 +258,10 @@ describe("LogsView — correcting a sample's notes", () => {
     data.samples = [withNotes()];
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
-    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
+    await userEvent.click(screen.getByLabelText("Edit Sectioning Notes for EE-1"));
 
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveValue("10 um");
-    for (const [label, , written] of FOUR.filter(([l]) => l !== "Sectioning / Cut Notes")) {
+    expect(screen.getByLabelText("Sectioning Notes for EE-1")).toHaveValue("10 um");
+    for (const [label, , written] of FOUR.filter(([l]) => l !== "Sectioning Notes")) {
       const other = screen.getByLabelText(`${label} for EE-1`);
       expect(other).toHaveTextContent(written);
       expect(other).toHaveAttribute("role", "note");
@@ -273,8 +273,8 @@ describe("LogsView — correcting a sample's notes", () => {
     render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
-    const box = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    await userEvent.click(screen.getByLabelText("Edit Sectioning Notes for EE-1"));
+    const box = screen.getByLabelText("Sectioning Notes for EE-1");
     await userEvent.clear(box);
     await userEvent.type(box, "8 um");
     await userEvent.tab(); // save on blur, the same as the description
@@ -320,14 +320,14 @@ describe("LogsView — correcting a sample's notes", () => {
     const { rerender } = render(<LogsView />);
     await userEvent.click(screen.getByText("EE-1"));
 
-    await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
-    await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
-    await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+    await userEvent.click(screen.getByLabelText("Edit Sectioning Notes for EE-1"));
+    await userEvent.clear(screen.getByLabelText("Sectioning Notes for EE-1"));
+    await userEvent.type(screen.getByLabelText("Sectioning Notes for EE-1"), "8 um");
     await userEvent.tab();
 
     // The write has not finished: the data still reads back the old note.
     rerender(<LogsView />);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1")).toHaveTextContent("8 um");
+    expect(screen.getByLabelText("Sectioning Notes for EE-1")).toHaveTextContent("8 um");
 
     // It finishes, and the row goes back to reading the record — which is also
     // what an undo landing in this window leaves behind, and what a save that
@@ -336,7 +336,7 @@ describe("LogsView — correcting a sample's notes", () => {
       data.finishSave?.();
     });
     rerender(<LogsView />);
-    expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
+    expect(screen.getByLabelText("Sectioning Notes for EE-1").textContent).toBe("10 um");
   });
 
   // A save that FAILED must let go too, rather than showing a correction that
@@ -348,13 +348,13 @@ describe("LogsView — correcting a sample's notes", () => {
       const { rerender } = render(<LogsView />);
       await userEvent.click(screen.getByText("EE-1"));
 
-      await userEvent.click(screen.getByLabelText("Edit Sectioning / Cut Notes for EE-1"));
-      await userEvent.clear(screen.getByLabelText("Sectioning / Cut Notes for EE-1"));
-      await userEvent.type(screen.getByLabelText("Sectioning / Cut Notes for EE-1"), "8 um");
+      await userEvent.click(screen.getByLabelText("Edit Sectioning Notes for EE-1"));
+      await userEvent.clear(screen.getByLabelText("Sectioning Notes for EE-1"));
+      await userEvent.type(screen.getByLabelText("Sectioning Notes for EE-1"), "8 um");
       await userEvent.tab();
 
       rerender(<LogsView />);
-      expect(screen.getByLabelText("Sectioning / Cut Notes for EE-1").textContent).toBe("10 um");
+      expect(screen.getByLabelText("Sectioning Notes for EE-1").textContent).toBe("10 um");
     });
   });
 
@@ -369,10 +369,10 @@ describe("LogsView — correcting a sample's notes", () => {
     );
     await userEvent.click(screen.getByText("EE-1"));
 
-    const cut = screen.getByLabelText("Sectioning / Cut Notes for EE-1");
+    const cut = screen.getByLabelText("Sectioning Notes for EE-1");
     expect(cut).toHaveTextContent("10 um");
     // The note is readable and nothing more: no pencil, so no way to open it.
-    expect(screen.queryByLabelText("Edit Sectioning / Cut Notes for EE-1")).toBeNull();
+    expect(screen.queryByLabelText("Edit Sectioning Notes for EE-1")).toBeNull();
     for (const label of ["Embedding Notes", "Slide Notes", "General Notes"]) {
       expect(
         screen.queryByLabelText(`${label} for EE-1`),

@@ -14,7 +14,7 @@ export const WORK_AFTER_CUT = [
   "stage_analyzed_at",
 ];
 
-/** Live slides that carry a work stamp but no cut date; empty means the record is straight. */
+/** Live slides that carry a work stamp but no sectioning date; empty means the record is straight. */
 export function workedButNeverCut(l: Lab): string[] {
   return l
     .rows(
@@ -26,7 +26,7 @@ export function workedButNeverCut(l: Lab): string[] {
 }
 
 /**
- * Slides sitting in a staining rack with no cut date; empty means the rack holds
+ * Slides sitting in a staining rack with no sectioning date; empty means the rack holds
  * only glass that exists.
  *
  * The same read as stress2's `racked-slide-was-cut` invariant, kept here so a

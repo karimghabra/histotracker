@@ -326,7 +326,7 @@ test("#129/#195: a block that needs sectioning heads Embedded Inventory under ev
 
   // The flag is on screen, and the order must agree with THIS — which is why they
   // share one predicate rather than each having their own.
-  await expect(embedded.getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(embedded.getByText("⚑ needs sectioning")).toHaveCount(1);
 
   // #195: the flag prioritizes the block, so the flagged MIDDLE block leads with
   // no sort chosen, and still leads under each sort that would otherwise put

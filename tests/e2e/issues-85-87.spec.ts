@@ -70,13 +70,13 @@ async function embed(page: Page, code: string, batchLabel: string) {
 
 async function cutAndSection(page: Page, code: string, stainIndex = 1) {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: stainIndex });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();

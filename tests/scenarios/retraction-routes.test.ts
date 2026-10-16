@@ -140,7 +140,7 @@ describe("retracting after the work was recorded on the glass, not the group", (
   });
 });
 
-describe("putting work on a slide whose group is still waiting to be cut", () => {
+describe("putting work on a slide whose group is still waiting to be sectioned", () => {
   it("marking a planned slide imaged", async () => {
     lab = await openLab();
     const { group } = await queuedGroup(lab, "planned, imaged");
@@ -181,7 +181,7 @@ describe("adding a slide to a group is stamped cut only because glass in it was 
     expect(cutStamps(lab, Number(gone.id)).stage_cut_at).not.toBeNull();
 
     const added = await lab.db.addSlideToSection(group, { assayType: "stain", assayName: "H&E" });
-    expect(cutStamps(lab, added).stage_cut_at, "nothing was cut, so the new slide has no cut date").toBeNull();
+    expect(cutStamps(lab, added).stage_cut_at, "nothing was cut, so the new slide has no sectioning date").toBeNull();
     expect(cutStamps(lab, added).current_stage).toBe("assigned");
     const extra = await lab.db.addSlideToSection(group, { extra: true });
     expect(cutStamps(lab, extra).stage_cut_at).toBeNull();

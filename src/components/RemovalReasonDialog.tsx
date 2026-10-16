@@ -41,7 +41,7 @@ export function RemovalReasonDialog({
         <AlertTriangle size={14} className="mt-px shrink-0 text-amber-600" />
         <span>
           Nothing is deleted — this stays in the Logs, flagged as removed, with the
-          reason below. Slide letters are not reused, so the next slide cut
+          reason below. Slide letters are not reused, so the next slide sectioned
           continues the sequence rather than taking this one's letter.
         </span>
       </div>

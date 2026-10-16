@@ -80,13 +80,13 @@ async function embed(page: Page, code: string, batchLabel: string) {
 // lands in Staining as a rack for that agent.
 async function cutAndSectionIntoStaining(page: Page, code: string, stainIndex = 1) {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: stainIndex });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await page.getByText("3 slides").first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
@@ -292,11 +292,11 @@ test("#70: the request dialog refuses an exhausted block", async ({ page }) => {
   // survive the move: an exhausted block has nothing left to cut, so the add
   // must fail LOUDLY rather than appear to succeed.
   const flash = await addStainFromLogs(page, "EE-1", "stain::H&E");
-  expect(flash).toMatch(/cannot be cut again|exhausted/i);
+  expect(flash).toMatch(/cannot be sectioned again|exhausted/i);
 
   // Nothing was created by the refusal: the block is not flagged for a cut.
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
-  await expect(page.getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(page.getByText("⚑ needs sectioning")).toHaveCount(0);
 });
 
 // #75 — the ordering only goes wrong once a sample has MORE THAN ONE cut group.
@@ -311,14 +311,14 @@ test("#75: slides stay alphabetical in Logs across two cut groups", async ({ pag
 
   // First cut → slides A–D.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Second cut on the same block → slides E onward, ordinals restarting at 1.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();

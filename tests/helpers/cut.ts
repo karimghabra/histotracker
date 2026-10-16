@@ -20,7 +20,7 @@ async function drag(page: Page, src: string, col: string): Promise<void> {
  * Walk a block from intake to Embedded Inventory and CUT it: one slide, carrying
  * `agent`, off the microtome and into its staining rack.
  *
- * Cut means cut. Three specs used to stop at "Send for Cutting", which leaves
+ * Cut means cut. Three specs used to stop at "Send for Sectioning", which leaves
  * the group queued in Needs Sectioning with no glass yet, and called that a cut
  * block. The distinction stopped being academic with #125: a stain requested
  * while the cut is still queued joins that cut as one more planned slide, so a
@@ -49,14 +49,14 @@ export async function cutBlockFor(page: Page, code: string, agent: string): Prom
 
   // The plan: one slide, for `agent`.
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to cut" });
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to section" });
   const rows = plan.locator(".max-h-64 > div");
   await expect(rows.first()).toBeVisible();
   while ((await rows.count()) > 1) await rows.last().getByRole("button").click();
   await rows.first().locator("select").selectOption(`stain::${agent}`);
   await expect(plan.getByText("1 slide · 1 stained · 0 extra")).toBeVisible();
-  await plan.getByRole("button", { name: /Send for Cutting/ }).click();
+  await plan.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(plan).toHaveCount(0);
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
 

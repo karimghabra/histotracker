@@ -117,7 +117,7 @@ describe("#150: marking many slides as imaged", () => {
     expect(result.marked).toEqual(cut.slides);
     expect(result.refused).toHaveLength(1);
     expect(result.refused[0]).toMatchObject({ slideId: Number(uncut.id), slideCode: uncut.slide_code });
-    expect(result.refused[0].message).toMatch(/still waiting to be cut/);
+    expect(result.refused[0].message).toMatch(/still waiting to be sectioned/);
     expect(lab.rows(`SELECT * FROM slides WHERE id = ?`, [uncut.id])[0], "the refused slide is not changed").toEqual(before);
     expect(
       lab.rows(`SELECT COUNT(*) AS n FROM audit_events WHERE entity_id = ? AND entity_type = 'slide'`, [uncut.id])[0].n,
@@ -200,7 +200,7 @@ describe("#150: marking several selected racks as imaged", () => {
     const neverCutGroup = b.groups[1];
     const refusedSlide = lab.rows(`SELECT id FROM slides WHERE section_request_id = ?`, [neverCutGroup])[0].id;
     // Plant the same defect the single-rack refusal test plants (#167): put that one group back
-    // to waiting to be cut, without the app's own gates in the way, so one slide on an otherwise
+    // to waiting to be sectioned, without the app's own gates in the way, so one slide on an otherwise
     // fine, selected rack cannot be imaged even alone.
     const db = await lab.db.getDb();
     await db.execute(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [neverCutGroup]);
@@ -217,7 +217,7 @@ describe("#150: marking several selected racks as imaged", () => {
     );
     expect(result.refused).toHaveLength(1);
     expect(result.refused[0]).toMatchObject({ slideId: Number(refusedSlide) });
-    expect(result.refused[0].message).toMatch(/still waiting to be cut/);
+    expect(result.refused[0].message).toMatch(/still waiting to be sectioned/);
     expect(slideRow(lab, Number(refusedSlide)).stage_pictures_taken_at, "the refused slide is untouched").toBeNull();
     for (const id of [...a.slides, ...fineSlides]) {
       expect(slideRow(lab, id).current_stage, "the rest, across both racks, are marked").toBe("pictures_taken");

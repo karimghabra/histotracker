@@ -20,11 +20,11 @@ export const SAMPLE_NOTES = [
   {
     field: "embedding_notes",
     label: "Embedding Notes",
-    placeholder: "e.g. cut face down, proximal end to the left",
+    placeholder: "e.g. section face down, proximal end to the left",
   },
   {
     field: "cut_notes",
-    label: "Sectioning / Cut Notes",
+    label: "Sectioning Notes",
     placeholder: "",
   },
   {

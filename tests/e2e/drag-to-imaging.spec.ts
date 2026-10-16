@@ -46,13 +46,13 @@ async function embed(page: Page, code: string) {
 /** Send the block for cutting with one H&E slide, leaving the group in Needs Sectioning. */
 async function queueOneSlide(page: Page, code: string) {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to cut" });
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to section" });
   const rows = plan.locator(".max-h-64 > div");
   await expect(rows.first()).toBeVisible();
   while ((await rows.count()) > 1) await rows.last().getByRole("button").click();
   await rows.first().locator("select").selectOption("stain::H&E");
-  await plan.getByRole("button", { name: /Send for Cutting/ }).click();
+  await plan.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(plan).toHaveCount(0);
   await page.locator("button:has(svg.lucide-x)").first().click();
 }
@@ -68,8 +68,8 @@ test("a group in Needs Sectioning cannot be dragged to Ready for Imaging, and ca
   await expect(waiting).toBeVisible();
 
   await dragTo(page, waiting, "Ready for Imaging");
-  await expect(page.getByText(/must be cut first/i)).toBeVisible();
-  // Nothing moved: the group is still waiting to be cut, and Ready for Imaging is empty.
+  await expect(page.getByText(/must be sectioned first/i)).toBeVisible();
+  // Nothing moved: the group is still waiting to be sectioned, and Ready for Imaging is empty.
   await expect(column(page, "Needs Sectioning").getByText(/^1 slide · /).first()).toBeVisible();
   await expect(column(page, "Ready for Imaging").getByText(/^1 slide · /)).toHaveCount(0);
 

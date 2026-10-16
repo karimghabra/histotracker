@@ -149,7 +149,7 @@ test("#136/#137: the log — on screen AND exported — says what the main scree
   expect(one).toHaveLength(1);
   expect(col(one[0], "Stain / IHC")).toBe("Safranin O");
   expect(col(one[0], "Slide")).toBe(""); // no glass — the row says so
-  expect(col(one[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(one[0], "Slide Stage")).toBe("requested (not sectioned)");
   // #137 — and the embedding note rides along with it.
   expect(col(one[0], "Embedding Notes")).toBe("cut face down, proximal end left");
 
@@ -158,7 +158,7 @@ test("#136/#137: the log — on screen AND exported — says what the main scree
   const owed = two.filter((r) => col(r, "Stain / IHC") === "Safranin O");
   expect(owed).toHaveLength(1);
   expect(col(owed[0], "Slide")).toBe("");
-  expect(col(owed[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(owed[0], "Slide Stage")).toBe("requested (not sectioned)");
 
   // The export honours the filter it was taken under, so a filtered log is
   // still consistent with the screen it came from.
@@ -190,9 +190,9 @@ test("#136: the expanded Logs row explains a stain with no slide", async ({ page
   await page.getByRole("cell", { name: "EE-1", exact: true }).click();
 
   // The drill-down used to list slides only, so a row whose Stains cell named an
-  // agent opened onto "No slides cut yet" and no explanation of where the agent
+  // agent opened onto "No slides sectioned yet" and no explanation of where the agent
   // had come from. Same wording as the board drawer: Requested.
-  await expect(page.getByText("Assigned — not cut yet (2)")).toBeVisible();
+  await expect(page.getByText("Assigned — not sectioned yet (2)")).toBeVisible();
   const owed = page.getByRole("listitem").filter({ hasText: "Requested" });
   await expect(owed).toHaveCount(2);
   await expect(owed.filter({ hasText: "Safranin O" })).toHaveCount(1);
@@ -229,13 +229,13 @@ test("#136: a block removed before it was cut owes nothing, on screen or exporte
 
   await page.getByRole("cell", { name: "EE-2", exact: true }).click();
   await expect(page.getByText("logged against the wrong animal")).toBeVisible();
-  await expect(page.getByText(/Assigned — not cut yet/)).toHaveCount(0);
+  await expect(page.getByText(/Assigned — not sectioned yet/)).toHaveCount(0);
   await page.getByRole("cell", { name: "EE-2", exact: true }).click(); // collapse
 
   const csv = await exportedLogsCsv(page);
   const csvHeader = cells(csv.trim().split("\n")[0]);
   const csvCol = (row: string[], name: string) => row[csvHeader.indexOf(name)];
-  expect(rowsFor(csv, "EE-1").map((r) => csvCol(r, "Slide Stage"))).toEqual(["requested (not cut)"]);
+  expect(rowsFor(csv, "EE-1").map((r) => csvCol(r, "Slide Stage"))).toEqual(["requested (not sectioned)"]);
   const removedCsv = rowsFor(csv, "EE-2");
   expect(removedCsv).toHaveLength(1);
   expect(csvCol(removedCsv[0], "Stain / IHC")).toBe("");
@@ -248,7 +248,7 @@ test("#136: a block removed before it was cut owes nothing, on screen or exporte
   const grid = readSheet(Uint8Array.from(Buffer.from(b64, "base64")));
   const xlsxCol = (row: string[], name: string) => row[grid[0].indexOf(name)] ?? "";
   const xlsxRowsFor = (code: string) => grid.slice(1).filter((r) => xlsxCol(r, "Sample ID") === code);
-  expect(xlsxRowsFor("EE-1").map((r) => xlsxCol(r, "Slide Stage"))).toEqual(["requested (not cut)"]);
+  expect(xlsxRowsFor("EE-1").map((r) => xlsxCol(r, "Slide Stage"))).toEqual(["requested (not sectioned)"]);
   const removedXlsx = xlsxRowsFor("EE-2");
   expect(removedXlsx).toHaveLength(1);
   expect(xlsxCol(removedXlsx[0], "Stain / IHC")).toBe("");

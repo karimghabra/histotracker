@@ -52,12 +52,12 @@ async function seedAndEmbed(page: Page) {
   await drag(page, "EE-1", "Embedded Inventory");
 }
 
-test("re-opening Send for Cutting after a cut starts a fresh plan", async ({ page }) => {
+test("re-opening Send for Sectioning after a cut starts a fresh plan", async ({ page }) => {
   await seedAndEmbed(page);
 
   // First cut: fresh embedded block → default 4 extras, 0 stained. Add a stain.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(page.getByText(/0 stained/)).toBeVisible();
   await page
     .locator("select")
@@ -65,13 +65,13 @@ test("re-opening Send for Cutting after a cut starts a fresh plan", async ({ pag
     .first()
     .selectOption({ index: 1 });
   await expect(page.getByText(/1 stained/)).toBeVisible();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click(); // close drawer
 
   // Re-open → the just-cut plan was archived + cleared, so the plan is FRESH
   // (back to 0 stained), not the 1-stain plan we just sent.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(page.getByText(/0 stained/)).toBeVisible();
   await expect(page.getByText(/1 stained/)).toHaveCount(0);
 });

@@ -179,15 +179,15 @@ const CASES = {
     ],
   },
 
-  // #98 — call it "Send for Cutting" everywhere again, and show the send button
+  // #98 — call it "Send for Sectioning" everywhere again, and show the send button
   // whatever stage the block is at.
   "98-cutting": {
-    grep: "#98: it is a Cutting Plan until the block reaches Embedded Inventory",
+    grep: "#98: it is a Sectioning Plan until the block reaches Embedded Inventory",
     edits: [
       {
         file: "src/components/SampleDetailsDrawer.tsx",
-        find: /\{isEmbedded \? "Send for Cutting" : "Cutting Plan"\}/,
-        replace: "Send for Cutting",
+        find: /\{isEmbedded \? "Send for Sectioning" : "Sectioning Plan"\}/,
+        replace: "Send for Sectioning",
       },
       {
         file: "src/components/SectioningPlanDialog.tsx",

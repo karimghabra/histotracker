@@ -46,7 +46,7 @@ async function labWithOneBlock(page: Page) {
   await page.getByRole("button", { name: "Save Project" }).click();
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("DESC-0");
-  await page.getByLabel("Sectioning / Cut Notes").fill("CUT-0");
+  await page.getByLabel("Sectioning Notes").fill("CUT-0");
   await page.getByRole("button", { name: /Create Sample/ }).click();
   await expect(page.getByText("EE-1")).toBeVisible();
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();
@@ -57,7 +57,7 @@ async function labWithOneBlock(page: Page) {
   await page.evaluate((ms) => ((window as unknown as { __SNAPSHOT_IPC_MS__: number }).__SNAPSHOT_IPC_MS__ = ms), IPC_MS);
 }
 
-const cutBox = (page: Page) => page.getByLabel("Sectioning / Cut Notes for EE-1", { exact: true });
+const cutBox = (page: Page) => page.getByLabel("Sectioning Notes for EE-1", { exact: true });
 const descriptionBox = (page: Page) => page.getByLabel("Description for EE-1", { exact: true });
 const undoButton = (page: Page) => page.getByTitle("Undo (Ctrl+Z)");
 
@@ -65,7 +65,7 @@ test("undo pressed while typing undoes the edit being typed, not the one before 
   await labWithOneBlock(page);
 
   // Edit 1: correct the cut note, and let it land.
-  await page.getByLabel("Edit Sectioning / Cut Notes for EE-1", { exact: true }).click();
+  await page.getByLabel("Edit Sectioning Notes for EE-1", { exact: true }).click();
   await cutBox(page).fill("CUT-A");
   await cutBox(page).blur();
   await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-A" });
@@ -89,7 +89,7 @@ test("two edits saved close together are undone one at a time", async ({ page })
 
   // Edit 1 and edit 2 in one motion: correct the cut note, go straight to the
   // description (which blurs the note and saves it), retype it, click away.
-  await page.getByLabel("Edit Sectioning / Cut Notes for EE-1", { exact: true }).click();
+  await page.getByLabel("Edit Sectioning Notes for EE-1", { exact: true }).click();
   await cutBox(page).fill("CUT-A");
   await descriptionBox(page).click();
   await descriptionBox(page).fill("DESC-B");
@@ -104,20 +104,20 @@ test("two edits saved close together are undone one at a time", async ({ page })
 
   // The next Undo takes back the cut note.
   await undoButton(page).click();
-  await expect(page.getByText("Undone: Edit EE-1 sectioning / cut notes")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Undone: Edit EE-1 sectioning notes")).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-0" });
 });
 
 test("a plain undo, with nothing else in flight, reverts the edit", async ({ page }) => {
   await labWithOneBlock(page);
-  await page.getByLabel("Edit Sectioning / Cut Notes for EE-1", { exact: true }).click();
+  await page.getByLabel("Edit Sectioning Notes for EE-1", { exact: true }).click();
   await cutBox(page).fill("CUT-A");
   await cutBox(page).blur();
   await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-A" });
   await page.waitForTimeout(3 * IPC_MS); // the save and everything it set off have finished
 
   await undoButton(page).click();
-  await expect(page.getByText("Undone: Edit EE-1 sectioning / cut notes")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Undone: Edit EE-1 sectioning notes")).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => stored(page), { timeout: 15_000 }).toEqual({ description: "DESC-0", cut: "CUT-0" });
   await page.waitForTimeout(3 * IPC_MS);
   expect(await stored(page)).toEqual({ description: "DESC-0", cut: "CUT-0" });

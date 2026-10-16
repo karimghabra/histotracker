@@ -197,8 +197,8 @@ async function planMove(
 const REFUSALS = [
   /must be embedded/i,
   /exhausted/i,
-  /cannot be cut again/i,
-  /has not been cut yet/i,
+  /cannot be sectioned again/i,
+  /has not been sectioned yet/i,
   /has not been stained yet/i,
   /already been imaged/i,
   /before "/i,

@@ -267,7 +267,7 @@ export function SectionDetailsDrawer({
             </h3>
             <div className="flex flex-wrap items-center gap-1.5">
               <select
-                aria-label="Add another slide to this cut"
+                aria-label="Add another slide to this sectioning group"
                 value={addChoice}
                 onChange={(event) => setAddChoice(event.target.value)}
                 className="min-w-0 flex-1 rounded border border-line bg-white px-1.5 py-1 text-xs text-ink outline-none focus:border-brand"
@@ -305,7 +305,7 @@ export function SectionDetailsDrawer({
                       type === "extra" ? { extra: true } : { assayType: type as "stain" | "ihc", assayName: name },
                     );
                     setAddChoice("");
-                    setAddFlash("Added to this cut.");
+                    setAddFlash("Added to this sectioning group.");
                   } catch (error) {
                     setAddFlash(error instanceof Error ? error.message : String(error));
                   }
@@ -604,14 +604,14 @@ export function SectionDetailsDrawer({
 
       {confirmingRemoval && (
         <RemovalReasonDialog
-          title={activeSelection.length > 1 ? "Remove cut groups" : "Remove this cut group"}
+          title={activeSelection.length > 1 ? "Remove sectioning groups" : "Remove this sectioning group"}
           what={
             activeSelection.length > 1
-              ? `${activeSelection.length} cut groups and their slides`
-              : "this cut group and its slides"
+              ? `${activeSelection.length} sectioning groups and their slides`
+              : "this sectioning group and its slides"
           }
           confirmLabel={
-            activeSelection.length > 1 ? `Remove ${activeSelection.length} cut groups` : "Remove cut group"
+            activeSelection.length > 1 ? `Remove ${activeSelection.length} sectioning groups` : "Remove sectioning group"
           }
           onClose={() => setConfirmingRemoval(false)}
           onConfirm={(reason) => {

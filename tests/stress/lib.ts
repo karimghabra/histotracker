@@ -305,8 +305,8 @@ export async function sendForCutting(
   opts: { save?: boolean } = {},
 ): Promise<void> {
   await openTile(page, code, "Embedded Inventory");
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  const dialog = page.getByRole("dialog", { name: /Send for Cutting/ });
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  const dialog = page.getByRole("dialog", { name: /Send for Sectioning/ });
   await expect(dialog).toBeVisible();
 
   const rows = () => dialog.locator(".max-h-64 select");
@@ -318,7 +318,7 @@ export async function sendForCutting(
   }
   for (let i = 0; i < plan.length; i += 1) await rows().nth(i).selectOption(plan[i]);
 
-  await dialog.getByRole("button", { name: opts.save ? /^Save Plan/ : /Send for Cutting/ }).click();
+  await dialog.getByRole("button", { name: opts.save ? /^Save Plan/ : /Send for Sectioning/ }).click();
   await expect(dialog).toHaveCount(0, { timeout: 30_000 });
   await closeDrawer(page);
 }

@@ -137,7 +137,7 @@ describe("buildLogsXlsxBytes", () => {
     expect(row).toBeDefined();
     expect(row?.[1]).toBe("EE-1");
     expect(row?.[7]).toBe(""); // no slide exists yet
-    expect(row?.[10]).toBe("requested (not cut)");
+    expect(row?.[10]).toBe("requested (not sectioned)");
   });
 
   it("carries a still-assigned stain on a block that already has glass (#136)", async () => {
@@ -156,7 +156,7 @@ describe("buildLogsXlsxBytes", () => {
 
     // Two slide rows, plus the one agent that is still only assigned.
     expect(grid).toHaveLength(4);
-    expect(rowFor(grid, "Safranin O")?.[10]).toBe("requested (not cut)");
+    expect(rowFor(grid, "Safranin O")?.[10]).toBe("requested (not sectioned)");
     // The embedding note (#137) rides along on every row of the block.
     expect(grid.slice(1).map((cells) => cells[17])).toEqual([
       "Embed cut side down",
@@ -182,7 +182,7 @@ describe("buildLogsXlsxBytes", () => {
     );
 
     expect(grid[0].slice(-5)).toEqual([
-      "This Slide's Notes", "Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes",
+      "This Slide's Notes", "Embedding Notes", "Sectioning Notes", "Slide Notes", "General Notes",
     ]);
     expect(grid.slice(1).map((cells) => cells.slice(-5))).toEqual([
       ["GLASS", "EMB", "CUT", "PLAN", "GEN"],
@@ -204,7 +204,7 @@ describe("buildLogsXlsxBytes", () => {
 
     expect(grid).toHaveLength(3);
     expect(grid[1][1]).toBe("EE-1");
-    expect(grid[1][10]).toBe("requested (not cut)");
+    expect(grid[1][10]).toBe("requested (not sectioned)");
     expect(grid[2][1]).toBe("EE-2");
     expect(grid[2][9] ?? "").toBe("");
     expect(grid[2][10] ?? "").toBe("");

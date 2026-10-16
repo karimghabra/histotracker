@@ -78,7 +78,7 @@ async function requestStain(page: Page, value: string) {
 
 /** The trip through the Logs may drop the board selection; put it back. */
 async function reopenBlock(page: Page, code = "EE-1") {
-  const send = page.getByRole("button", { name: /Send for Cutting/ }).first();
+  const send = page.getByRole("button", { name: /Send for Sectioning/ }).first();
   if (await send.isVisible().catch(() => false)) return;
   await page.getByText(code, { exact: true }).first().click();
   await expect(send).toBeVisible({ timeout: 15000 });
@@ -100,8 +100,8 @@ test("requesting the same stain twice queues two slides (#62/#66)", async ({ pag
   await requestStain(page, "stain::H&E");
   await requestStain(page, "stain::H&E");
 
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await expect(page.getByText(/How many slides to section/i)).toBeVisible();
   const values = await cutRows(page);
   // TWO H&E rows now, not one.
   expect(values.filter((v) => v === "stain::H&E").length).toBe(2);
@@ -117,8 +117,8 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   await expect(page.getByText(/Stains preselected/i)).toBeVisible();
 
   // Cut ONLY the H&E slide (remove the extra rows) so no extras remain.
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await expect(page.getByText(/How many slides to section/i)).toBeVisible();
   const removeButtons = page.locator(".max-h-64 button:has(svg.lucide-x)");
   // Keep removing the last row until only the single H&E row is left.
   await expect(async () => {
@@ -129,7 +129,7 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
     }
     expect(values).toEqual(["stain::H&E"]);
   }).toPass();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
 
   // The flag clears once the H&E is cut (request fulfilled). The drawer stays
   // open from the cut, so it reflects the cleared flag directly (re-clicking the
@@ -141,7 +141,7 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   // This step used to be missing, and the test passed anyway because nothing
   // read the difference. Sending for cutting only queues the group; the glass
   // does not exist until somebody stands at the microtome (#95). #125 is the
-  // first behaviour to ask "is this block still waiting to be cut?", and the
+  // first behaviour to ask "is this block still waiting to be sectioned?", and the
   // honest answer here — before this step — was yes. Without it the re-request
   // below correctly joins the queued cut, and this test would be asserting the
   // behaviour #125 deliberately replaced.
@@ -155,7 +155,7 @@ test("re-requesting an already-cut stain flags the block again (#41/#62)", async
   // Send-for-Cutting dialog must prefill with H&E (the old model hid this).
   await requestStain(page, "stain::H&E");
   await expect(page.getByText(/Stains preselected/i)).toBeVisible();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(page.getByText(/Prefilled from/i)).toBeVisible();
   const values = await cutRows(page);
   expect(values.filter((v) => v === "stain::H&E").length).toBeGreaterThanOrEqual(1);
@@ -171,9 +171,9 @@ test("#125: a stain requested while the block is queued for cutting joins that c
   // The plan the issue describes: one stain, plus the default extras, SENT for
   // cutting but not yet cut.
   await requestStain(page, "stain::H&E");
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await expect(page.getByText(/How many slides to section/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
 
   const sectioning = page
     .locator("div.rounded-lg")

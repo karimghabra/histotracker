@@ -61,8 +61,8 @@ async function seedCutSample(page: Page) {
 
   // Cut the default plan (4 extras).
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 }
 

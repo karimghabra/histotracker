@@ -33,7 +33,7 @@ const CORRECTED = {
 
 const KINDS = {
   embedding: "Embedding Notes",
-  cut: "Sectioning / Cut Notes",
+  cut: "Sectioning Notes",
   slide: "Slide Notes",
   sample: "General Notes",
 } as const;
@@ -158,7 +158,7 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
   await page.getByLabel("Embedding Notes").fill(INTAKE.embedding);
-  await page.getByLabel("Sectioning / Cut Notes").fill(INTAKE.cut);
+  await page.getByLabel("Sectioning Notes").fill(INTAKE.cut);
   await page.getByLabel("Slide Notes").fill(INTAKE.slide);
   await page.getByLabel("General Notes").fill(INTAKE.sample);
   await page.getByRole("button", { name: /Create Sample/ }).click();
@@ -199,7 +199,7 @@ test("every note a sample carries can be corrected from the Logs", async ({ page
   await openDrawerFromBoard(page, "EE-1");
   for (const [heading, text] of [
     ["Embedding Notes", CORRECTED.embedding],
-    ["Sectioning / Cut Notes", CORRECTED.cut],
+    ["Sectioning Notes", CORRECTED.cut],
     ["Slide Notes", CORRECTED.slide],
     ["General Notes", CORRECTED.sample],
   ]) {
@@ -252,7 +252,7 @@ test("a note can be cleared, and an unwritten one can be filled in from the Logs
   await expect(noteEditors(page, "EE-1").cut).toHaveValue("");
   await noteEditors(page, "EE-1").cut.blur();
   await openDrawerFromBoard(page, "EE-1");
-  await expect(page.getByRole("heading", { name: "Sectioning / Cut Notes", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sectioning Notes", exact: true })).toHaveCount(0);
 });
 
 /**

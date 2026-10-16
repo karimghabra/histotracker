@@ -44,6 +44,19 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #194 — the screen says sectioning, not cutting
+
+- **#194 · ✅ fixed.**
+  "Cut" on the bench can mean two different things: sectioning a block on the microtome, and trimming a block to fit its mold.
+  The app meant the first everywhere and said the second's word for it, in plans, buttons, badges, timestamps and refusals.
+  Every user-facing string now says section or sectioning: **Send for Sectioning** and the **Sectioning Plan** dialog, the **⚑ needs sectioning** badge, "Awaiting sectioning", a cut group is a **sectioning group**, **Sectioning defaults** in Settings, the **Sectioning Notes** field, the slide timeline's **Sectioned** step, the undo labels, and every refusal in `db.ts` that named a cut.
+  The exports follow: the slide and Logs sheets' `Cut` column is `Sectioned`, the notes column is `Sectioning Notes`, the `Cut Orders` sheet is `Sectioning Orders`, and an assigned stain with no glass reads `requested (not sectioned)`.
+  A spreadsheet or macro that looked a column up by its old header needs the new one.
+  Only wording moved: column names (`cut_notes`, `stage_cut_at`), stage keys and code identifiers are unchanged, so the schema and the sync payload are untouched, and text already written to a database (a timeline summary such as "Cut 2 slides", a removal reason) keeps the words it was written with.
+  The expanded slide in the Logs is now a region named for the slide, so its own timeline can be read apart from the sample's phase, which already said "Sectioned".
+  *Test:* every spec, scenario, unit test, harness gate and stress refusal list that quoted the old wording quotes the new; the harness's port of `db.ts` carries the same messages; `pnpm verify` render reports exactly the renamed text and nothing else.
+
+
 ## #195 — a block that needs sectioning is prioritized, not sorted for
 
 - **#195 · ✅ fixed.**

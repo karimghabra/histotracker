@@ -91,7 +91,7 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
   expect(one).toHaveLength(1);
   expect(col(one[0], "Stain / IHC")).toBe("Safranin O");
   expect(col(one[0], "Slide")).toBe("");
-  expect(col(one[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(one[0], "Slide Stage")).toBe("requested (not sectioned)");
   expect(col(one[0], "Embedding Notes")).toBe("cut face down, proximal end left");
 
   const two = rowsFor("EE-2");
@@ -99,7 +99,7 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
   const owed = two.filter((r) => col(r, "Stain / IHC") === "Safranin O");
   expect(owed).toHaveLength(1);
   expect(col(owed[0], "Slide")).toBe("");
-  expect(col(owed[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(owed[0], "Slide Stage")).toBe("requested (not sectioned)");
 
   // The two captures this replaced rendered the decoded workbook next to the
   // Logs screen "so the two can be compared by eye"; the column checks above
@@ -126,7 +126,7 @@ test("the Excel workbook export writes every sheet with real rows", async ({ pag
   expect([...sheets.keys()]).toEqual([
     "Projects",
     "Samples",
-    "Cut Orders",
+    "Sectioning Orders",
     "Slides",
     "Processing Batches",
   ]);
@@ -140,7 +140,7 @@ test("the Excel workbook export writes every sheet with real rows", async ({ pag
   expect(projects.slice(1).some((r) => r.includes("EE"))).toBe(true);
   const samples = sheets.get("Samples") as string[][];
   const sampleHeader = samples[0];
-  expect(sampleHeader).toContain("Sectioning / Cut Notes");
+  expect(sampleHeader).toContain("Sectioning Notes");
   const row = samples.slice(1).find((r) => r[sampleHeader.indexOf("Sample ID")] === "EE-1");
   expect(row, "the sample just created is missing from the Samples sheet").toBeDefined();
   expect(row?.[sampleHeader.indexOf("Description")]).toBe("workbook block");
@@ -264,7 +264,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
   const four = grid.slice(1).filter((r) => col(r, "Sample ID") === "EE-4");
   expect(four).toHaveLength(1);
   expect(col(four[0], "Stain / IHC")).toBe("Safranin O");
-  expect(col(four[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(four[0], "Slide Stage")).toBe("requested (not sectioned)");
   expect(col(four[0], "Embedding Notes")).toBe("embed cut face down");
   // The pre-existing rows export too, with an empty note rather than a crash.
   for (const code of ["EE-1", "EE-2", "EE-3"]) {

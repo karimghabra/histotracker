@@ -402,7 +402,7 @@ export function useActions() {
         groups: Array<{ duplicates: number; stains?: string; assay_type?: string; assay_name?: string }>;
       }>,
     ) =>
-      commit(entries.length > 1 ? `Send for cutting · ${entries.length} blocks` : "Send for cutting", async () => {
+      commit(entries.length > 1 ? `Send for sectioning · ${entries.length} blocks` : "Send for sectioning", async () => {
         let total = 0;
         for (const { sampleId, groups } of entries) {
           total += (await createSectionRequests(sampleId, groups)).length;
@@ -577,7 +577,7 @@ export function useActions() {
       target: { assayType: "stain" | "ihc"; assayName: string } | { extra: true },
     ) =>
       commit(
-        "extra" in target ? "Add an extra slide to this cut" : `Add a ${target.assayName} slide to this cut`,
+        "extra" in target ? "Add an extra slide to this sectioning group" : `Add a ${target.assayName} slide to this sectioning group`,
         () => addSlideToSectionDb(sectionId, target),
       ),
     [commit],
@@ -794,7 +794,7 @@ export function useActions() {
             .filter((id): id is number => id != null),
         ),
       ];
-      await commit(sectionIds.length === 1 ? "Remove cut group" : `Remove ${sectionIds.length} cut groups`, async () => {
+      await commit(sectionIds.length === 1 ? "Remove sectioning group" : `Remove ${sectionIds.length} sectioning groups`, async () => {
         for (const id of sectionIds) await removeSectionRequest(id, reason);
         for (const id of stackIds) await closeSlideStackIfEmpty(id);
       });

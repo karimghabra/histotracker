@@ -84,7 +84,7 @@ function column(page: Page, title: string) {
 /** Cut a block with one agent assigned, leaving the group in Needs Sectioning. */
 async function cutWithAgent(page: Page, code: string): Promise<string> {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
   const assay = page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
@@ -92,7 +92,7 @@ async function cutWithAgent(page: Page, code: string): Promise<string> {
   await assay.selectOption({ index: 1 });
   const agent = (await assay.locator("option:checked").textContent())?.trim() ?? "";
   expect(agent).not.toBe("");
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   return agent;
 }
@@ -200,11 +200,11 @@ test("#114: the Logs add a stain directly, with no sync request", async ({ page 
   await page.getByRole("button", { name: "Add", exact: true }).click();
 
   await expect(page.getByRole("dialog", { name: /Request a stain/ })).toHaveCount(0);
-  await expect(page.getByText(/needs a cut|pulled from an extra/)).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText(/needs sectioning|pulled from an extra/)).toBeVisible({ timeout: 15000 });
 
   // It landed on the block: the board flags it.
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
-  await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(column(page, "Embedded Inventory").getByText("⚑ needs sectioning")).toHaveCount(1);
 });
 
 // ---------------------------------------------------------------------------
@@ -224,7 +224,7 @@ test("#113: no Add a Stain in the embedded-inventory drawer", async ({ page }) =
   await page.getByText("EE-1", { exact: true }).first().click();
   await expect(drawer(page).getByRole("heading", { name: "Add a Stain" })).toHaveCount(0);
   // …and the cutting plan is still right there.
-  await expect(drawer(page).getByRole("button", { name: "Send for Cutting" })).toBeVisible();
+  await expect(drawer(page).getByRole("button", { name: "Send for Sectioning" })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ test("#116: an active cutting plan can be reopened from the block drawer", async
   await column(page, "Embedded Inventory").getByText("EE-1", { exact: true }).click();
   // Assigning one agent splits the cut into TWO groups — one carrying the agent,
   // one of extras — so the drawer lists a row per group, not one of three.
-  const edits = drawer(page).getByRole("button", { name: /Awaiting cut ·/ });
+  const edits = drawer(page).getByRole("button", { name: /Awaiting sectioning ·/ });
   await expect(edits).toHaveCount(2);
   await edits.first().click();
 

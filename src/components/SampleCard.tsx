@@ -93,8 +93,8 @@ export function SampleCard({
   // exactly the question this flag answers.
   const needsCut = sampleNeedsCut(sample);
   const needsCutReason = pendingStainNames
-    ? `Awaiting cut for: ${pendingStainNames}`
-    : "Cutting plan saved — ready to send for cutting";
+    ? `Awaiting sectioning for: ${pendingStainNames}`
+    : "Sectioning plan saved — ready to send for sectioning";
 
   const base = cn(
     "group touch-none rounded-md border bg-white transition select-none",
@@ -131,7 +131,7 @@ export function SampleCard({
             className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700"
             title={needsCutReason}
           >
-            ⚑ needs cut
+            ⚑ needs sectioning
           </span>
         )}
         <button

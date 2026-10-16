@@ -136,7 +136,7 @@ const ACTIONS: Action[] = [
     // "not been cut yet" is the 0.13.1 guard: a planned slide is a line in a
     // plan, not glass, and cannot go on a stainer. "already been imaged" is the
     // 0.13.2 one: re-staining imaged glass would stamp staining after imaging.
-    refusals: [/removed/i, /has not been cut yet/i, /already been imaged/i],
+    refusals: [/removed/i, /has not been sectioned yet/i, /already been imaged/i],
   },
   {
     name: "send a slide back to extras",
@@ -233,7 +233,7 @@ const ACTIONS: Action[] = [
       if (!target) return null;
       return { fn: "relabelSlideToSample", args: [slide.id, target.id, "fuzz: wrong block"] };
     },
-    refusals: [/already filed/i, /removed/i, /no longer exists/i, /has not been cut yet/i],
+    refusals: [/already filed/i, /removed/i, /no longer exists/i, /has not been sectioned yet/i],
   },
   {
     name: "ask for a stain on a block",
@@ -250,7 +250,7 @@ const ACTIONS: Action[] = [
         ],
       };
     },
-    refusals: [/exhausted/i, /cannot be cut again/i],
+    refusals: [/exhausted/i, /cannot be sectioned again/i],
   },
   {
     name: "mark a block exhausted",

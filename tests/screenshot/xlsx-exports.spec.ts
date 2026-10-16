@@ -91,7 +91,7 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
   expect(one).toHaveLength(1);
   expect(col(one[0], "Stain / IHC")).toBe("Safranin O");
   expect(col(one[0], "Slide")).toBe("");
-  expect(col(one[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(one[0], "Slide Stage")).toBe("requested (not sectioned)");
   expect(col(one[0], "Embedding Notes")).toBe("cut face down, proximal end left");
 
   const two = rowsFor("EE-2");
@@ -99,7 +99,7 @@ test("the Logs Excel export carries the rows the Logs screen shows (#136/#137)",
   const owed = two.filter((r) => col(r, "Stain / IHC") === "Safranin O");
   expect(owed).toHaveLength(1);
   expect(col(owed[0], "Slide")).toBe("");
-  expect(col(owed[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(owed[0], "Slide Stage")).toBe("requested (not sectioned)");
 
   // Render the decoded workbook next to the screen it was taken from, so the
   // two can be compared by eye.
@@ -138,7 +138,7 @@ test("the Excel workbook export writes every sheet with real rows", async ({ pag
   expect([...sheets.keys()]).toEqual([
     "Projects",
     "Samples",
-    "Cut Orders",
+    "Sectioning Orders",
     "Slides",
     "Processing Batches",
   ]);
@@ -276,7 +276,7 @@ test("a populated database from before #137 gains embedding notes with its rows 
   const four = grid.slice(1).filter((r) => col(r, "Sample ID") === "EE-4");
   expect(four).toHaveLength(1);
   expect(col(four[0], "Stain / IHC")).toBe("Safranin O");
-  expect(col(four[0], "Slide Stage")).toBe("requested (not cut)");
+  expect(col(four[0], "Slide Stage")).toBe("requested (not sectioned)");
   expect(col(four[0], "Embedding Notes")).toBe("embed cut face down");
   // The pre-existing rows export too, with an empty note rather than a crash.
   for (const code of ["EE-1", "EE-2", "EE-3"]) {
