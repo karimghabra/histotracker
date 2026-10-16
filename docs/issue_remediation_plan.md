@@ -44,6 +44,17 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #195 — a block that needs sectioning is prioritized, not sorted for
+
+- **#195 · ✅ fixed.**
+  #129 made the needs-sectioning flag a sort key, "Needs cut first", so bringing the flagged blocks to the top of Embedded Inventory was a choice somebody had to remember to make, and the default sort left them wherever their embedding date put them.
+  A block is flagged when a stain is requested on it or a sectioning plan is saved for it: somebody is waiting on it, which is what a star says.
+  So the flag now prioritizes the block automatically: `sortEmbedded` (`src/components/Board.tsx`) puts starred and flagged blocks in one top tier under every sort, ordered within it by the sort chosen, and the "Needs cut first" option is gone.
+  It shares the badge's predicate, `sampleNeedsCut`, so the order and the badge cannot disagree, and it writes nothing: the star is still only what somebody set by hand, and a block drops back into the list on its own once it is sent for sectioning.
+  A board saved with the retired sort (only a viewer keeps view preferences across a launch) reads as the default rather than as a value its dropdown no longer offers (#85).
+  *Test:* `tests/e2e/issues-129-133.spec.ts` (`#129/#195`): the flagged middle block leads under all three sorts, the option is gone, and a starred block shares the top with it; it fails on the previous sort with `EE-1` first.
+
+
 ## #193 — the nightly read a rack's protocol before it had loaded
 
 - **#193 · ✅ fixed in the stress harness; the issue closes once a night is green.**
