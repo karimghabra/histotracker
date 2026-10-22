@@ -45,7 +45,7 @@ export function RequestStainDialog({
     }
     if (chosenIsExhausted) {
       setError(
-        `${displayCode(sampleCode.trim())} is marked exhausted — the block cannot be cut again, ` +
+        `${displayCode(sampleCode.trim())} is marked exhausted — the block cannot be sectioned again, ` +
           `so this request could not be fulfilled.`,
       );
       return;
@@ -90,7 +90,7 @@ export function RequestStainDialog({
     <Modal title="Request a stain" onClose={onClose} width="max-w-md">
       <p className="mb-3 text-xs text-ink-faint">
         This raises a formal stain request on the workstation — the block is flagged for
-        cutting (or an existing extra is pulled into staining), just as if requested at the
+        sectioning (or an existing extra is pulled into staining), just as if requested at the
         bench. Track its status under “My requests”.
       </p>
 
@@ -116,7 +116,7 @@ export function RequestStainDialog({
         </select>
         {chosenIsExhausted && (
           <p role="alert" className="mt-1 text-[11px] text-red-600">
-            {displayCode(sampleCode.trim())} is exhausted — the block cannot be cut again.
+            {displayCode(sampleCode.trim())} is exhausted — the block cannot be sectioned again.
           </p>
         )}
       </Field>

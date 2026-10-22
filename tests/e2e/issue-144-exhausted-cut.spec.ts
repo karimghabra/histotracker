@@ -55,13 +55,13 @@ async function embed(page: Page, code: string, batchLabel: string): Promise<void
 /** Send an embedded block for cutting and leave the group WAITING in Needs Sectioning. */
 async function sendForCutting(page: Page, code: string, slides: number, stainIndex?: number): Promise<void> {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to cut" });
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  const plan = page.getByRole("dialog").filter({ hasText: "How many slides to section" });
   const rows = plan.locator(".max-h-64 > div");
   await expect(rows.first()).toBeVisible();
   while ((await rows.count()) > slides) await rows.last().getByRole("button").click();
   if (stainIndex !== undefined) await rows.first().locator("select").selectOption({ index: stainIndex });
-  await plan.getByRole("button", { name: /Send for Cutting/ }).click();
+  await plan.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(plan).toHaveCount(0);
   await closeDrawer(page);
 }
@@ -142,12 +142,12 @@ test("#144: exhausting a block cancels its waiting cut, and the stain ask is the
 
   // #70, which #125 used to let through whenever a cut was queued.
   const flash = await addStainFromLogs(page, "EE-1", "stain::H&E");
-  expect(flash, `the Logs said "${flash}"`).toMatch(/cannot be cut again|exhausted/i);
+  expect(flash, `the Logs said "${flash}"`).toMatch(/cannot be sectioned again|exhausted/i);
   expect(await planned(page, "EE-1"), "the refusal planned no glass").toBe(0);
 
   await page.locator("nav").getByRole("button", { name: "Board" }).click();
   await expect(cutCards(page), "and no cut card came back").toHaveCount(0);
-  await expect(page.getByText("⚑ needs cut"), "nor was the spent block flagged for a cut").toHaveCount(0);
+  await expect(page.getByText("⚑ needs sectioning"), "nor was the spent block flagged for a cut").toHaveCount(0);
 });
 
 test("#144: a cut already off the microtome is left alone when the block is exhausted", async ({ page }) => {
@@ -202,7 +202,7 @@ test("#144: a database that already holds the state shows no waiting cut to drag
   expect(await planned(page, "EE-1"), "its planned glass is untouched - this is a read path only").toBe(1);
 
   const flash = await addStainFromLogs(page, "EE-1", "stain::H&E");
-  expect(flash, `the Logs said "${flash}"`).toMatch(/cannot be cut again|exhausted/i);
+  expect(flash, `the Logs said "${flash}"`).toMatch(/cannot be sectioned again|exhausted/i);
   expect(await planned(page, "EE-1"), "nothing joined the stranded cut").toBe(1);
 });
 

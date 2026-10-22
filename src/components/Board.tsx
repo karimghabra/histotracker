@@ -31,12 +31,15 @@ import { SectionCard } from "./SectionCard";
 import { StackCard } from "./StackCard";
 import { ExtraSlideInventory, groupExtraSlides } from "./ExtraSlideInventory";
 
-// #129 — "needs cut" is a SORT key and nothing else. It shipped in 0.15.0 with a
-// filter beside it, which was the wrong shape: a block that owes a cut is a
-// priority, not a category, and hiding the rest of the drawer to see the urgent
-// ones costs you the context of what else is in there. Sorting puts them at the
-// top and keeps the drawer whole.
-type EmbeddedSort = "needs_cut" | "embedded_date" | "name" | "sample_id";
+// #129 — a block that owes sectioning is a priority, not a category: 0.15.0
+// shipped a filter for it, and hiding the rest of the drawer to see the urgent
+// ones cost the context of what else is in there. #129 made it a sort key
+// ("Needs cut first") instead; #195 makes it the rule rather than a choice. A
+// block flagged as needing sectioning (a stain requested on it, or a sectioning
+// plan saved) is prioritized automatically, so it heads Embedded Inventory under
+// every sort, alongside the blocks someone starred, and the drawer stays whole.
+type EmbeddedSort = "embedded_date" | "name" | "sample_id";
+const EMBEDDED_SORTS: readonly string[] = ["embedded_date", "name", "sample_id"];
 type ExtraSlidesSort = "sample_id" | "name";
 // #89 — Pre-processing is where every sample enters, so it fills up fastest and
 // needs the same project filter and sort the downstream queues already have.
@@ -86,19 +89,21 @@ type ActiveDrag =
   | { type: "batch"; batch: ProcessingBatch }
   | null;
 
+/**
+ * Whether a block heads Embedded Inventory: starred by hand, or flagged as
+ * needing sectioning, which prioritizes it automatically (#195). The flag is
+ * the same predicate the card's badge shows, so the order and the badge cannot
+ * disagree.
+ */
+function embeddedPriority(sample: Sample): number {
+  return sample.is_priority === 1 || sampleNeedsCut(sample) ? 1 : 0;
+}
+
 function sortEmbedded(samples: Sample[], key: EmbeddedSort): Sample[] {
   const copy = [...samples];
   copy.sort((a, b) => {
-    if (a.is_priority !== b.is_priority) return b.is_priority - a.is_priority;
-    // Flagged first, then oldest-flagged first, because "needs cut" is not an
-    // ordering on its own — it is one bit, and it would leave the whole flagged
-    // group in whatever order the query happened to return.
-    if (key === "needs_cut") {
-      const aFlag = sampleNeedsCut(a) ? 1 : 0;
-      const bFlag = sampleNeedsCut(b) ? 1 : 0;
-      if (aFlag !== bFlag) return bFlag - aFlag;
-      return (a.stage_embedded_at ?? "").localeCompare(b.stage_embedded_at ?? "");
-    }
+    const priority = embeddedPriority(b) - embeddedPriority(a);
+    if (priority !== 0) return priority;
     switch (key) {
       case "name":
         return (a.sample_description || a.sample_code).localeCompare(
@@ -328,7 +333,14 @@ export function Board({
   const sectionGroupAnchor = useRef<number | null>(null);
   const stackAnchor = useRef<number | null>(null);
   const [embeddedFilter, setEmbeddedFilter] = useViewPref<number | "all">("board.embeddedFilter", "all");
-  const [embeddedSort, setEmbeddedSort] = useViewPref<EmbeddedSort>("board.embeddedSort", "embedded_date");
+  const [embeddedSort, setEmbeddedSort] = useViewPref<EmbeddedSort>(
+    "board.embeddedSort",
+    "embedded_date",
+    // A board saved with the retired "Needs cut first" sort (#195) reads as the
+    // default: a controlled <select> whose value is not among its options shows
+    // the first option while the state says otherwise (#85).
+    (value) => typeof value === "string" && EMBEDDED_SORTS.includes(value),
+  );
   // Pre-processing gets the same two controls (#89).
   const [preprocessingFilter, setPreprocessingFilter] = useViewPref<number | "all">("board.preprocessingFilter", "all");
   const [preprocessingSort, setPreprocessingSort] = useViewPref<PreprocessingSort>("board.preprocessingSort", "received_date");
@@ -1222,7 +1234,6 @@ export function Board({
                               value={embeddedSort}
                               onChange={(event) => setEmbeddedSort(event.target.value as EmbeddedSort)}
                             >
-                              <option value="needs_cut">Needs cut first</option>
                               <option value="embedded_date">Date embedded</option>
                               <option value="name">Name</option>
                               <option value="sample_id">Sample ID</option>

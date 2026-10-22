@@ -45,13 +45,13 @@ it("an uncut extra cannot be refiled into a cut that has already been taken", as
   const planned = lab.rows(`SELECT id, stage_cut_at FROM slides WHERE section_request_id = ?`, [
     queued,
   ])[0];
-  expect(planned.stage_cut_at, "the queued block's extra has no cut date").toBeNull();
+  expect(planned.stage_cut_at, "the queued block's extra has no sectioning date").toBeNull();
 
   // Somebody decides it belongs to the other block. The right block's cut has
   // already been taken, so there is no honest way to file a plan line into it.
   await expect(
     lab.db.relabelSlideToSample(planned.id, right, "mislabelled at the microtome"),
-  ).rejects.toThrow(/has not been cut yet/);
+  ).rejects.toThrow(/has not been sectioned yet/);
   expect(
     lab.rows(`SELECT section_request_id FROM slides WHERE id = ?`, [planned.id])[0]
       .section_request_id,
@@ -62,7 +62,7 @@ it("an uncut extra cannot be refiled into a cut that has already been taken", as
   // every slide in the group as cut, which is what would have minted a cut date
   // for a slide that was not there when the blade was.
   await lab.db.updateSectionStage(cutGroup, "stained");
-  expect(cutDateOf(lab, planned.id), "the plan line still has no cut date").toBeNull();
+  expect(cutDateOf(lab, planned.id), "the plan line still has no sectioning date").toBeNull();
 
   const result = await lab.db.requestStainForSample({
     sampleId: right,
@@ -82,7 +82,7 @@ it("both rack entrances refuse an uncut extra whose group reads past the queue",
   const planned = lab.rows(`SELECT id, stage_cut_at FROM slides WHERE section_request_id = ?`, [
     group,
   ])[0];
-  expect(planned.stage_cut_at, "the queued block's extra has no cut date").toBeNull();
+  expect(planned.stage_cut_at, "the queued block's extra has no sectioning date").toBeNull();
 
   // The shape an older build could leave behind, and the one the refusal above
   // now prevents: the group reads past the queue while the slide was never cut.
@@ -116,7 +116,7 @@ it("both rack entrances refuse an uncut extra whose group reads past the queue",
       assayType: "stain",
       assayName: "PAS",
     }),
-  ).rejects.toThrow(/no cut date/);
+  ).rejects.toThrow(/no sectioning date/);
 
   const after = lab.rows(`SELECT stack_id, purpose, stage_cut_at FROM slides WHERE id = ?`, [
     planned.id,
@@ -147,15 +147,15 @@ it("an uncut extra cannot be refiled into a group that was retired after being c
   const planned = lab.rows(`SELECT id, stage_cut_at FROM slides WHERE section_request_id = ?`, [
     queued,
   ])[0];
-  expect(planned.stage_cut_at, "the queued block's extra has no cut date").toBeNull();
+  expect(planned.stage_cut_at, "the queued block's extra has no sectioning date").toBeNull();
 
   await expect(
     lab.db.relabelSlideToSample(planned.id, right, "mislabelled at the microtome"),
-  ).rejects.toThrow(/has not been cut yet/);
+  ).rejects.toThrow(/has not been sectioned yet/);
   const after = lab.rows(`SELECT section_request_id, stage_cut_at FROM slides WHERE id = ?`, [
     planned.id,
   ])[0];
   expect(after.section_request_id, "the slide is left in the plan it came from").toBe(queued);
-  expect(after.stage_cut_at, "with no cut date it did not earn").toBeNull();
+  expect(after.stage_cut_at, "with no sectioning date it did not earn").toBeNull();
   expect(rackedButNeverCut(lab).join("; ") || "none", "the racks hold only real glass").toBe("none");
 });

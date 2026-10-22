@@ -1568,7 +1568,7 @@ export async function setBlockExhausted(sampleId: number, exhausted: boolean): P
     [sampleId],
   );
   for (const group of waiting) {
-    await removeSectionRequest(group.id, "Block marked exhausted - waiting cut cancelled");
+    await removeSectionRequest(group.id, "Block marked exhausted - waiting sectioning cancelled");
   }
 }
 
@@ -2789,7 +2789,7 @@ export async function createSectionRequests(
       const message = error instanceof Error ? error.message : String(error);
       if (!/UNIQUE constraint failed:\s*slides\.slide_code/i.test(message) || attempt >= 4) {
         throw /UNIQUE constraint failed:\s*slides\.slide_code/i.test(message)
-          ? new Error("Could not allocate slide letters — try that cut again in a moment.")
+          ? new Error("Could not allocate slide letters — try sectioning again in a moment.")
           : error;
       }
     }
@@ -2915,7 +2915,7 @@ async function createSectionRequestsOnce(
       (sample_id, user_id, event_type, summary, details, created_at)
      VALUES (?, CAST(NULLIF((SELECT value FROM app_settings WHERE key='active_user_id'), '') AS INTEGER),
              'sectioning_cut', ?, ?, ?)`,
-    [sampleId, `Cut ${slideCount} slide${slideCount === 1 ? "" : "s"}: ${planSummary}`, JSON.stringify(groups), timestamp],
+    [sampleId, `Sectioned ${slideCount} slide${slideCount === 1 ? "" : "s"}: ${planSummary}`, JSON.stringify(groups), timestamp],
   );
   await db.execute(`UPDATE samples SET sectioning_plan = '' WHERE id = ?`, [sampleId]);
 
@@ -4201,7 +4201,7 @@ export async function requestStainForSample(input: {
   if (exhaustedRows[0]?.block_exhausted === 1) {
     throw new Error(
       `${exhaustedRows[0].sample_code} is marked exhausted and has no extra slides left — ` +
-        `it cannot be cut again for ${assayName}.`,
+        `it cannot be sectioned again for ${assayName}.`,
     );
   }
   // Append an outstanding request (duplicates allowed, so asking for the same
@@ -4338,8 +4338,8 @@ export async function assignExtraSlideToAssay(input: {
   // offered from.
   if (slide.stage_cut_at === null) {
     throw new Error(
-      `${slide.slide_code} has no cut date, so there is no glass to stain. ` +
-        `Cut its block first.`,
+      `${slide.slide_code} has no sectioning date, so there is no glass to stain. ` +
+        `Section its block first.`,
     );
   }
   const catalog = await db.select<Array<{ id: number }>>(
@@ -4718,7 +4718,7 @@ export async function reassignSlide(
   // Change the plan instead: a queued cut group is editable (#116).
   if (!("extra" in target) && !slide.stage_cut_at) {
     throw new Error(
-      "That slide has not been cut yet — change the cutting plan instead of assigning it to an agent.",
+      "That slide has not been sectioned yet — change the sectioning plan instead of assigning it to an agent.",
     );
   }
   // A slide that has already been imaged has finished a cycle. Sending it back
@@ -4734,7 +4734,7 @@ export async function reassignSlide(
   // control landed.
   if (!("extra" in target) && slide.stage_pictures_taken_at) {
     throw new Error(
-      "That slide has already been imaged — add another slide to its cut group instead of re-staining this one.",
+      "That slide has already been imaged — add another slide to its sectioning group instead of re-staining this one.",
     );
   }
   const previousStackId = slide.stack_id;
@@ -4830,7 +4830,7 @@ export async function addSlideToSection(
     [sectionId],
   );
   const section = rows[0];
-  if (!section) throw new Error("That cut group no longer exists.");
+  if (!section) throw new Error("That sectioning group no longer exists.");
 
   // Allocating a letter is a read-then-write across `await` boundaries, so two
   // overlapping calls — a double click, which is what a user does when the app
@@ -4931,10 +4931,10 @@ export async function addSlideToSection(
              'slide_added', ?, ?, ?)`,
     [
       section.sample_id,
-      `${code} added to an existing cut ${what}`,
+      `${code} added to an existing sectioning group ${what}`,
       alreadyCut
-        ? "Mounted from the same ribbon after the group had been cut."
-        : "Added to the plan before the group was cut.",
+        ? "Mounted from the same ribbon after the group had been sectioned."
+        : "Added to the plan before the group was sectioned.",
       timestamp,
     ],
   );
@@ -5046,8 +5046,8 @@ export async function relabelSlideToSample(
   const landingStage = groupRows[0]?.current_stage ?? "sectioned";
   if (!slide.stage_cut_at && landingStage !== "needs_sectioning") {
     throw new Error(
-      `${displayCode(slide.slide_code)} has not been cut yet, so it cannot be filed under ` +
-        `${target.sample_code}, whose cut has already been taken. Change the cutting plan instead.`,
+      `${displayCode(slide.slide_code)} has not been sectioned yet, so it cannot be filed under ` +
+        `${target.sample_code}, whose sectioning is already done. Change the sectioning plan instead.`,
     );
   }
 
@@ -5126,7 +5126,7 @@ export async function relabelSlideToSample(
              'slide_relabelled_in', ?, ?, ?)`,
     [
       targetSampleId,
-      `${displayCode(newCode)} arrived here — cut from this block but labelled ${displayCode(slide.slide_code)}`,
+      `${displayCode(newCode)} arrived here — sectioned from this block but labelled ${displayCode(slide.slide_code)}`,
       detail,
       timestamp,
     ],
@@ -5450,8 +5450,8 @@ export async function deleteAssay(id: number): Promise<void> {
 export function sectionMoveRefusal(currentStage: string, stageKey: string): string | null {
   if (currentStage === "needs_sectioning" && stageKey === "ready_for_imaging") {
     return (
-      "This group is still waiting to be cut, so it cannot go to Ready for Imaging yet. " +
-      "The group must be cut first: mark it Sectioned, then take it through staining."
+      "This group is still waiting to be sectioned, so it cannot go to Ready for Imaging yet. " +
+      "The group must be sectioned first: mark it Sectioned, then take it through staining."
     );
   }
   return null;
@@ -5626,7 +5626,7 @@ async function refuseIfGroupNotCut(db: Database, sectionId: number, action: stri
   );
   if (rows[0]?.current_stage === "needs_sectioning") {
     throw new Error(
-      `This slide's cut group is still waiting to be cut, so it cannot be ${action} yet. ` +
+      `This slide's sectioning group is still waiting to be sectioned, so it cannot be ${action} yet. ` +
         `Move the group out of Needs Sectioning first.`,
     );
   }
@@ -5662,7 +5662,7 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
       const codes = worked.map((row) => displayCode(row.slide_code)).join(", ");
       throw new Error(
         `${codes} ${worked.length === 1 ? "has" : "have"} already been worked on (stained, imaged or analyzed), so ` +
-          `this cut cannot be retracted. Reassign or remove the slide instead.`,
+          `this sectioning cannot be retracted. Reassign or remove the slide instead.`,
       );
     }
 
@@ -5678,8 +5678,8 @@ export async function revertSectionToStage(id: number, stageKey: string): Promis
     );
     if (spent.length > 0) {
       throw new Error(
-        `${spent[0].sample_code} is marked exhausted, so this cut cannot go back to Needs Sectioning - ` +
-          `there is no tissue left to cut. Remove the cut group instead.`,
+        `${spent[0].sample_code} is marked exhausted, so this group cannot go back to Needs Sectioning - ` +
+          `there is no tissue left to section. Remove the sectioning group instead.`,
       );
     }
   }

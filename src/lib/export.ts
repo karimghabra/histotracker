@@ -41,7 +41,7 @@ export const SAMPLE_COLUMNS: Array<[string, Accessor<Sample>]> = [
     ],
   ),
   ["Embedding Notes", (s) => s.embedding_notes ?? ""],
-  ["Sectioning / Cut Notes", (s) => s.cut_notes],
+  ["Sectioning Notes", (s) => s.cut_notes],
   ["Slide Notes", (s) => s.slide_notes],
   ["Stains / IHC", (s) => s.stains],
   ["General Notes", (s) => s.overall_notes],
@@ -89,7 +89,7 @@ export const SLIDE_COLUMNS: Array<[string, Accessor<Slide>]> = [
   ["Current Stage", (row) => row.current_stage],
   // The same rule the Logs timeline uses — a slide whose group is still queued
   // for sectioning has not been cut, so the column is blank (#95).
-  ["Cut", (row) => slideCutAt(row)],
+  ["Sectioned", (row) => slideCutAt(row)],
   ["Stain Requested", (row) => row.stage_stain_requested_at ?? ""],
   ["Stained", (row) => row.stage_stained_at ?? ""],
   ["Coverslipped", (row) => row.stage_coverslipped_at ?? ""],
@@ -182,7 +182,7 @@ export type LogExportRow = { sample: Sample; slides: Slide[] };
 const LOGS_HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
-  "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
+  "Sectioned", "Stained", "Coverslipped", "Imaged", "Analyzed",
   // The physical slide's own note, then the sample's four notes under the labels the
   // intake form and the Logs screen use (src/lib/sampleNotes.ts).
   "This Slide's Notes", ...SAMPLE_NOTES.map((n) => n.label),
@@ -196,7 +196,7 @@ const LOGS_HEADERS = [
  * word for both would be unreadable. This row has no Slide ID and no Cut date,
  * and says why.
  */
-const REQUESTED_STAGE = "requested (not cut)";
+const REQUESTED_STAGE = "requested (not sectioned)";
 
 // One array of cells (in LOGS_HEADERS order) per exported line — one row per
 // slide, then one per stain still only assigned (#136), and a single bare row
@@ -319,7 +319,7 @@ export async function exportWorkbookXlsx(): Promise<string | null> {
     await xlsxBytes([
       { data: sheetRows(projects, PROJECT_COLUMNS), sheet: "Projects" },
       { data: sheetRows(samples, SAMPLE_COLUMNS), sheet: "Samples" },
-      { data: sheetRows(sections, SECTION_COLUMNS), sheet: "Cut Orders" },
+      { data: sheetRows(sections, SECTION_COLUMNS), sheet: "Sectioning Orders" },
       { data: sheetRows(slides, SLIDE_COLUMNS), sheet: "Slides" },
       { data: sheetRows(batches, BATCH_COLUMNS), sheet: "Processing Batches" },
     ]),

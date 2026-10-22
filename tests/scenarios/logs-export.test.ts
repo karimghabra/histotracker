@@ -18,8 +18,8 @@ afterEach(async () => {
 const HEADERS = [
   "Project", "Sample ID", "Description", "Processing", "Sample Stage", "Exhausted", "Date Added",
   "Slide", "Assay Type", "Stain / IHC", "Slide Stage",
-  "Cut", "Stained", "Coverslipped", "Imaged", "Analyzed",
-  "This Slide's Notes", "Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes",
+  "Sectioned", "Stained", "Coverslipped", "Imaged", "Analyzed",
+  "This Slide's Notes", "Embedding Notes", "Sectioning Notes", "Slide Notes", "General Notes",
 ];
 
 function parseCsv(text: string): string[][] {
@@ -66,7 +66,7 @@ it("the Logs export carries all four notes, each in the column its on-screen lab
   const notes = rows.map(
     (r) =>
       `${at(r, "Slide") ? "slide row" : "no slide"}: ` +
-      `embedding=${at(r, "Embedding Notes")} | cut=${at(r, "Sectioning / Cut Notes")} | ` +
+      `embedding=${at(r, "Embedding Notes")} | cut=${at(r, "Sectioning Notes")} | ` +
       `slide=${at(r, "Slide Notes")} | general=${at(r, "General Notes")} | this slide=${at(r, "This Slide's Notes")}`,
   );
   expect(notes.join("; "), "note cells per exported row").toBe(

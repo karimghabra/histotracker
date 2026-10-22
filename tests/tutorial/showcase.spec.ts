@@ -92,14 +92,14 @@ test("Histometer feature walkthrough → tutorial screenshots", async ({ page })
   await dragOnto(page, "EE-1", "Embedded Inventory");
   await shot(page, "09-embedded");
 
-  // ---- Send for Cutting ----------------------------------------------------
+  // ---- Send for Sectioning ----------------------------------------------------
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await expect(page.getByText(/How many slides to section/i)).toBeVisible();
   // Make slide #1 an H&E stain to show the mixed plan.
   await page.locator(".max-h-64 select").first().selectOption({ label: "H&E" });
   await shot(page, "10-send-for-cutting");
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await closeDrawer(page);
   await shot(page, "11-needs-sectioning");
 

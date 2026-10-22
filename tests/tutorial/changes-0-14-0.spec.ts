@@ -161,7 +161,7 @@ test("0.14.0 — the changes", async ({ page }) => {
   // here is exactly the case #125 is about.
   await page.getByRole("combobox", { name: /Add a stain/i }).first().selectOption("stain::PAS");
   await page.getByRole("button", { name: "Add", exact: true }).first().click();
-  await expect(page.getByText(/added to the cut already waiting/)).toBeVisible();
+  await expect(page.getByText(/added to the sectioning group already waiting/)).toBeVisible();
   await shot(page, "125-joins-the-waiting-cut", page.locator("tbody").first());
 
   await page.locator("nav").getByRole("button", { name: "Board" }).click();

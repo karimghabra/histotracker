@@ -76,8 +76,8 @@ async function embed(page: Page, code: string, batchLabel: string) {
 
 async function cut(page: Page, code: string) {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 }
 
@@ -113,10 +113,10 @@ test("#83: a removed slide's row is readable in a dark theme", async ({ page }) 
   // Remove the whole cut group, with a reason.
   await page.getByText("3 slides").first().click();
   await page.locator("button.text-red-600, button:has(svg.lucide-trash-2)").last().click();
-  const dialog = page.getByRole("dialog", { name: /Remove this cut group/ });
+  const dialog = page.getByRole("dialog", { name: /Remove this sectioning group/ });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Reason for removal").fill("block cracked");
-  await dialog.getByRole("button", { name: "Remove cut group" }).click();
+  await dialog.getByRole("button", { name: "Remove sectioning group" }).click();
   await expect(page.getByText("3 slides")).toHaveCount(0, { timeout: 15000 });
 
   await setTheme(page, "dark");
@@ -217,7 +217,10 @@ test("#95: a queued slide has no Cut step until the group is sectioned", async (
     await showRemoved(page);
     await page.getByRole("cell", { name: "EE-1", exact: true }).click();
     await page.getByRole("button", { name: /EE-1-A/ }).click();
-    const has = (await page.getByText("Cut", { exact: true }).count()) > 0;
+    // The slide's own timeline: the sample's phase uses the same word (#194).
+    const panel = page.getByRole("region", { name: "Slide EE-1-A details" });
+    await expect(panel).toBeVisible();
+    const has = (await panel.getByText("Sectioned", { exact: true }).count()) > 0;
     await page.getByRole("button", { name: /EE-1-A/ }).click();
     await page.getByRole("cell", { name: "EE-1", exact: true }).click();
     await page.locator("nav").getByRole("button", { name: "Board" }).click();

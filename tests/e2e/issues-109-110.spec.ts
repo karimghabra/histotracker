@@ -133,13 +133,13 @@ test("#110: the flag reads needs cut, and a saved plan raises it", async ({ page
   const inventory = column(page, "Embedded Inventory");
   // Both blocks were auto-seeded a cutting plan at embedding, so neither is
   // flagged — that is exactly why "has a plan" cannot be the signal.
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(0);
   await expect(inventory.getByText("⚑ needs stain")).toHaveCount(0);
 
   // Deliberately save a plan for EE-1.
   await inventory.getByText("EE-1", { exact: true }).click();
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  const dialog = page.getByRole("dialog", { name: /Send for Cutting/ });
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  const dialog = page.getByRole("dialog", { name: /Send for Sectioning/ });
   await expect(dialog).toBeVisible();
   // Change the plan so the save is a real change, then save it as a draft.
   await dialog.getByRole("button", { name: /Add slide/i }).click();
@@ -147,10 +147,10 @@ test("#110: the flag reads needs cut, and a saved plan raises it", async ({ page
   await expect(dialog).toHaveCount(0);
 
   // Only the planned block is flagged, and it says "needs cut".
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(1);
   const flagged = inventory
     .locator("div.group")
-    .filter({ hasText: "⚑ needs cut" });
+    .filter({ hasText: "⚑ needs sectioning" });
   await expect(flagged).toContainText("EE-1");
 });
 
@@ -167,9 +167,9 @@ test("#110: a cutting plan can be saved for a whole selection", async ({ page })
 
   await select(page, "EE-1");
   await select(page, "EE-2");
-  await drawer(page).getByRole("button", { name: "Send for Cutting" }).click();
+  await drawer(page).getByRole("button", { name: "Send for Sectioning" }).click();
 
-  const dialog = page.getByRole("dialog", { name: /Send for Cutting · 2 blocks/ });
+  const dialog = page.getByRole("dialog", { name: /Send for Sectioning · 2 blocks/ });
   await expect(dialog).toBeVisible();
   // The control exists at all for a batch — it used to be hidden — and says so.
   const save = dialog.getByRole("button", { name: /^Save Plan · 2 blocks/ });
@@ -181,5 +181,5 @@ test("#110: a cutting plan can be saved for a whole selection", async ({ page })
 
   // BOTH blocks were planned, not just the one on screen.
   const inventory = column(page, "Embedded Inventory");
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(2, { timeout: 15000 });
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(2, { timeout: 15000 });
 });

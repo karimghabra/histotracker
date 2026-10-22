@@ -213,7 +213,7 @@ test("#150: a slide the single-slide rule refuses is left untouched and listed, 
   await boot(page);
   await seedRackAtImaging(page, [2, 1]);
   // The UI cannot put glass that was never cut in an imaging rack, so plant it: the second cut
-  // group is put back to waiting to be cut, which is what the data layer refuses (#167).
+  // group is put back to waiting to be sectioned, which is what the data layer refuses (#167).
   const [{ slide_code: refusedCode, section_request_id }] = (await select(
     page,
     `SELECT slide_code, section_request_id FROM slides WHERE purpose = 'stain' ORDER BY id DESC LIMIT 1`,
@@ -238,7 +238,7 @@ test("#150: a slide the single-slide rule refuses is left untouched and listed, 
   const notice = drawer(page).getByRole("status");
   await expect(notice).toContainText("Marked 2 slides as imaged");
   await expect(notice).toContainText("1 refused and left untouched");
-  await expect(notice).toContainText("still waiting to be cut");
+  await expect(notice).toContainText("still waiting to be sectioned");
 
   const rows = (await picked(page)) as Array<{ slide_code: string; at: string | null }>;
   expect(rows.find((r) => r.slide_code === refusedCode)?.at ?? null, "the refused slide is untouched").toBeNull();
@@ -345,7 +345,7 @@ test("#150: across several selected racks, a slide the single-slide rule refuses
   const notice = drawer(page).getByRole("status");
   await expect(notice).toContainText("Marked 5 slides as imaged");
   await expect(notice).toContainText("1 refused and left untouched");
-  await expect(notice).toContainText("still waiting to be cut");
+  await expect(notice).toContainText("still waiting to be sectioned");
 
   const rows = (await picked(page)) as Array<{ slide_code: string; at: string | null }>;
   expect(rows.find((r) => r.slide_code === refusedCode)?.at ?? null, "the refused slide is untouched").toBeNull();
@@ -403,7 +403,7 @@ test("#191: a tick the data layer refuses goes back, and the drawer says why", a
   await boot(page);
   await seedRackAtImaging(page);
   // The UI cannot put glass that was never cut in an imaging rack, so plant it, exactly as the
-  // bulk refusal above does: the cut group goes back to waiting to be cut (#167).
+  // bulk refusal above does: the cut group goes back to waiting to be sectioned (#167).
   await page.evaluate(() =>
     (window as unknown as { __SHIM_SQL__: (s: string, p: unknown[]) => Promise<void> }).__SHIM_SQL__(
       `UPDATE section_requests SET current_stage = 'needs_sectioning'
@@ -417,7 +417,7 @@ test("#191: a tick the data layer refuses goes back, and the drawer says why", a
 
   const box = drawer(page).getByRole("checkbox", { name: /^Images captured for EE-/ }).first();
   await box.click();
-  await expect(drawer(page)).toContainText("still waiting to be cut");
+  await expect(drawer(page)).toContainText("still waiting to be sectioned");
   await expect(box).not.toBeChecked();
   await expect(drawer(page)).toContainText("0/3 imaged");
   expect((await picked(page)).filter((r) => r.at)).toHaveLength(0);

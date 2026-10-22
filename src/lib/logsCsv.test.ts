@@ -98,8 +98,8 @@ describe("buildLogsCsv", () => {
       expect(row[header.indexOf("Assay Type")]).toBe("stain");
       // No glass exists, and the row has to say so rather than look like a slide.
       expect(row[header.indexOf("Slide")]).toBe("");
-      expect(row[header.indexOf("Cut")]).toBe("");
-      expect(row[header.indexOf("Slide Stage")]).toBe("requested (not cut)");
+      expect(row[header.indexOf("Sectioned")]).toBe("");
+      expect(row[header.indexOf("Slide Stage")]).toBe("requested (not sectioned)");
     });
 
     it("names a second stain still assigned to a block that already has slides", () => {
@@ -124,7 +124,7 @@ describe("buildLogsCsv", () => {
       const row = cells(lines[3]);
       expect(row[header.indexOf("Stain / IHC")]).toBe("Safranin O");
       expect(row[header.indexOf("Slide")]).toBe("");
-      expect(row[header.indexOf("Slide Stage")]).toBe("requested (not cut)");
+      expect(row[header.indexOf("Slide Stage")]).toBe("requested (not sectioned)");
     });
 
     it("keeps one row per outstanding request, so two of an agent are two slides owed", () => {
@@ -151,7 +151,7 @@ describe("buildLogsCsv", () => {
       expect(lines).toHaveLength(3);
       const live = cells(lines[1]);
       expect(live[header.indexOf("Sample ID")]).toBe("EE-1");
-      expect(live[header.indexOf("Slide Stage")]).toBe("requested (not cut)");
+      expect(live[header.indexOf("Slide Stage")]).toBe("requested (not sectioned)");
       const removed = cells(lines[2]);
       expect(removed[header.indexOf("Sample ID")]).toBe("EE-2");
       expect(removed[header.indexOf("Stain / IHC")]).toBe("");
@@ -188,7 +188,7 @@ describe("buildLogsCsv", () => {
     const lines = csv.trim().split("\n");
     const header = cells(lines[0]);
     expect(header.slice(-5)).toEqual([
-      "This Slide's Notes", "Embedding Notes", "Sectioning / Cut Notes", "Slide Notes", "General Notes",
+      "This Slide's Notes", "Embedding Notes", "Sectioning Notes", "Slide Notes", "General Notes",
     ]);
     // A slide row, a still-only-assigned stain row and a bare row all carry the four sample notes;
     // only the slide row has a note of a slide's own.

@@ -653,7 +653,7 @@ function makeApi(db) {
       }
       run(`UPDATE samples SET preselected_stains = ? WHERE id = ?`, [remaining.length ? JSON.stringify(remaining) : "", sampleId]);
     }
-    // Clear the live plan: re-opening Send for Cutting starts a wholly new one,
+    // Clear the live plan: re-opening Send for Sectioning starts a wholly new one,
     // and the cleared column is what makes the needs-cut flag drop (#112).
     run(`UPDATE samples SET sectioning_plan = '' WHERE id = ?`, [sampleId]);
     return ids;
@@ -881,7 +881,7 @@ function makeApi(db) {
     for (const g of all(
       `SELECT id FROM section_requests WHERE sample_id = ? AND current_stage = 'needs_sectioning'`,
       [sampleId])) {
-      removeSectionRequest(g.id, 'Block marked exhausted - waiting cut cancelled');
+      removeSectionRequest(g.id, 'Block marked exhausted - waiting sectioning cancelled');
     }
   }
   // Port of removeSamples() — db.ts (#96, #159). The board's Delete and the Logs'
@@ -1162,12 +1162,12 @@ function makeApi(db) {
       if (worked.length > 0) {
         throw new Error(`${worked.map((w) => w.slide_code).join(", ")} already worked on (stained, imaged or analyzed)`);
       }
-      // A spent block has no tissue left to cut, so its cut cannot go back to
+      // A spent block has no tissue left to section, so its cut cannot go back to
       // waiting for the blade (#144).
       const spent = get(
         `SELECT s.sample_code AS code FROM section_requests sr JOIN samples s ON s.id = sr.sample_id
           WHERE sr.id = ? AND s.block_exhausted = 1`, [sectionId]);
-      if (spent) throw new Error(`${spent.code} is marked exhausted - this cut cannot go back to Needs Sectioning`);
+      if (spent) throw new Error(`${spent.code} is marked exhausted - this group cannot go back to Needs Sectioning`);
       run(`UPDATE section_requests SET current_stage = 'needs_sectioning' WHERE id = ?`, [sectionId]);
       // The slides leave their racks too. Clearing the cut date alone left a
       // slide that is "not cut" sitting in a live stainer, and the next tick of
@@ -1254,7 +1254,7 @@ function makeApi(db) {
       const slideId = addSlideToSection(pending.id, { assayType, assayName });
       return { target: "cut", slideId, stackId: null, createdStackId: null, sectionId: pending.id };
     }
-    // An exhausted block cannot be cut again, so a request with no free extra to
+    // An exhausted block cannot be sectioned again, so a request with no free extra to
     // fulfil it would flag the block forever — refuse it (#70).
     const ex = get(`SELECT block_exhausted, sample_code FROM samples WHERE id = ?`, [sampleId]);
     if (ex && ex.block_exhausted === 1) {
@@ -1276,9 +1276,9 @@ function makeApi(db) {
         WHERE sl.id = ? AND sl.purpose = 'extra' AND sl.current_stage = 'extra'`, [slideId]);
     if (!slide) throw new Error("That extra slide is no longer available.");
     // refuseIfGroupNotCut(): a group still in Needs Sectioning is a plan, not glass (#139).
-    if (slide.group_stage === "needs_sectioning") throw new Error("still waiting to be cut");
+    if (slide.group_stage === "needs_sectioning") throw new Error("still waiting to be sectioned");
     // The slide's own cut stamp, which the group's stage only proxies (#182).
-    if (slide.stage_cut_at === null) throw new Error("has no cut date, so there is no glass to stain");
+    if (slide.stage_cut_at === null) throw new Error("has no sectioning date, so there is no glass to stain");
     const cat = get(`SELECT id FROM assay_catalog WHERE assay_type = ? AND name = ? COLLATE NOCASE AND is_active = 1`, [assayType, assayName]);
     if (!cat) throw new Error("Choose an active stain or IHC agent from the catalog.");
 
@@ -1471,7 +1471,7 @@ function makeApi(db) {
     // next ordinary move. The group created below is created 'sectioned', so it
     // is a cut already taken too. Mirrors relabelSlideToSample in db.ts.
     if (!slide.cut && pastTheQueue(landing?.stage ?? "sectioned")) {
-      throw new Error("has not been cut yet, so it cannot be filed under a block whose cut has already been taken");
+      throw new Error("has not been sectioned yet, so it cannot be filed under a block whose sectioning is already done");
     }
     let group = landing?.id ?? null;
     if (group == null) {
@@ -1511,7 +1511,7 @@ function makeApi(db) {
                   AND (sl.current_stage <> 'removed' OR sr.current_stage <> 'needs_sectioning')) AS cut
          FROM section_requests sr JOIN samples s ON s.id = sr.sample_id WHERE sr.id = ?`,
       [sectionId]);
-    if (!section) throw new Error("That cut group no longer exists.");
+    if (!section) throw new Error("That sectioning group no longer exists.");
     const letter = nextSlideLetter(section.sample);
     const code = `${section.code}-${duplicateLabel(letter).toUpperCase()}`;
     const ordinal = (get(
@@ -1960,7 +1960,7 @@ issue(182, "an uncut extra cannot be refiled into a cut that has already been ta
   // The left block's cut is still queued, so its extra is a line in a plan.
   const [queued] = api.createSectionRequests(left, [{ duplicates: 1 }]);
   const planned = api.get(`SELECT id, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`, [queued]);
-  eq(planned.cut, null, "the queued block's extra has no cut date");
+  eq(planned.cut, null, "the queued block's extra has no sectioning date");
 
   let refiled = false;
   try {
@@ -1976,7 +1976,7 @@ issue(182, "an uncut extra cannot be refiled into a cut that has already been ta
   // refile landed, this is the move that would have minted its cut date.
   api.startAssayWork(cutGroup);
   eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [planned.id]).cut, null,
-     "the left block's plan line still has no cut date");
+     "the left block's plan line still has no sectioning date");
 
   const result = api.requestStainForSample(right, "stain", "PAS");
   eq(result.target, "block", "the uncut slide is not glass, so the block is flagged for a cut");
@@ -1996,7 +1996,7 @@ issue(182, "an uncut extra cannot be refiled into a cut that has already been ta
   try {
     api.assignExtraSlideToAssay(planned.id, "stain", "PAS");
     racked = true;
-  } catch { /* desired: no cut date, no glass */ }
+  } catch { /* desired: no sectioning date, no glass */ }
   eq(racked, false, "and assigning it to an agent by hand is refused outright");
   eq(api.get(`SELECT stack_id AS rack FROM slides WHERE id = ?`, [planned.id]).rack, null,
      "so it is left out of every rack");
@@ -2028,7 +2028,7 @@ issue(182, "an uncut extra cannot be refiled into a group that was retired after
   // The left block's cut is still queued, so its extra is a line in a plan.
   const [queued] = api.createSectionRequests(left, [{ duplicates: 1 }]);
   const planned = api.get(`SELECT id, stage_cut_at AS cut FROM slides WHERE section_request_id = ?`, [queued]);
-  eq(planned.cut, null, "the queued block's extra has no cut date");
+  eq(planned.cut, null, "the queued block's extra has no sectioning date");
 
   let refiled = false;
   try {
@@ -2039,12 +2039,12 @@ issue(182, "an uncut extra cannot be refiled into a group that was retired after
   eq(api.get(`SELECT section_request_id AS g FROM slides WHERE id = ?`, [planned.id]).g, queued,
      "and the slide is left in the plan it came from");
   eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [planned.id]).cut, null,
-     "with no cut date it did not earn");
+     "with no sectioning date it did not earn");
 });
 
 // #182 — the other half: glass that WAS cut, by a build that never stamped it.
 //
-// Before 0.2.3 extras were inserted with no cut date at all, and before 0.8.0 a
+// Before 0.2.3 extras were inserted with no sectioning date at all, and before 0.8.0 a
 // group dragged from Needs Sectioning straight past it was never recorded as
 // cut either (#95). Those rows are real glass in a box. Now that the cut date
 // decides whether a slide may be stained, they have to be given the group's own
@@ -2090,7 +2090,7 @@ issue(182, "glass cut before the stamp existed takes its group's own cut date", 
   eq(cutOf(old.slide), "2023-01-02 10:00", "the sectioned group's own stamp is the honest cut date");
   eq(cutOf(straight.slide), "2023-02-02 10:00",
      "a group with no sectioned stamp takes the earliest moment it records past the queue");
-  eq(cutOf(plan.slide), null, "a slide still waiting to be cut is left alone");
+  eq(cutOf(plan.slide), null, "a slide still waiting to be sectioned is left alone");
   eq(cutOf(undated.slide), null, "and no date is invented for a group that records none");
 
   eq(api.listExtraSlides().filter((sl) => sl.id === old.slide || sl.id === straight.slide).length, 2,
@@ -4086,7 +4086,7 @@ issue(136, "a stain requested while the cut is still waiting is named on the log
 });
 
 // A block that can no longer be cut owes nothing: the log must not keep saying
-// "assigned, not cut yet" about a removed or exhausted block.
+// "assigned, not sectioned yet" about a removed or exhausted block.
 issue(136, "a removed or exhausted block lists no assigned stain", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
@@ -4569,7 +4569,7 @@ for (const stamp of ["stage_ready_for_imaging_at", "stage_analyzed_at"]) {
   });
 }
 
-issue(139, "an extra slide in a group still waiting to be cut cannot be stained", () => {
+issue(139, "an extra slide in a group still waiting to be sectioned cannot be stained", () => {
   const api = makeApi(freshDb());
   const p = api.seedProject();
   const { id } = api.addSample(p, "EE", "planned extra");
@@ -4603,7 +4603,7 @@ issue(139, "a slide added to a retracted group is not stamped cut by a removed s
   api.revertSectionToStage(section, "needs_sectioning");
   const added = api.addSlideToSection(section, { assayType: "stain", assayName: "H&E" });
   eq(api.get(`SELECT stage_cut_at AS cut FROM slides WHERE id = ?`, [added]).cut, null,
-     "nothing was cut, so the new slide has no cut date");
+     "nothing was cut, so the new slide has no sectioning date");
 });
 
 // A group still past Needs Sectioning was cut even when every slide in it has since been

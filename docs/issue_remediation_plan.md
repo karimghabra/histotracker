@@ -44,6 +44,46 @@
 > A fix is not done until a test has been observed to FAIL without it.
 
 
+## #194 — the screen says sectioning, not cutting
+
+- **#194 · ✅ fixed.**
+  "Cut" on the bench can mean two different things: sectioning a block on the microtome, and trimming a block to fit its mold.
+  The app meant the first everywhere and said the second's word for it, in plans, buttons, badges, timestamps and refusals.
+  Every user-facing string now says section or sectioning: **Send for Sectioning** and the **Sectioning Plan** dialog, the **⚑ needs sectioning** badge, "Awaiting sectioning", a cut group is a **sectioning group**, **Sectioning defaults** in Settings, the **Sectioning Notes** field, the slide timeline's **Sectioned** step, the undo labels, and every refusal in `db.ts` that named a cut.
+  The exports follow: the slide and Logs sheets' `Cut` column is `Sectioned`, the notes column is `Sectioning Notes`, the `Cut Orders` sheet is `Sectioning Orders`, and an assigned stain with no glass reads `requested (not sectioned)`.
+  A spreadsheet or macro that looked a column up by its old header needs the new one.
+  Only wording moved: column names (`cut_notes`, `stage_cut_at`), stage keys and code identifiers are unchanged, so the schema and the sync payload are untouched, and text already written to a database (a timeline summary such as "Cut 2 slides", a removal reason) keeps the words it was written with.
+  The expanded slide in the Logs is now a region named for the slide, so its own timeline can be read apart from the sample's phase, which already said "Sectioned".
+  *Test:* every spec, scenario, unit test, harness gate and stress refusal list that quoted the old wording quotes the new; the harness's port of `db.ts` carries the same messages; `pnpm verify` render reports exactly the renamed text and nothing else.
+
+
+## #195 — a block that needs sectioning is prioritized, not sorted for
+
+- **#195 · ✅ fixed.**
+  #129 made the needs-sectioning flag a sort key, "Needs cut first", so bringing the flagged blocks to the top of Embedded Inventory was a choice somebody had to remember to make, and the default sort left them wherever their embedding date put them.
+  A block is flagged when a stain is requested on it or a sectioning plan is saved for it: somebody is waiting on it, which is what a star says.
+  So the flag now prioritizes the block automatically: `sortEmbedded` (`src/components/Board.tsx`) puts starred and flagged blocks in one top tier under every sort, ordered within it by the sort chosen, and the "Needs cut first" option is gone.
+  It shares the badge's predicate, `sampleNeedsCut`, so the order and the badge cannot disagree, and it writes nothing: the star is still only what somebody set by hand, and a block drops back into the list on its own once it is sent for sectioning.
+  A board saved with the retired sort (only a viewer keeps view preferences across a launch) reads as the default rather than as a value its dropdown no longer offers (#85).
+  *Test:* `tests/e2e/issues-129-133.spec.ts` (`#129/#195`): the flagged middle block leads under all three sorts, the option is gone, and a starred block shares the top with it; it fails on the previous sort with `EE-1` first.
+
+
+## #193 — the nightly read a rack's protocol before it had loaded
+
+- **#193 · ✅ fixed in the stress harness; the issue closes once a night is green.**
+  The nightly's stress1 job went red on three of the sixteen nights run at `c19fc6f`, on the test #191 was found on: `tests/stress/07-bench-reality.spec.ts`, "bench: re-imaging, and losing a slide after it was analyzed", now with `locator.click: Timeout 20000ms exceeded` waiting for a card in Ready for Imaging.
+  A harness defect, not an app one.
+  The rack drawer opens before its protocol checklist does, because the steps come from a query, and `runProtocolSteps` counted the unticked steps with `count()`, which never waits.
+  It read zero in that moment, returned having ticked nothing, and the test closed the drawer with the rack still in Staining; the failure then surfaced twenty seconds later as Ready for Imaging having no card to open.
+  The traces of the Oct 12 and Oct 15 runs show exactly that sequence (the Sep 30 artifact had expired): drawer open, step count zero, drawer closed, timeout.
+  It never failed here on an idle or a CPU-loaded host, but a 300 ms delay on checklist reads in the browser shim reproduced it every time, with the nightly's own error.
+  Under that delay the same test then failed one line later on a second race of the same shape: the drawer closes itself once the rack's last step is ticked, and `closeDrawer` counted it open, then clicked a close button that was already gone and waited out the action timeout for it.
+  `waitForProtocolSteps` (`tests/stress/lib.ts`) waits for the checklist's first step, ticked or not, before anything counts them; `runProtocolSteps` and the B5 block of the same spec go through it, which also covers `06-durability`'s undo chain.
+  `closeDrawer` now waits for the drawer to be gone and retries the click only while it is still there.
+  The re-imaging test asserts that both H&E steps were ticked, so a silent no-op fails where it happens instead of a line that only looks related.
+  *Test:* with that delay in place, the re-imaging test failed 3 of 3 before the change and stress1 passed 9 of 9 after it; the delay hook was a probe and is not committed.
+
+
 ## #191 — the imaging checkbox un-ticked itself after the click
 
 - **#191 · ✅ fixed.**

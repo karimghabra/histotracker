@@ -80,20 +80,20 @@ function drawer(page: Page) {
 // stage. the dialogue should also not show the 'send for cutting' button until
 // they are in the embedded inventory."
 // ---------------------------------------------------------------------------
-test("#98: it is a Cutting Plan until the block reaches Embedded Inventory", async ({ page }) => {
+test("#98: it is a Sectioning Plan until the block reaches Embedded Inventory", async ({ page }) => {
   await signInAndProject(page);
   await addSample(page, "cut plan naming");
 
   // Fresh block, sitting in Pre-processing.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await expect(page.getByRole("button", { name: "Cutting Plan" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send for Cutting" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sectioning Plan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send for Sectioning" })).toHaveCount(0);
 
   // The dialog agrees, and offers no send.
-  await page.getByRole("button", { name: "Cutting Plan" }).click();
-  const dialog = page.getByRole("dialog", { name: /Cutting Plan/ });
+  await page.getByRole("button", { name: "Sectioning Plan" }).click();
+  const dialog = page.getByRole("dialog", { name: /Sectioning Plan/ });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /Send for Cutting/ })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: /Send for Sectioning/ })).toHaveCount(0);
   // The plan is still draftable — that is the whole point of opening it early.
   await expect(dialog.getByRole("button", { name: "Save Plan" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
@@ -106,11 +106,11 @@ test("#98: it is a Cutting Plan until the block reaches Embedded Inventory", asy
   // Take it to Embedded Inventory; now it really can be sent.
   await embed(page, "EE-1", "Batch 1");
   await page.getByText("EE-1", { exact: true }).first().click();
-  await expect(page.getByRole("button", { name: "Send for Cutting" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Cutting Plan" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  const sendDialog = page.getByRole("dialog", { name: /Send for Cutting/ });
-  await expect(sendDialog.getByRole("button", { name: /Send for Cutting/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send for Sectioning" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sectioning Plan" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  const sendDialog = page.getByRole("dialog", { name: /Send for Sectioning/ });
+  await expect(sendDialog.getByRole("button", { name: /Send for Sectioning/ })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -167,8 +167,8 @@ test("#100/#101: the Stains list is live, one line each, with slide state", asyn
   }
 
   // #101 — cut them, and the same list turns into slides with a real state.
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.getByText("EE-1", { exact: true }).first().click();
@@ -177,7 +177,7 @@ test("#100/#101: the Stains list is live, one line each, with slide state", asyn
   // Named by its slide code now, and honest about not being cut yet: the group
   // is sitting in Needs Sectioning (#95).
   await expect(cutRow).toContainText(/EE-1-[A-Z]+/);
-  await expect(cutRow).toContainText("Awaiting cut");
+  await expect(cutRow).toContainText("Awaiting sectioning");
   await expect(cutRow).not.toContainText("Requested");
 });
 

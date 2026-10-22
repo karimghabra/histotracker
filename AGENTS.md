@@ -172,6 +172,9 @@ Conventions in the specs, worth following rather than re-deriving:
   A control the record drives still shows the old value a fixed wait later on a loaded
   host, so the next pass clicks it again and undoes it (`runProtocolSteps` in
   `tests/stress/lib.ts`).
+  `count()` never waits either: a list a query draws reads zero until it has loaded, and a
+  drawer can close itself between a count and a click, so wait for what the count stands
+  for (`waitForProtocolSteps`, `closeDrawer`, #193).
 
 ## The test harness — keep it green, keep it in sync
 

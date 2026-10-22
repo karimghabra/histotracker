@@ -156,7 +156,7 @@ export function SectioningPlanDialog({
       // Named for what it does HERE (#98): before Embedded Inventory this is a
       // plan you are drafting, not a cut you are sending.
       title={
-        (canSend ? "Send for Cutting" : "Cutting Plan") +
+        (canSend ? "Send for Sectioning" : "Sectioning Plan") +
         (isBatch ? ` · ${blocks.length} blocks` : ` · ${displayCode(current.sample_code)}`)
       }
       onClose={onClose}
@@ -198,7 +198,7 @@ export function SectioningPlanDialog({
             {current.sample_description ? ` — ${current.sample_description}` : ""}. <br />
           </>
         )}
-        How many slides to cut, and which carry a stain? Everything else is an extra.
+        How many slides to section, and which carry a stain? Everything else is an extra.
       </p>
 
       {preselected && (
@@ -255,12 +255,12 @@ export function SectioningPlanDialog({
 
       {isBatch && (
         <p className="mt-2 rounded-md bg-brand/10 px-2 py-1.5 text-xs text-brand">
-          Each block is cut by its own plan — page through the blocks above to review or edit them. Sending cuts all {blocks.length}.
+          Each block is sectioned by its own plan — page through the blocks above to review or edit them. Sending queues all {blocks.length} for sectioning.
         </p>
       )}
       {!canSend && (
         <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-          This is a plan, not a cut. Sending for cutting unlocks once every block
+          This is a plan; nothing is sectioned yet. Sending for sectioning unlocks once every block
           reaches Embedded Inventory — save the plan and it will be waiting.
         </p>
       )}
@@ -286,7 +286,7 @@ export function SectioningPlanDialog({
             dialog can do until the block is out of the wax. */}
         {canSend && (
           <Button variant="primary" onClick={send} disabled={busy || rows.length === 0}>
-            <Scissors size={14} /> Send for Cutting
+            <Scissors size={14} /> Send for Sectioning
             {isBatch ? ` · ${blocks.length} blocks` : ""}
           </Button>
         )}

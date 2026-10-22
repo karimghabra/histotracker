@@ -128,8 +128,8 @@ test("the new features work on the upgraded legacy database", async ({ page }) =
 
   // Cut again on the legacy block.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await page.locator("nav").getByRole("button", { name: "Logs" }).click();

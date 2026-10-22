@@ -164,7 +164,7 @@ const SLIDE_TIMELINE: Array<{ label: string; column: keyof Slide; fallback?: key
 function slideEvents(slide: Slide): Array<{ label: string; at: string }> {
   const cut = slideCutAt(slide);
   const rest = recordedEvents(slide as unknown as Record<string, unknown>, SLIDE_TIMELINE);
-  return cut ? [{ label: "Cut", at: cut }, ...rest] : rest;
+  return cut ? [{ label: "Sectioned", at: cut }, ...rest] : rest;
 }
 
 function fmtTime(at: string): string {
@@ -1248,7 +1248,7 @@ function FragmentRow({
             {sample.block_exhausted === 1 && (
               <span
                 className="whitespace-nowrap rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
-                title="Block exhausted — no sample left to cut"
+                title="Block exhausted — no sample left to section"
               >
                 Exhausted
               </span>
@@ -1305,7 +1305,7 @@ function FragmentRow({
           title={
             agentEntries.length
               ? agentEntries
-                  .map((a) => (a.requested ? `${a.name} (assigned, not cut yet)` : a.name))
+                  .map((a) => (a.requested ? `${a.name} (assigned, not sectioned yet)` : a.name))
                   .join(", ")
               : undefined
           }
@@ -1410,8 +1410,8 @@ function FragmentRow({
                             : pulled.length
                               ? `${assayName} pulled from an extra → now in Staining`
                               : joined.length
-                                ? `${assayName} added to the cut already waiting`
-                                : `${assayName} added — the block needs a cut`,
+                                ? `${assayName} added to the sectioning group already waiting`
+                                : `${assayName} added — the block needs sectioning`,
                         );
                       } catch (error) {
                         setAddFlash(error instanceof Error ? error.message : String(error));
@@ -1448,7 +1448,7 @@ function FragmentRow({
                   if (
                     confirm(
                       `Archive ${displayCode(sample.sample_code)}?\n\n` +
-                        `The block, its cut groups and its extra slides all leave the board, ` +
+                        `The block, its sectioning groups and its extra slides all leave the board, ` +
                         `and the sample is hidden from this log. Nothing is deleted and no ` +
                         `numbering changes — tick "Show archived" to find it again and restore it.\n\n` +
                         `A shared staining rack stays put while it still holds another ` +
@@ -1548,7 +1548,7 @@ function FragmentRow({
             {visibleRequested.length > 0 && (
               <>
                 <h4 className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
-                  Assigned — not cut yet ({visibleRequested.length}
+                  Assigned — not sectioned yet ({visibleRequested.length}
                   {visibleRequested.length !== requested.length ? ` of ${requested.length}` : ""})
                 </h4>
                 <ul className="mb-1 space-y-0.5 rounded-md border border-line/60 px-2 py-1.5">
@@ -1577,7 +1577,7 @@ function FragmentRow({
             </h4>
             {visibleSlides.length === 0 ? (
               <p className="text-[11px] text-ink-faint">
-                {slides.length === 0 ? "No slides cut yet for this sample." : "No slides match the stain filter."}
+                {slides.length === 0 ? "No slides sectioned yet for this sample." : "No slides match the stain filter."}
               </p>
             ) : (
               <div className="divide-y divide-line/60 overflow-hidden rounded-md border border-line/60">
@@ -1615,7 +1615,7 @@ function FragmentRow({
                           {unmetRequest(slide) && (
                             <span
                               className="rounded bg-amber-100 px-1 text-[9px] font-medium text-amber-800"
-                              title={`This slide was cut for ${unmetRequest(slide)} and ended up as ${agentLabel(slide)}. The ${unmetRequest(slide)} has not been made.`}
+                              title={`This slide was sectioned for ${unmetRequest(slide)} and ended up as ${agentLabel(slide)}. The ${unmetRequest(slide)} has not been made.`}
                             >
                               asked for {unmetRequest(slide)}
                             </span>
@@ -1641,7 +1641,13 @@ function FragmentRow({
                         </button>
                       </div>
                       {slideOpen && (
-                        <div className="space-y-2 px-3 pb-2 pl-7">
+                        // Named for the slide, so its own timeline can be read apart
+                        // from the sample's phase, which uses the same stage words (#194).
+                        <div
+                          role="region"
+                          aria-label={`Slide ${displayCode(slide.slide_code)} details`}
+                          className="space-y-2 px-3 pb-2 pl-7"
+                        >
                           {removed && (
                             <div className="note-removed rounded-md border px-2 py-1.5">
                               <p className="text-removed text-[10px] font-semibold uppercase tracking-wide">

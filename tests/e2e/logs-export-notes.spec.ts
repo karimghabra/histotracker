@@ -35,7 +35,7 @@ const GLASS_NOTE = "GLASS-7f3 faint staining on this one";
 const NOTE_COLUMNS = [
   "This Slide's Notes",
   "Embedding Notes",
-  "Sectioning / Cut Notes",
+  "Sectioning Notes",
   "Slide Notes",
   "General Notes",
 ];
@@ -129,7 +129,7 @@ test("the Logs export carries all four notes, each under its on-screen label (#1
   await page.getByRole("button", { name: "New Sample" }).click();
   await page.getByPlaceholder("e.g. 2 week Stretch PLA").fill("TE8-12 fixing sample");
   await page.getByLabel("Embedding Notes").fill(INTAKE.embedding);
-  await page.getByLabel("Sectioning / Cut Notes").fill(INTAKE.cut);
+  await page.getByLabel("Sectioning Notes").fill(INTAKE.cut);
   await page.getByLabel("Slide Notes").fill(INTAKE.slide);
   await page.getByLabel("General Notes").fill(INTAKE.general);
   await page.getByRole("button", { name: /Create Sample/ }).click();
@@ -161,7 +161,7 @@ test("the Logs export carries all four notes, each under its on-screen label (#1
     );
   expect(onScreen, "the four note labels on the Logs screen").toEqual([
     "Embedding Notes",
-    "Sectioning / Cut Notes",
+    "Sectioning Notes",
     "Slide Notes",
     "General Notes",
   ]);

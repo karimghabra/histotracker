@@ -312,7 +312,7 @@ async function seedEmbedded(page: Page): Promise<void> {
   await signInAs(page, USER);
 }
 
-test("#129: Embedded Inventory sorts by what needs cutting", async ({ page }) => {
+test("#129/#195: a block that needs sectioning heads Embedded Inventory under every sort", async ({ page }) => {
   await boot(page);
   await seedEmbedded(page);
 
@@ -322,22 +322,40 @@ test("#129: Embedded Inventory sorts by what needs cutting", async ({ page }) =>
     .last();
   const codes = async () =>
     (await embedded.locator("[aria-selected]").allInnerTexts()).map((t) => t.split(String.fromCharCode(10))[0].trim());
+  const sort = embedded.getByLabel("Sort embedded inventory");
 
-  // The flag is on screen, and the sort must agree with THIS — which is why they
+  // The flag is on screen, and the order must agree with THIS — which is why they
   // share one predicate rather than each having their own.
-  await expect(embedded.getByText("⚑ needs cut")).toHaveCount(1);
-  await expect(async () => {
-    expect((await codes()).length).toBe(3);
-  }).toPass({ timeout: 15_000 });
+  await expect(embedded.getByText("⚑ needs sectioning")).toHaveCount(1);
 
-  // Sorting brings the flagged block to the top WITHOUT hiding the other two.
-  // That is the whole of the follow-up on this issue: a block that owes a cut is
-  // a priority, not a category, and the drawer stays whole.
-  await embedded.getByLabel("Sort embedded inventory").selectOption("needs_cut");
+  // #195: the flag prioritizes the block, so the flagged MIDDLE block leads with
+  // no sort chosen, and still leads under each sort that would otherwise put
+  // another block first (name and sample ID both start at EE-1). None of them
+  // hides the other two: a block that owes sectioning is a priority, not a
+  // category, and the drawer stays whole (#129).
+  await expect(sort).toHaveValue("embedded_date");
+  for (const key of ["embedded_date", "name", "sample_id"]) {
+    await sort.selectOption(key);
+    await expect(async () => {
+      const shown = await codes();
+      expect(shown.length).toBe(3);
+      expect(shown[0]).toContain("EE-2");
+    }).toPass({ timeout: 15_000 });
+  }
+
+  // The sort that used to do this is gone, not merely unused.
+  await expect(sort.locator("option")).toHaveText(["Date embedded", "Name", "Sample ID"]);
+
+  // A block starred by hand shares the top with the flagged one, the two in the
+  // chosen order, and the block that is neither comes after both.
+  await embedded
+    .locator("[aria-selected]")
+    .filter({ hasText: "EE-3" })
+    .getByRole("button", { name: "Prioritize sample" })
+    .click();
   await expect(async () => {
-    const shown = await codes();
-    expect(shown.length).toBe(3);
-    expect(shown[0]).toContain("EE-2");
+    const shown = (await codes()).map((code) => code.match(/EE-\d/)?.[0]);
+    expect(shown).toEqual(["EE-2", "EE-3", "EE-1"]);
   }).toPass({ timeout: 15_000 });
 
   // And there is no filter beside it — 0.15.0 shipped one and it was the wrong

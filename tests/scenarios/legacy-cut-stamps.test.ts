@@ -1,6 +1,6 @@
 // #182 — glass that WAS cut, by a build that never stamped it.
 //
-// The builds before 0.2.3 inserted extras with no cut date at all, and before
+// The builds before 0.2.3 inserted extras with no sectioning date at all, and before
 // 0.8.0 a group dragged from Needs Sectioning straight past it was never
 // recorded as cut either (#95, docs/issue_remediation_plan.md). Those rows are
 // real glass sitting in a box on the bench. That was harmless while the cut date
@@ -33,7 +33,7 @@ interface LegacyGroup {
 }
 
 /**
- * Write cut groups an older build would have written — slides with no cut date —
+ * Write cut groups an older build would have written — slides with no sectioning date —
  * into the lab's file, then open it again. The backfill marker is cleared with
  * them: an image that predates the stamp has never been back-filled.
  */
@@ -128,7 +128,7 @@ it("gives unstamped glass its group's own cut date, and invents none", async () 
     cutDateOf(app, straightToImaging),
     "a group with no sectioned stamp gives the earliest moment it records past the queue",
   ).toBe("2023-02-02 10:00");
-  expect(cutDateOf(app, stillQueued), "a slide still waiting to be cut is left alone").toBeNull();
+  expect(cutDateOf(app, stillQueued), "a slide still waiting to be sectioned is left alone").toBeNull();
   expect(cutDateOf(app, undated), "and no date is invented for a group that records none").toBeNull();
 
   // What that means on the bench: the glass is back in the inventory, and a
@@ -227,7 +227,7 @@ it("says nothing at all on a database with nothing to repair", async () => {
 
   const reopened = await repairAgain(lab.app);
 
-  // Nothing to fill in, so nothing is written: no cut date moves, no timeline
+  // Nothing to fill in, so nothing is written: no sectioning date moves, no timeline
   // event is posted, and the undo journal does not grow — the technician who
   // opens the app sees an ordinary launch and has nothing new to undo.
   expect(recordOf(reopened), "the repair leaves a modern database exactly as it found it").toBe(

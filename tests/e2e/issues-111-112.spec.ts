@@ -92,7 +92,7 @@ function column(page: Page, title: string) {
 /** Send a block for cutting with one agent assigned to a slide. */
 async function cutWithAgent(page: Page, code: string): Promise<string> {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
   const assay = page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
@@ -100,7 +100,7 @@ async function cutWithAgent(page: Page, code: string): Promise<string> {
   await assay.selectOption({ index: 1 });
   const agent = (await assay.locator("option:checked").textContent())?.trim() ?? "";
   expect(agent).not.toBe("");
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   return agent;
 }
@@ -119,27 +119,27 @@ test("#112: the needs-cut flag clears once the block has been cut", async ({ pag
   await embed(page, "EE-1", "Batch 1");
 
   const inventory = column(page, "Embedded Inventory");
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(0);
 
   // Deliberately save a plan → flagged.
   await inventory.getByText("EE-1", { exact: true }).click();
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  const dialog = page.getByRole("dialog", { name: /Send for Cutting/ });
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  const dialog = page.getByRole("dialog", { name: /Send for Sectioning/ });
   await dialog.getByRole("button", { name: /Add slide/i }).click();
   await dialog.getByRole("button", { name: /^Save Plan/ }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(1);
 
   // Now actually cut it. The drawer is still open — clicking the tile again
   // would toggle it shut (#61) — so go straight back into the dialog.
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   await expect(column(page, "Needs Sectioning").getByText("EE-1", { exact: true })).toBeVisible({
     timeout: 15000,
   });
-  await expect(inventory.getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(inventory.getByText("⚑ needs sectioning")).toHaveCount(0);
 });
 
 // #112 — the other leak: a request the cut fulfilled must stop being listed as
@@ -161,11 +161,11 @@ test("#112: a cut clears the request it fulfilled", async ({ page }) => {
   await openBlockDrawer(page, "EE-1");
   const panel = drawer(page);
   await expect(panel.getByText("Requested")).toBeVisible({ timeout: 15000 });
-  await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(column(page, "Embedded Inventory").getByText("⚑ needs sectioning")).toHaveCount(1);
 
   // Cut it — the plan is prefilled with the outstanding agent.
-  await page.getByRole("button", { name: "Send for Cutting" }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: "Send for Sectioning" }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await expect(column(page, "Needs Sectioning").getByText("EE-1", { exact: true })).toBeVisible({
     timeout: 15000,
@@ -176,7 +176,7 @@ test("#112: a cut clears the request it fulfilled", async ({ page }) => {
   const list = drawer(page).locator("ul").filter({ hasText: "H&E" });
   await expect(list.locator("li").filter({ hasText: "H&E" })).toHaveCount(1);
   await expect(drawer(page).getByText("Requested")).toHaveCount(0);
-  await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(column(page, "Embedded Inventory").getByText("⚑ needs sectioning")).toHaveCount(0);
 });
 
 // #112 — "perhaps we should be able to manage requested stains?" A request that
@@ -190,13 +190,13 @@ test("#112: an outstanding stain request can be withdrawn by hand", async ({ pag
   await openBlockDrawer(page, "EE-1");
   const panel = drawer(page);
   await expect(panel.getByText("Requested")).toBeVisible({ timeout: 15000 });
-  await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(1);
+  await expect(column(page, "Embedded Inventory").getByText("⚑ needs sectioning")).toHaveCount(1);
 
   await panel.getByRole("button", { name: "Withdraw H&E request" }).click();
 
   // The request goes, and so does the flag it was raising.
   await expect(panel.getByText("Requested")).toHaveCount(0, { timeout: 15000 });
-  await expect(column(page, "Embedded Inventory").getByText("⚑ needs cut")).toHaveCount(0);
+  await expect(column(page, "Embedded Inventory").getByText("⚑ needs sectioning")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

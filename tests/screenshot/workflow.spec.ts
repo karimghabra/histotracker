@@ -14,7 +14,7 @@ const boardColumn = (page: Page, title: string) =>
  * The "N slides" line on the Needs Sectioning card.
  *
  * Never `page.getByText("3 slides")`: that matches this card AND the open sample
- * drawer's "Awaiting cut - 3 slides", so which one `.first()` picks depends on
+ * drawer's "Awaiting sectioning - 3 slides", so which one `.first()` picks depends on
  * which has rendered. A click meant for the card lands on the drawer, opens Edit
  * plan instead of the section, and the Mark Sectioned button it was after never
  * comes - sixty seconds of waiting that reads as the app hanging.
@@ -124,13 +124,13 @@ test("undo of a staining-lane transfer removes the tile it created (#31)", async
 
   // Cut one stained slide so Mark Sectioned mints a Staining rack tile.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
 
   // Mark Sectioned → the section leaves Needs Sectioning and a stain rack tile
   // ("Alcian Blue") is minted in Staining.
@@ -203,14 +203,14 @@ test("sectioning: per-slide cutting, no stale plan tag, slide-count button (#35/
   await expect(page.getByText("EE-1")).toBeVisible();
   await expect(page.getByText(/slides planned/i)).toHaveCount(0);
 
-  // #35: Send for Cutting is a per-slide "how many slides / which get a stain" model.
+  // #35: Send for Sectioning is a per-slide "how many slides / which get a stain" model.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await expect(page.getByText(/How many slides to cut/i)).toBeVisible();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await expect(page.getByText(/How many slides to section/i)).toBeVisible();
   await expect(page.getByText(/3 slides · 0 stained · 3 extra/)).toBeVisible();
 
   // Send the default cut → a Needs Sectioning card appears for the sample.
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await expect(sectioningCard(page).first()).toBeVisible();
 
   // #40: the Mark Sectioned button counts SLIDES (3), not stain types (0).
@@ -233,15 +233,15 @@ test("requesting a stain flags the embedded block and prefills the cut dialog (#
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // #41a: the embedded tile is flagged. It says NEEDS CUT (#110): the
-  // slide that will carry the stain has not been cut yet.
+  // slide that will carry the stain has not been sectioned yet.
   // Scoped to the FLAG on the card. Since #129 the Embedded Inventory header
   // also carries "Needs cut" twice - a filter option and a sort option - so an
   // unscoped text match now finds the controls as well as the thing they act on.
-  await expect(page.getByText("⚑ needs cut")).toBeVisible();
+  await expect(page.getByText("⚑ needs sectioning")).toBeVisible();
 
-  // #41b: Send for Cutting is prefilled from the block's preselected stains.
+  // #41b: Send for Sectioning is prefilled from the block's preselected stains.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await expect(page.getByText(/Prefilled from .* preselected stains/i)).toBeVisible();
 });
 
@@ -249,8 +249,8 @@ test("needs-sectioning card exposes a real multi-select checkbox (#37)", async (
   await seedSample(page);
   await embedBlock(page);
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await expect(sectioningCard(page).first()).toBeVisible();
 
   // The card's checkbox is a real input that toggles selection on click.
@@ -279,13 +279,13 @@ test("stack timeline keeps pre-imaging stamps; Logs Analyzed filter matches anal
 
   // Cut with one stained slide (index 1 = first catalog stain, Alcian Blue).
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
 
   // Mark Sectioned → a stain rack ("Alcian Blue") is minted in Staining.
   await sectioningCard(page).first().click();
@@ -361,13 +361,13 @@ test("Logs status partition + CSV export", async ({ page }) => {
 
   // EE-1 → analyzed (cut a stain, run the protocol, image, analyze).
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
   await page.locator("button:has(svg.lucide-x)").first().click();
@@ -447,11 +447,11 @@ test("section drawer lists assay slides across all grouped cut groups (#55)", as
 
   // Cut with TWO different agents → two section_requests, grouped under one card.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   const rows = page.locator(".max-h-64 select");
   await rows.nth(0).selectOption({ index: 1 });
   await rows.nth(1).selectOption({ index: 2 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Open the grouped Needs Sectioning card → the drawer shows BOTH assay slides,
@@ -467,13 +467,13 @@ test("undo after the staining scatter returns to Staining, not Needs Sectioning 
   await seedSample(page);
   await embedBlock(page);
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();
@@ -502,13 +502,13 @@ test("undo AND redo of the imaging transfer leave no ghost/duplicate tile (#31)"
   await seedSample(page);
   await embedBlock(page);
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   await page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
   await sectioningCard(page).first().click();
   await page.getByRole("button", { name: /Mark Sectioned/ }).click();

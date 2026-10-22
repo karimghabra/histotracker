@@ -78,8 +78,8 @@ async function embed(page: Page, code: string, batchLabel: string) {
 
 async function cut(page: Page, code: string) {
   await page.getByText(code, { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 }
 
@@ -108,9 +108,9 @@ test("#83: removing a cut group keeps its slides in the log", async ({ page }) =
   await page.getByText("3 slides").first().click();
   await page.locator("button.text-red-600, button:has(svg.lucide-trash-2)").last().click();
 
-  const dialog = page.getByRole("dialog", { name: /Remove this cut group/ });
+  const dialog = page.getByRole("dialog", { name: /Remove this sectioning group/ });
   await expect(dialog).toBeVisible();
-  const confirmBtn = dialog.getByRole("button", { name: "Remove cut group" });
+  const confirmBtn = dialog.getByRole("button", { name: "Remove sectioning group" });
   // The reason is REQUIRED — this is the assertion that would fail if the
   // dialog were bypassable.
   await expect(confirmBtn).toBeDisabled();
@@ -141,7 +141,7 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
 
   // Cut with an agent assigned to one slide, so the group produces a real rack.
   await page.getByText("EE-1", { exact: true }).first().click();
-  await page.getByRole("button", { name: /Send for Cutting/ }).click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).click();
   const assay = page
     .locator("select")
     .filter({ has: page.locator("option", { hasText: "Extra (no stain)" }) })
@@ -149,7 +149,7 @@ test("#83: removing slides from a rack keeps them in the log", async ({ page }) 
   await assay.selectOption({ index: 1 });
   const agentName = (await assay.locator("option:checked").textContent())?.trim() ?? "";
   expect(agentName).not.toBe("");
-  await page.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await page.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await page.locator("button:has(svg.lucide-x)").first().click();
 
   // Assign an agent to one slide during cutting, then Mark Sectioned — that is

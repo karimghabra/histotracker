@@ -487,8 +487,8 @@ export function NewSampleDialog({
             onChange={(e) => setEmbeddingNotes(e.target.value)}
             placeholder={
               quantity > 1
-                ? `e.g. cut face down — saved on all ${quantity} samples`
-                : "e.g. cut face down, proximal end to the left"
+                ? `e.g. section face down — saved on all ${quantity} samples`
+                : "e.g. section face down, proximal end to the left"
             }
           />
         )}

@@ -106,9 +106,9 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
   await expect(vw.getByText("Description").first()).toBeVisible();
 
   // …but every write control is absent, so nothing can hang on a rejected write.
-  // Either name — the cutting control is "Cutting Plan" before the Embedded
-  // Inventory and "Send for Cutting" in it (#98); neither may appear here.
-  await expect(vw.getByRole("button", { name: /Cutting Plan|Send for Cutting/ })).toHaveCount(0);
+  // Either name — the cutting control is "Sectioning Plan" before the Embedded
+  // Inventory and "Send for Sectioning" in it (#98); neither may appear here.
+  await expect(vw.getByRole("button", { name: /Sectioning Plan|Send for Sectioning/ })).toHaveCount(0);
   await expect(vw.getByRole("button", { name: "Add", exact: true })).toHaveCount(0);
   await expect(vw.getByLabel("Edit description")).toHaveCount(0);
   await expect(vw.getByRole("button", { name: /Mark Exhausted/ })).toHaveCount(0);
@@ -117,7 +117,7 @@ test("#72: the viewer's sample panel offers no bench actions", async ({ browser 
   // The same panel on the workstation DOES offer them — proving the assertions
   // above are about viewer mode, not about a selector that never matches.
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await expect(ws.getByRole("button", { name: /Cutting Plan|Send for Cutting/ })).toBeVisible();
+  await expect(ws.getByRole("button", { name: /Sectioning Plan|Send for Sectioning/ })).toBeVisible();
   await expect(ws.getByLabel("Edit description")).toBeVisible();
 
   await wsCtx.close();
@@ -199,13 +199,13 @@ test("#72: the viewer cannot run the stain protocol from the rack panel", async 
   await dragOnto(ws, "Batch 1", "Needs Embedding");
   await dragOnto(ws, "EE-1", "Embedded Inventory");
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).click();
   await ws
     .locator("select")
     .filter({ has: ws.locator("option", { hasText: "Extra (no stain)" }) })
     .first()
     .selectOption({ index: 1 });
-  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
   await ws.getByText("3 slides").first().click();
   await ws.getByRole("button", { name: /Mark Sectioned/ }).click();
@@ -261,7 +261,7 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   await ws.locator("nav").getByRole("button", { name: "Logs" }).click();
   await ws.getByRole("cell", { name: "EE-1", exact: true }).click();
   for (const [label, written] of [
-    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["Sectioning Notes", "10 um, discard the first ribbon"],
     ["General Notes", "decal ran long on this one"],
   ]) {
     await ws.getByLabel(`Edit ${label} for EE-1`, { exact: true }).click();
@@ -301,7 +301,7 @@ test("#72: the viewer's Logs row offers no write actions", async ({ browser }) =
   // on the workstation, so each one has to refuse to open here — one that opened
   // would be the #72 bug again.
   for (const [label, written] of [
-    ["Sectioning / Cut Notes", "10 um, discard the first ribbon"],
+    ["Sectioning Notes", "10 um, discard the first ribbon"],
     ["General Notes", "decal ran long on this one"],
   ]) {
     // The words are here to read — and to select, to copy into a bench book —
@@ -346,8 +346,8 @@ test("#72: a viewer with real slides still cannot tag a depth", async ({ browser
   await dragOnto(ws, "Batch 1", "Needs Embedding");
   await dragOnto(ws, "EE-1", "Embedded Inventory");
   await ws.getByText("EE-1", { exact: true }).first().click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).click();
-  await ws.getByRole("button", { name: /Send for Cutting/ }).last().click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).click();
+  await ws.getByRole("button", { name: /Send for Sectioning/ }).last().click();
   await ws.locator("button:has(svg.lucide-x)").first().click();
 
   await vw.goto("/?freshdb=1");
