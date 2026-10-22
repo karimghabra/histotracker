@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.18.4 - 2026-10-22
+
+No schema change: no new column and no new migration, so a 0.18.3 instance opens a 0.18.4 database unchanged, and the reverse holds too.
+One thing to know before updating: several exported headings change (below), so a saved spreadsheet or formula that looks one up by its old name needs the new one.
+
+- **The screen says sectioning, not cutting (#196, issue #194).**
+  "Cut" on the bench means two things: sectioning a block on the microtome, and trimming a block to fit its mold.
+  The app always meant the first, so everything it shows now says section or sectioning: **Send for Sectioning**, the **Sectioning Plan** dialog, the **⚑ needs sectioning** badge, "Awaiting sectioning", **Sectioning defaults** in Settings, the **Sectioning Notes** field, the slide timeline's **Sectioned** step, the undo labels and the messages that refuse an action.
+  A cut group is now called a **sectioning group**.
+  In the exports, the **Sectioning / Cut Notes** column is **Sectioning Notes** (the samples CSV, the Samples sheet of the Excel workbook, the Sample Status sheet of the workbook a workstation publishes with every sync, and the Logs export).
+  The slides' **Cut** column is **Sectioned** (the Slides sheet, the published Slide Status sheet and the Logs export), and the workbook's **Cut Orders** sheet is **Sectioning Orders**.
+  In the Logs export, an assigned stain with no glass yet reads **requested (not sectioned)**.
+  The columns are in the same places with the same contents.
+  Entries already recorded, such as a timeline line that reads "Cut 2 slides", keep the words they were written with.
+
+- **A block that needs sectioning goes to the top of Embedded Inventory (#196, issue #195).**
+  A block with a stain requested on it, or a sectioning plan saved for it, is now prioritized automatically: it sits at the top under every sort, alongside the starred blocks, in the order the chosen sort gives.
+  The **Needs cut first** sort option is gone.
+  The star is unchanged: the flag does not set it, and the block drops back into the list once it is sent for sectioning.
+
+- **The nightly stress run no longer fails on a race in its own harness (#196, issue #193).**
+  Internal test infrastructure only; no effect on the app.
+
 ## 0.18.3 - 2026-09-22
 
 No schema change: no new column and no new migration, so a 0.18.2 instance opens a 0.18.3 database unchanged, and the reverse holds too.
