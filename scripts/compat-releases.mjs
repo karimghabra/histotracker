@@ -4,7 +4,7 @@
  * The release installed at the lab. Bump it when the lab installs a new one;
  * a PR is judged against this build.
  */
-export const IN_USE_RELEASE = "app-v0.17.0";
+export const IN_USE_RELEASE = "app-v0.18.4";
 
 /**
  * A release whose schema is older than this branch's: it predates migration 24,
